@@ -1,6 +1,18 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <signal.h>
 #import "sp1_status.h"
+
+// SP-1 watcher pid we SIGSTOPped for hand-control mode; resumed on toggle-off
+// and unconditionally on app exit so the security watcher is never left frozen.
+static int gPausedSP1Pid = 0;
+
+static void resumePausedSP1(void) {
+    if (gPausedSP1Pid > 0) {
+        kill(gPausedSP1Pid, SIGCONT);
+        gPausedSP1Pid = 0;
+    }
+}
 
 // Serves bundle Resources/web/* over omni://local/... — unlike bare file://,
 // a custom scheme gives the page a real origin, so fetch()/XHR work and the
@@ -115,6 +127,21 @@
     return YES;
 }
 
+- (void)applicationWillTerminate:(NSNotification *)notification {
+    resumePausedSP1();
+}
+
+// grant camera access for hand-gesture control (macOS still shows its own
+// system-level camera permission prompt for the app on first use)
+- (void)webView:(WKWebView *)webView
+    requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
+                          initiatedByFrame:(WKFrameInfo *)frame
+                                      type:(WKMediaCaptureType)type
+                           decisionHandler:(void (^)(WKPermissionDecision))decisionHandler
+    API_AVAILABLE(macos(12.0)) {
+    decisionHandler(WKPermissionDecisionGrant);
+}
+
 // ---- file picker for <input type="file"> ----
 
 - (void)webView:(WKWebView *)webView
@@ -151,6 +178,23 @@
     } else if ([cmd isEqualToString:@"sp1.intruderImage"]) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             [self deliverPayload:(SP1IntruderImage(arg) ?: @{}) forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"sp1.pause"]) {
+        // freeze the SP-1 watcher so hand gestures for the 3D viewer can't
+        // trigger a lockdown; resumed via sp1.resume or on app exit
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            int pid = SP1RunningWatcherPid();
+            BOOL ok = (pid > 0 && kill(pid, SIGSTOP) == 0);
+            if (ok) gPausedSP1Pid = pid;
+            [self deliverPayload:@{ @"paused" : @(ok), @"pid" : @(pid) } forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"sp1.resume"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            resumePausedSP1();
+            // belt & braces: CONT is harmless on an already-running process
+            int pid = SP1RunningWatcherPid();
+            if (pid > 0) kill(pid, SIGCONT);
+            [self deliverPayload:@{ @"resumed" : @YES } forId:msgId];
         });
     }
     // unknown commands are ignored; the JS side times out on its own

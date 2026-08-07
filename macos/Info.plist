@@ -22,6 +22,8 @@
 	<string>12.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera is used for 3D hand gesture control in the RENDER_3D panel.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

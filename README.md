@@ -25,7 +25,10 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
 - **RENDER_3D** — three.js 기반 3D 모델 뷰어. STL·OBJ/MTL·GLTF/GLB·FBX·PLY·3MF·DAE를
   파일 선택 또는 드래그&드롭으로 로드 (동반 파일 — mtl·텍스처·bin — 함께 선택하면 자동 연결).
   표시 모드 4종: FULL(원본 재질) / COLOR(색상만) / TEXTURE(텍스처만) / WIREFRAME(메인 컬러 청록 와이어프레임).
-  LIGHTS 토글(입체 조명 ↔ 균일 평면광), 오빗 컨트롤(회전·줌·팬), 자동 스케일 정규화, 그리드 바닥
+  LIGHTS 토글(입체 조명 ↔ 균일 평면광) + KEY/AMBIENT/SHADOW 슬라이더, 오빗 컨트롤, 자동 스케일 정규화, 그리드 바닥.
+  **HANDS 모드** — 웹캠 손 추적(Human 손 모델)으로 영화식 제스처 컨트롤: 한 손 핀치 드래그 = 회전,
+  양손 핀치 벌리기/이동 = 줌/팬. 켜는 동안 Security-Protocol-1 워처를 SIGSTOP으로 일시정지해
+  (끄거나 앱 종료 시 자동 복구) 3D 조작 제스처가 락다운을 발동시키지 않도록 함
 - **SECURITY-PROTOCOL-1** — [Security-Protocol-1](https://github.com/geonhee15/Security-Protocol-1) 실시간 상태 대시보드
   - 시스템 상태 (LOCKDOWN / UNLOCKED / WATCHER OFFLINE) — protocol.log의 상태 마커로 판별
   - 감시 프로세스(PID 검증), ntfy 서버 연결, 알림 프로바이더, 원격 제어, 자동 시작, 침입 스냅샷 수, 구성요소 점검

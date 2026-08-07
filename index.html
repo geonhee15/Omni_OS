@@ -207,6 +207,14 @@
       </div>
 
       <div class="r3d-viewport" id="r3d-viewport">
+        <div class="r3d-hands-hud" id="r3d-hands-hud" hidden>
+          <div class="rh-row">
+            <span class="rh-status" id="rh-status">HANDS &mdash;</span>
+            <span class="rh-sp1" id="rh-sp1" hidden>SP-1 WATCH PAUSED</span>
+          </div>
+          <canvas class="rh-pip" id="rh-pip" width="220" height="165"></canvas>
+          <div class="rh-help">PINCH DRAG &middot; ROTATE &nbsp;&nbsp; DOUBLE PINCH &middot; ZOOM / PAN</div>
+        </div>
         <div class="r3d-drop" id="r3d-drop">
           <div class="r3d-drop-title">DROP 3D MODEL HERE</div>
           <div class="r3d-drop-sub">STL &middot; OBJ/MTL &middot; GLTF/GLB &middot; FBX &middot; PLY &middot; 3MF &middot; DAE</div>
@@ -222,6 +230,7 @@
       <div class="r3d-toolbar">
         <button class="ig-tab" id="r3d-load">LOAD</button>
         <span class="r3d-file" id="r3d-file">&mdash;</span>
+        <button class="ig-tab" id="r3d-hands">HANDS OFF</button>
         <button class="ig-tab active" id="r3d-lights">LIGHTS ON</button>
         <span class="divider">|</span>
         <div class="r3d-modes" id="r3d-modes">
@@ -254,7 +263,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1 &middot; R3D</span>
       <span class="divider">|</span>
-      <span>v0.6.0</span>
+      <span>v0.7.0</span>
     </footer>
   </div>
 

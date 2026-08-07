@@ -13,3 +13,7 @@ NSArray *SP1CollectIntruders(void);
 // Full-resolution (capped) image for one snapshot by bare filename.
 // Returns {name, image(base64)} or nil if the name is invalid/missing.
 NSDictionary *SP1IntruderImage(NSString *name);
+
+// Pid of the running watcher process (verified via ps), or 0 if not running.
+// Used to SIGSTOP/SIGCONT the watcher while Omni's hand control uses the camera.
+int SP1RunningWatcherPid(void);

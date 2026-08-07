@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.6.0",
+  version: "0.7.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -55,6 +55,7 @@ OmniOS.register("nav", {
     document.querySelectorAll(".panel").forEach((panel) => {
       panel.classList.toggle("active", panel.id === `panel-${name}`);
     });
+    document.dispatchEvent(new CustomEvent("omni:panel", { detail: name }));
   },
 });
 
@@ -616,9 +617,9 @@ OmniOS.register("sp1", {
     }
     els.attemptsN.textContent = `${failN}/${maxAttempts}`;
 
-    // watcher module
-    els.wState.textContent = running ? "RUNNING" : "OFFLINE";
-    els.wState.className = `watcher-state ${running ? "ok" : "alert"}`;
+    // watcher module (PAUSED = SIGSTOPped while Omni hand control uses the camera)
+    els.wState.textContent = running ? (s.watcherStopped ? "PAUSED" : "RUNNING") : "OFFLINE";
+    els.wState.className = `watcher-state ${running ? (s.watcherStopped ? "warn" : "ok") : "alert"}`;
     els.wPid.textContent = running ? s.watcherPid : "—";
     els.wUptime.textContent =
       running && typeof s.watcherSince === "number" ? this.fmtDuration(s.now - s.watcherSince) : "—";
@@ -872,6 +873,18 @@ OmniOS.register("r3d", {
 
     this.els.lights = $("r3d-lights");
     this.els.lights.addEventListener("click", () => this.toggleLights());
+
+    // hand gesture control
+    this.els.hands = $("r3d-hands");
+    this.els.handsHud = $("r3d-hands-hud");
+    this.els.rhStatus = $("rh-status");
+    this.els.rhSp1 = $("rh-sp1");
+    this.els.rhPip = $("rh-pip");
+    this.els.hands.addEventListener("click", () => this.toggleHands());
+    // leaving the panel always stops hand mode (and resumes the SP-1 watcher)
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail !== "r3d" && this._hands.on) this.stopHands();
+    });
 
     // lighting sliders: key intensity / ambient intensity / shadow strength
     this.els.lightbar = $("r3d-lightbar");
@@ -1146,18 +1159,24 @@ OmniOS.register("r3d", {
       tris += Math.round(g.index ? g.index.count / 3 : n / 3);
     });
 
-    // normalize: fit into a ~4 unit box, sit on the grid, center at origin
+    // normalize: fit into a ~4 unit box, then wrap in a pivot group whose
+    // origin is the model center — hand-gesture rotation spins around it
     const box = new THREE.Box3().setFromObject(obj);
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
     obj.scale.setScalar(4 / maxDim);
     const box2 = new THREE.Box3().setFromObject(obj);
     const center = box2.getCenter(new THREE.Vector3());
-    obj.position.x -= center.x;
-    obj.position.z -= center.z;
-    obj.position.y -= box2.min.y;
+    const sizeY = box2.max.y - box2.min.y;
+    obj.position.sub(center);
+    const pivot = new THREE.Group();
+    pivot.add(obj);
+    pivot.position.y = sizeY / 2;
+    scene.remove(this._model);
+    scene.add(pivot);
+    this._model = pivot;
 
-    controls.target.set(0, (box2.max.y - box2.min.y) / 2, 0);
+    controls.target.set(0, sizeY / 2, 0);
     camera.position.set(4.5, 3.2, 5.5);
     controls.update();
 
@@ -1234,5 +1253,249 @@ OmniOS.register("r3d", {
         o.material = o.userData[key];
       }
     });
+  },
+
+  // ── hand gesture control (vladmandic/human hand tracking) ──
+  // While active, the SP-1 gesture watcher is SIGSTOPped via the native bridge
+  // so waving at the camera can never trigger a lockdown.
+  _hands: { on: false, human: null, load: null, video: null, stream: null,
+    busy: false, raf: 0, prev: null, sp1Paused: false },
+
+  HAND_CONNECTIONS: [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],
+    [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]],
+
+  ensureHandHuman() {
+    const H = this._hands;
+    if (H.load) return H.load;
+    H.load = (async () => {
+      if (!window.Human) {
+        await new Promise((res, rej) => {
+          const sc = document.createElement("script");
+          sc.src = "vendor/human.js";
+          sc.onload = res;
+          sc.onerror = () => rej(new Error("human.js failed to load"));
+          document.head.appendChild(sc);
+        });
+      }
+      const NS = window.Human;
+      const Cls = NS.Human || NS.default || NS;
+      H.human = new Cls({
+        modelBasePath: "vendor/models/",
+        backend: "webgl",
+        warmup: "none",
+        filter: { enabled: false },
+        face: { enabled: false },
+        body: { enabled: false },
+        object: { enabled: false },
+        segmentation: { enabled: false },
+        gesture: { enabled: false },
+        hand: { enabled: true, maxDetected: 2, minConfidence: 0.5 },
+      });
+      await H.human.load();
+      return H.human;
+    })();
+    H.load.catch(() => { H.load = null; });
+    return H.load;
+  },
+
+  async toggleHands() {
+    if (this._hands.on) {
+      this.stopHands();
+      return;
+    }
+    const H = this._hands;
+    this.els.hands.textContent = "HANDS \u2026";
+    try {
+      // pause SP-1's watcher first — its trigger gesture must not fire while
+      // the user waves hands to control the 3D view
+      if (OmniNative.available) {
+        try {
+          const r = await OmniNative.request("sp1.pause");
+          H.sp1Paused = !!r.paused;
+        } catch (e) {
+          H.sp1Paused = false;
+        }
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("camera API unavailable");
+      }
+      H.stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: "user" },
+        audio: false,
+      });
+      H.video = document.createElement("video");
+      H.video.srcObject = H.stream;
+      H.video.muted = true;
+      H.video.playsInline = true;
+      await H.video.play();
+      this.els.handsHud.hidden = false;
+      this.els.rhSp1.hidden = !H.sp1Paused;
+      this.els.rhStatus.textContent = "LOADING HAND MODELS\u2026";
+      await this.ensureHandHuman();
+      H.on = true;
+      H.prev = null;
+      this.els.hands.textContent = "HANDS ON";
+      this.els.hands.classList.add("active");
+      this.els.rhStatus.textContent = "TRACKING\u2026";
+      this.handLoop();
+    } catch (e) {
+      this.stopHands();
+      this.els.stats.textContent =
+        `HANDS FAILED \u2014 ${String((e && e.message) || e).toUpperCase().slice(0, 50)}`;
+    }
+  },
+
+  stopHands() {
+    const H = this._hands;
+    H.on = false;
+    if (H.raf) cancelAnimationFrame(H.raf);
+    H.raf = 0;
+    if (H.stream) {
+      for (const t of H.stream.getTracks()) t.stop();
+      H.stream = null;
+    }
+    H.video = null;
+    H.prev = null;
+    this.els.handsHud.hidden = true;
+    this.els.hands.textContent = "HANDS OFF";
+    this.els.hands.classList.remove("active");
+    if (H.sp1Paused && OmniNative.available) {
+      OmniNative.request("sp1.resume").catch(() => {});
+    }
+    H.sp1Paused = false;
+  },
+
+  handLoop() {
+    const H = this._hands;
+    const step = async () => {
+      if (!H.on) return;
+      H.raf = requestAnimationFrame(step);
+      if (H.busy || !H.video || H.video.readyState < 2) return;
+      H.busy = true;
+      try {
+        const res = await H.human.detect(H.video);
+        if (H.on) this.processHands(res.hand || []);
+      } catch (e) {
+        /* keep looping */
+      }
+      H.busy = false;
+    };
+    step();
+  },
+
+  processHands(hands) {
+    const H = this._hands;
+    const vw = (H.video && H.video.videoWidth) || 640;
+    const vh = (H.video && H.video.videoHeight) || 480;
+
+    const parsed = hands.slice(0, 2).map((h) => {
+      const kp = h.keypoints || [];
+      if (kp.length < 21) return null;
+      const d = (a, b) => Math.hypot(kp[a][0] - kp[b][0], kp[a][1] - kp[b][1]);
+      const ref = Math.max(1, d(0, 9)); // wrist -> middle knuckle = hand scale
+      const pinch = d(4, 8) / ref < 0.4; // thumb tip near index tip
+      const px = 1 - (kp[4][0] + kp[8][0]) / 2 / vw; // mirrored for natural motion
+      const py = (kp[4][1] + kp[8][1]) / 2 / vh;
+      return { kp, pinch, px, py };
+    }).filter(Boolean);
+
+    const pinches = parsed.filter((p) => p.pinch);
+    const prev = H.prev;
+    let status = parsed.length ? `${parsed.length} HAND${parsed.length > 1 ? "S" : ""} \u00b7 PINCH TO GRAB` : "SHOW HANDS";
+
+    if (pinches.length === 2) {
+      const [a, b] = pinches;
+      const dist = Math.hypot(a.px - b.px, a.py - b.py);
+      const cx = (a.px + b.px) / 2;
+      const cy = (a.py + b.py) / 2;
+      if (prev && prev.type === "two") {
+        const zoomF = dist > 0.01 ? prev.dist / dist : 1;
+        this.zoomBy(Math.max(0.85, Math.min(1.18, zoomF)));
+        this.panBy(cx - prev.cx, cy - prev.cy);
+      }
+      H.prev = { type: "two", dist, cx, cy };
+      status = "ZOOM / PAN";
+    } else if (pinches.length === 1) {
+      const p = pinches[0];
+      if (prev && prev.type === "one") {
+        const dx = p.px - prev.x;
+        const dy = p.py - prev.y;
+        if (this._model) {
+          this._model.rotation.y += dx * 5;
+          this._model.rotation.x += dy * 3;
+        }
+      }
+      H.prev = { type: "one", x: p.px, y: p.py };
+      status = "ROTATE";
+    } else {
+      H.prev = null;
+    }
+
+    this.els.rhStatus.textContent = status;
+    this.drawPip(parsed, vw, vh);
+  },
+
+  zoomBy(f) {
+    if (!this._ctx) return;
+    const { camera, controls } = this._ctx;
+    const v = camera.position.clone().sub(controls.target).multiplyScalar(f);
+    const len = v.length();
+    if (len < 1.2) v.setLength(1.2);
+    if (len > 60) v.setLength(60);
+    camera.position.copy(controls.target).add(v);
+  },
+
+  panBy(dx, dy) {
+    if (!this._ctx) return;
+    const { THREE } = this._three;
+    const { camera, controls } = this._ctx;
+    const k = camera.position.distanceTo(controls.target) * 1.2;
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    const up = new THREE.Vector3(0, 1, 0);
+    const right = forward.clone().cross(up).normalize();
+    const offset = right.multiplyScalar(-dx * k).addScaledVector(up, dy * k);
+    controls.target.add(offset);
+    camera.position.add(offset);
+  },
+
+  drawPip(parsed, vw, vh) {
+    const c = this.els.rhPip;
+    const ctx = c.getContext("2d");
+    const w = c.width;
+    const h = c.height;
+    ctx.clearRect(0, 0, w, h);
+    const video = this._hands.video;
+    if (video && video.readyState >= 2) {
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, -w, 0, w, h);
+      ctx.restore();
+      ctx.fillStyle = "rgba(2, 8, 19, 0.4)";
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      ctx.fillStyle = "#020813";
+      ctx.fillRect(0, 0, w, h);
+    }
+    const sx = w / vw;
+    const sy = h / vh;
+    for (const p of parsed) {
+      const pt = (i) => [w - p.kp[i][0] * sx, p.kp[i][1] * sy];
+      ctx.strokeStyle = p.pinch ? "rgba(61, 255, 168, 0.9)" : "rgba(53, 214, 255, 0.8)";
+      ctx.lineWidth = 1;
+      for (const [a, b] of this.HAND_CONNECTIONS) {
+        const [x1, y1] = pt(a);
+        const [x2, y2] = pt(b);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = p.pinch ? "#3dffa8" : "#35d6ff";
+      for (let i = 0; i < 21; i++) {
+        const [x, y] = pt(i);
+        ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+      }
+    }
   },
 });

@@ -58,6 +58,16 @@ static BOOL pidIsWatcher(int pid) {
     return [cmd containsString:@"security_protocol"];
 }
 
+int SP1RunningWatcherPid(void) {
+    NSString *lockPath = [SP1_DIR stringByAppendingPathComponent:@".security_protocol.lock"];
+    NSString *pidStr = [[NSString stringWithContentsOfFile:lockPath
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:nil]
+        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    int pid = pidStr.intValue;
+    return pidIsWatcher(pid) ? pid : 0;
+}
+
 // ntfy.sh reachability + latency, cached for 60s so 5s UI polling doesn't spam the network.
 static void ntfyCheck(NSNumber **reachable, NSNumber **latencyMs) {
     static NSNumber *cachedOk = nil;
@@ -113,12 +123,13 @@ NSDictionary *SP1CollectStatus(void) {
     NSDate *lockMtime = [fm attributesOfItemAtPath:lockPath error:nil][NSFileModificationDate];
     out[@"watcherSince"] = (running && lockMtime) ? @(lockMtime.timeIntervalSince1970) : (id)[NSNull null];
 
-    // process telemetry (cpu %, resident memory)
+    // process telemetry (cpu %, resident memory, run state)
     out[@"watcherCpu"] = [NSNull null];
     out[@"watcherMemBytes"] = [NSNull null];
+    out[@"watcherStopped"] = @NO; // SIGSTOPped (e.g. while Omni hand control runs)
     if (running) {
         NSString *ps = runTool(@"/bin/ps",
-            @[ @"-p", [NSString stringWithFormat:@"%d", pid], @"-o", @"%cpu=,rss=" ]);
+            @[ @"-p", [NSString stringWithFormat:@"%d", pid], @"-o", @"%cpu=,rss=,state=" ]);
         NSArray<NSString *> *parts = [ps componentsSeparatedByCharactersInSet:
             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
         NSMutableArray<NSString *> *vals = [NSMutableArray array];
@@ -126,6 +137,9 @@ NSDictionary *SP1CollectStatus(void) {
         if (vals.count >= 2) {
             out[@"watcherCpu"] = @(vals[0].doubleValue);
             out[@"watcherMemBytes"] = @(vals[1].longLongValue * 1024);
+        }
+        if (vals.count >= 3) {
+            out[@"watcherStopped"] = @([vals[2] containsString:@"T"]);
         }
     }
 
