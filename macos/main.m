@@ -3,16 +3,9 @@
 #import <signal.h>
 #import "sp1_status.h"
 
-// SP-1 watcher pid we SIGSTOPped for hand-control mode; resumed on toggle-off
-// and unconditionally on app exit so the security watcher is never left frozen.
-static int gPausedSP1Pid = 0;
-
-static void resumePausedSP1(void) {
-    if (gPausedSP1Pid > 0) {
-        kill(gPausedSP1Pid, SIGCONT);
-        gPausedSP1Pid = 0;
-    }
-}
+// SP-1 watcher pause/resume lives in sp1_status.m (SP1PauseWatcher /
+// SP1ResumeWatcher). Resume is also called unconditionally on app exit so
+// the security watcher is never left stopped.
 
 // Serves bundle Resources/web/* over omni://local/... — unlike bare file://,
 // a custom scheme gives the page a real origin, so fetch()/XHR work and the
@@ -129,7 +122,7 @@ static void resumePausedSP1(void) {
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
-    resumePausedSP1();
+    SP1ResumeWatcher();
 }
 
 // grant camera access for hand-gesture control (macOS still shows its own
@@ -181,20 +174,16 @@ static void resumePausedSP1(void) {
             [self deliverPayload:(SP1IntruderImage(arg) ?: @{}) forId:msgId];
         });
     } else if ([cmd isEqualToString:@"sp1.pause"]) {
-        // freeze the SP-1 watcher so hand gestures for the 3D viewer can't
-        // trigger a lockdown; resumed via sp1.resume or on app exit
+        // cleanly stop the SP-1 watcher: hand gestures must not trigger a
+        // lockdown, and its capture session must fully release the shared
+        // camera (a frozen process stalls the whole camera pipeline)
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            int pid = SP1RunningWatcherPid();
-            BOOL ok = (pid > 0 && kill(pid, SIGSTOP) == 0);
-            if (ok) gPausedSP1Pid = pid;
-            [self deliverPayload:@{ @"paused" : @(ok), @"pid" : @(pid) } forId:msgId];
+            BOOL ok = SP1PauseWatcher();
+            [self deliverPayload:@{ @"paused" : @(ok) } forId:msgId];
         });
     } else if ([cmd isEqualToString:@"sp1.resume"]) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            resumePausedSP1();
-            // belt & braces: CONT is harmless on an already-running process
-            int pid = SP1RunningWatcherPid();
-            if (pid > 0) kill(pid, SIGCONT);
+            SP1ResumeWatcher();
             [self deliverPayload:@{ @"resumed" : @YES } forId:msgId];
         });
     }

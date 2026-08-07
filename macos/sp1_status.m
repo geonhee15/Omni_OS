@@ -2,6 +2,7 @@
 #import <ImageIO/ImageIO.h>
 #import <signal.h>
 #import <errno.h>
+#import <unistd.h>
 
 static NSString *const SP1_DIR = @"/Users/geonhee/Desktop/Important/Security-Protocol-1";
 
@@ -66,6 +67,68 @@ int SP1RunningWatcherPid(void) {
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     int pid = pidStr.intValue;
     return pidIsWatcher(pid) ? pid : 0;
+}
+
+// ─── watcher pause/resume (for Omni hand-control camera sharing) ───
+
+static int gPauseMethod = 0; // 0 = not paused, 1 = via launchd, 2 = manual SIGTERM
+
+static NSString *sp1AgentPlist(NSString **labelOut) {
+    NSString *agentsDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/LaunchAgents"];
+    for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:agentsDir error:nil]) {
+        if ([f containsString:@"security-protocol-1"] &&
+            [f.pathExtension isEqualToString:@"plist"]) {
+            if (labelOut) *labelOut = [f stringByDeletingPathExtension];
+            return [agentsDir stringByAppendingPathComponent:f];
+        }
+    }
+    return nil;
+}
+
+BOOL SP1PauseWatcher(void) {
+    int pid = SP1RunningWatcherPid();
+    if (pid <= 0) return NO;
+
+    NSString *label = nil;
+    NSString *plist = sp1AgentPlist(&label);
+    BOOL viaLaunchd = NO;
+    if (plist != nil && label != nil) {
+        NSString *list = runTool(@"/bin/launchctl", @[ @"list" ]);
+        viaLaunchd = (list != nil && [list containsString:label]);
+    }
+    if (viaLaunchd) {
+        runTool(@"/bin/launchctl", @[
+            @"bootout", [NSString stringWithFormat:@"gui/%d/%@", getuid(), label]
+        ]);
+        gPauseMethod = 1;
+    } else {
+        kill(pid, SIGTERM);
+        gPauseMethod = 2;
+    }
+
+    // wait for the process to exit — only then is the camera actually released
+    for (int i = 0; i < 40; i++) {
+        errno = 0;
+        if (kill(pid, 0) != 0 && errno == ESRCH) return YES;
+        usleep(100000);
+    }
+    return NO;
+}
+
+void SP1ResumeWatcher(void) {
+    if (gPauseMethod == 1) {
+        NSString *label = nil;
+        NSString *plist = sp1AgentPlist(&label);
+        if (plist != nil) {
+            runTool(@"/bin/launchctl", @[
+                @"bootstrap", [NSString stringWithFormat:@"gui/%d", getuid()], plist
+            ]);
+        }
+    } else if (gPauseMethod == 2) {
+        runTool(@"/usr/bin/open",
+                @[ [SP1_DIR stringByAppendingPathComponent:@"SecurityProtocol1.app"] ]);
+    }
+    gPauseMethod = 0;
 }
 
 // ntfy.sh reachability + latency, cached for 60s so 5s UI polling doesn't spam the network.

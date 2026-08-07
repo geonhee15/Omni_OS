@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.7.2",
+  version: "0.7.3",
   bootTime: Date.now(),
   modules: {},
 
@@ -590,9 +590,16 @@ OmniOS.register("sp1", {
     els.link.className = "ts-item ok";
 
     // system state module
+    const handPause = !!(OmniOS.modules.r3d && OmniOS.modules.r3d._hands &&
+      OmniOS.modules.r3d._hands.sp1Paused);
     if (!running) {
-      this.setState("alert", "OFFLINE", "MONITORING PROCESS IS NOT RUNNING");
-      els.navDot.className = "nav-dot alert";
+      if (handPause) {
+        this.setState("warn", "PAUSED", "WATCHER SUSPENDED FOR HAND CONTROL");
+        els.navDot.className = "nav-dot off";
+      } else {
+        this.setState("alert", "OFFLINE", "MONITORING PROCESS IS NOT RUNNING");
+        els.navDot.className = "nav-dot alert";
+      }
     } else if (state.mode === "LOCKDOWN") {
       const bits = [`PHASE ${state.phase}`];
       if (state.ts) bits.push(`SINCE ${state.ts}`);
@@ -617,9 +624,13 @@ OmniOS.register("sp1", {
     }
     els.attemptsN.textContent = `${failN}/${maxAttempts}`;
 
-    // watcher module (PAUSED = SIGSTOPped while Omni hand control uses the camera)
-    els.wState.textContent = running ? (s.watcherStopped ? "PAUSED" : "RUNNING") : "OFFLINE";
-    els.wState.className = `watcher-state ${running ? (s.watcherStopped ? "warn" : "ok") : "alert"}`;
+    // watcher module (PAUSED = stopped while Omni hand control uses the camera)
+    els.wState.textContent = running
+      ? (s.watcherStopped ? "PAUSED" : "RUNNING")
+      : (handPause ? "PAUSED" : "OFFLINE");
+    els.wState.className = `watcher-state ${running
+      ? (s.watcherStopped ? "warn" : "ok")
+      : (handPause ? "warn" : "alert")}`;
     els.wPid.textContent = running ? s.watcherPid : "—";
     els.wUptime.textContent =
       running && typeof s.watcherSince === "number" ? this.fmtDuration(s.now - s.watcherSince) : "—";
@@ -1278,6 +1289,13 @@ OmniOS.register("r3d", {
           document.head.appendChild(sc);
         });
       }
+      // Human's default hand skeleton is handlandmark-lite.json — we bundle
+      // the full variant, so both paths are explicit. A silent 404 here would
+      // just disable detection, so verify the files are reachable first.
+      for (const m of ["handtrack.json", "handlandmark-full.json"]) {
+        const resp = await fetch("vendor/models/" + m).catch(() => null);
+        if (!resp || !resp.ok) throw new Error(`hand model missing: ${m}`);
+      }
       const NS = window.Human;
       const Cls = NS.Human || NS.default || NS;
       H.human = new Cls({
@@ -1290,7 +1308,13 @@ OmniOS.register("r3d", {
         object: { enabled: false },
         segmentation: { enabled: false },
         gesture: { enabled: false },
-        hand: { enabled: true, maxDetected: 2, minConfidence: 0.5 },
+        hand: {
+          enabled: true,
+          maxDetected: 2,
+          minConfidence: 0.5,
+          detector: { modelPath: "handtrack.json" },
+          skeleton: { modelPath: "handlandmark-full.json" },
+        },
       });
       await H.human.load();
       return H.human;
