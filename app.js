@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.7.0",
+  version: "0.7.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -1319,15 +1319,7 @@ OmniOS.register("r3d", {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("camera API unavailable");
       }
-      H.stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: "user" },
-        audio: false,
-      });
-      H.video = document.createElement("video");
-      H.video.srcObject = H.stream;
-      H.video.muted = true;
-      H.video.playsInline = true;
-      await H.video.play();
+      await this.acquireCamera();
       this.els.handsHud.hidden = false;
       this.els.rhSp1.hidden = !H.sp1Paused;
       this.els.rhStatus.textContent = "LOADING HAND MODELS\u2026";
@@ -1365,18 +1357,84 @@ OmniOS.register("r3d", {
     H.sp1Paused = false;
   },
 
+  // getUserMedia + auto-reconnect when the track dies (camera contention,
+  // sleep/wake, another app grabbing the device)
+  async acquireCamera() {
+    const H = this._hands;
+    H.stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: "user" },
+      audio: false,
+    });
+    for (const t of H.stream.getTracks()) {
+      t.addEventListener("ended", () => {
+        if (H.on) this.restartCamera();
+      });
+    }
+    if (!H.video) {
+      H.video = document.createElement("video");
+      H.video.muted = true;
+      H.video.playsInline = true;
+    }
+    H.video.srcObject = H.stream;
+    await H.video.play();
+  },
+
+  async restartCamera() {
+    const H = this._hands;
+    this.els.rhStatus.textContent = "CAMERA LOST — RECONNECTING…";
+    try {
+      if (H.stream) for (const t of H.stream.getTracks()) t.stop();
+      await this.acquireCamera();
+      this.els.rhStatus.textContent = "TRACKING…";
+    } catch (e) {
+      this.stopHands();
+      this.els.stats.textContent = "HANDS FAILED — CAMERA LOST";
+    }
+  },
+
   handLoop() {
     const H = this._hands;
+    H.failCount = 0;
+    H.lastParsed = [];
+    H.lastDetectAt = 0;
     const step = async () => {
       if (!H.on) return;
       H.raf = requestAnimationFrame(step);
+      // PIP redraws every frame from the live video, decoupled from inference —
+      // the camera view stays smooth even if the tracker stalls
+      this.drawPip(H.lastParsed,
+        (H.video && H.video.videoWidth) || 640,
+        (H.video && H.video.videoHeight) || 480);
       if (H.busy || !H.video || H.video.readyState < 2) return;
+      const now = performance.now();
+      if (now - H.lastDetectAt < 66) return; // cap inference at ~15fps to
+      H.lastDetectAt = now;                  // avoid GPU contention with three.js
       H.busy = true;
       try {
-        const res = await H.human.detect(H.video);
+        const res = await Promise.race([
+          H.human.detect(H.video),
+          new Promise((_, rej) =>
+            setTimeout(() => rej(new Error("detect timeout")), 2500)),
+        ]);
+        H.failCount = 0;
         if (H.on) this.processHands(res.hand || []);
       } catch (e) {
-        /* keep looping */
+        // tracker stalled or crashed — rebuild the Human instance in place
+        H.failCount++;
+        if (H.failCount >= 3 && H.on) {
+          this.els.rhStatus.textContent = "TRACKER STALLED — RESTARTING…";
+          H.failCount = 0;
+          H.human = null;
+          H.load = null;
+          try {
+            await this.ensureHandHuman();
+            if (H.on) this.els.rhStatus.textContent = "TRACKING…";
+          } catch (e2) {
+            this.stopHands();
+            this.els.stats.textContent = "HANDS FAILED — TRACKER CRASHED";
+            return;
+          }
+        }
       }
       H.busy = false;
     };
@@ -1432,7 +1490,7 @@ OmniOS.register("r3d", {
     }
 
     this.els.rhStatus.textContent = status;
-    this.drawPip(parsed, vw, vh);
+    H.lastParsed = parsed; // PIP skeleton is drawn by the rAF loop
   },
 
   zoomBy(f) {
