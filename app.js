@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.2.0",
+  version: "0.3.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -124,31 +124,68 @@ OmniOS.register("sp1", {
   ],
 
   init() {
+    const $ = (id) => document.getElementById(id);
     this.els = {
-      banner: document.getElementById("sp1-banner"),
-      state: document.getElementById("sp1-state"),
-      since: document.getElementById("sp1-since"),
-      sync: document.getElementById("sp1-sync"),
-      feed: document.getElementById("sp1-feed"),
-      navDot: document.getElementById("sp1-nav-dot"),
-      watcher: document.querySelector("#card-watcher .card-value"),
-      watcherSub: document.querySelector("#card-watcher .card-sub"),
-      ntfy: document.querySelector("#card-ntfy .card-value"),
-      notify: document.querySelector("#card-notify .card-value"),
-      notifySub: document.querySelector("#card-notify .card-sub"),
-      remote: document.querySelector("#card-remote .card-value"),
-      remoteSub: document.querySelector("#card-remote .card-sub"),
-      autostart: document.querySelector("#card-autostart .card-value"),
-      intrusions: document.querySelector("#card-intrusions .card-value"),
-      components: document.querySelector("#card-components .card-value"),
-      componentsSub: document.querySelector("#card-components .card-sub"),
+      state: $("sp1-state"),
+      since: $("sp1-since"),
+      stateMod: $("mod-state"),
+      sync: $("sp1-sync"),
+      link: $("sp1-link"),
+      feed: $("sp1-feed"),
+      navDot: $("sp1-nav-dot"),
+      wState: $("w-state"),
+      wPid: $("w-pid"),
+      wUptime: $("w-uptime"),
+      wCpu: $("w-cpu"),
+      wCpuBar: $("w-cpu-bar"),
+      wMem: $("w-mem"),
+      wMemBar: $("w-mem-bar"),
+      components: $("w-components"),
+      aInstalled: $("a-installed"),
+      aLoaded: $("a-loaded"),
+      aLabel: $("a-label"),
+      lSize: $("l-size"),
+      lMtime: $("l-mtime"),
+      lLines: $("l-lines"),
+      hexstream: $("hexstream"),
+      attempts: $("sp1-attempts"),
+      attemptsN: $("sp1-attempts-n"),
+      gTotal: $("g-total"),
+      gRows: $("g-rows"),
+      spark: $("spark"),
+      sparkNote: $("spark-note"),
+      nServer: $("n-server"),
+      nLat: $("n-lat"),
+      nProvider: $("n-provider"),
+      nTopic: $("n-topic"),
+      rEnabled: $("r-enabled"),
+      rUnlock: $("r-unlock"),
+      iCount: $("i-count"),
+      iLast: $("i-last"),
+      sModel: $("s-model"),
+      scanSweep: $("scan-sweep"),
     };
+    this.buildBars();
     this.refresh();
     setInterval(() => this.refresh(), this.POLL_MS);
   },
 
+  buildBars() {
+    const make = (el, n) => {
+      for (let i = 0; i < n; i++) el.appendChild(document.createElement("i"));
+    };
+    make(this.els.wCpuBar, 12);
+    make(this.els.wMemBar, 12);
+    make(this.els.spark, 30);
+  },
+
   async refresh() {
     if (!OmniNative.available) {
+      // dev convenience: ?mock=1 renders the panel with sample data in a browser
+      if (location.search.includes("mock=1")) {
+        this.render(this.mockPayload());
+        return;
+      }
       this.renderBridgeOffline();
       return;
     }
@@ -156,7 +193,7 @@ OmniOS.register("sp1", {
       const s = await OmniNative.request("sp1.status");
       this.render(s);
     } catch (e) {
-      this.setBanner("warn", "SYNC ERROR", "native bridge did not respond");
+      this.setState("warn", "SYNC ERROR", "native bridge did not respond");
       this.els.navDot.className = "nav-dot off";
     }
   },
@@ -198,85 +235,223 @@ OmniOS.register("sp1", {
     return { ts, msg: "SYSTEM EVENT", tone: "" };
   },
 
-  setBanner(tone, text, since) {
-    this.els.banner.className = `state-banner ${tone}`;
+  setState(tone, text, since) {
+    this.els.stateMod.className = `mod mod-state${tone ? " " + tone : ""}`;
     this.els.state.textContent = text;
     this.els.since.textContent = since || "";
   },
 
-  setCard(el, text, tone) {
+  setKv(el, text, tone) {
     el.textContent = text;
-    el.className = `card-value${tone ? " " + tone : ""}`;
+    el.className = tone || "";
+  },
+
+  fmtDuration(sec) {
+    if (!isFinite(sec) || sec < 0) return "—";
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    if (d > 0) return `${d}D ${h}H ${m}M`;
+    if (h > 0) return `${h}H ${m}M`;
+    return `${m}M ${Math.floor(sec % 60)}S`;
+  },
+
+  fmtBytes(b) {
+    if (typeof b !== "number") return "—";
+    if (b >= 1 << 30) return (b / (1 << 30)).toFixed(2) + " GB";
+    if (b >= 1 << 20) return (b / (1 << 20)).toFixed(1) + " MB";
+    return Math.round(b / 1024) + " KB";
+  },
+
+  fmtClock(epoch) {
+    if (typeof epoch !== "number") return "—";
+    const d = new Date(epoch * 1000);
+    const pad = (x) => String(x).padStart(2, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  },
+
+  setMeter(barEl, ratio, hot) {
+    const segs = barEl.children;
+    const on = Math.round(Math.max(0, Math.min(1, ratio)) * segs.length);
+    for (let i = 0; i < segs.length; i++) {
+      segs[i].className = i < on ? (hot && i >= segs.length * 0.7 ? "on hot" : "on") : "";
+    }
   },
 
   render(s) {
     const state = this.deriveState(s);
     const running = !!s.watcherRunning;
+    const els = this.els;
+    const pad = (x) => String(x).padStart(2, "0");
 
-    // banner + sidebar dot
+    // top strip + sidebar dot
+    els.link.textContent = "LINK ACTIVE";
+    els.link.className = "ts-item ok";
+
+    // system state module
     if (!running) {
-      this.setBanner("alert", "WATCHER OFFLINE", "monitoring process is not running");
-      this.els.navDot.className = "nav-dot alert";
+      this.setState("alert", "OFFLINE", "MONITORING PROCESS IS NOT RUNNING");
+      els.navDot.className = "nav-dot alert";
     } else if (state.mode === "LOCKDOWN") {
       const bits = [`PHASE ${state.phase}`];
       if (state.ts) bits.push(`SINCE ${state.ts}`);
-      if (state.attempts) bits.push(`FAILED ATTEMPTS ${state.attempts}`);
-      this.setBanner("alert", "LOCKDOWN ACTIVE", bits.join(" · "));
-      this.els.navDot.className = "nav-dot alert";
+      this.setState("alert", "LOCKDOWN", bits.join(" · "));
+      els.navDot.className = "nav-dot alert";
     } else if (state.mode === "UNLOCKED") {
-      this.setBanner("ok", "UNLOCKED · MONITORING", state.ts ? `ARMED SINCE ${state.ts}` : "");
-      this.els.navDot.className = "nav-dot ok";
+      this.setState("ok", "UNLOCKED", `MONITORING${state.ts ? " · ARMED SINCE " + state.ts : ""}`);
+      els.navDot.className = "nav-dot ok";
     } else {
-      this.setBanner("", "STATE UNKNOWN", "no state markers found in log");
-      this.els.navDot.className = "nav-dot off";
+      this.setState("", "UNKNOWN", "NO STATE MARKERS IN LOG");
+      els.navDot.className = "nav-dot off";
     }
 
-    // cards
-    if (running) {
-      this.setCard(this.els.watcher, "RUNNING", "ok");
-      this.els.watcherSub.textContent = `pid ${s.watcherPid}`;
-    } else {
-      this.setCard(this.els.watcher, "OFFLINE", "alert");
-      this.els.watcherSub.textContent = "gesture monitor process";
+    // unlock-fail segments
+    const maxAttempts = s.maxUnlockAttempts || 5;
+    const failN = state.attempts ? parseInt(state.attempts, 10) : 0;
+    els.attempts.innerHTML = "";
+    for (let i = 0; i < maxAttempts; i++) {
+      const seg = document.createElement("i");
+      if (i < failN) seg.className = "on";
+      els.attempts.appendChild(seg);
+    }
+    els.attemptsN.textContent = `${failN}/${maxAttempts}`;
+
+    // watcher module
+    els.wState.textContent = running ? "RUNNING" : "OFFLINE";
+    els.wState.className = `watcher-state ${running ? "ok" : "alert"}`;
+    els.wPid.textContent = running ? s.watcherPid : "—";
+    els.wUptime.textContent =
+      running && typeof s.watcherSince === "number" ? this.fmtDuration(s.now - s.watcherSince) : "—";
+    const cpu = typeof s.watcherCpu === "number" ? s.watcherCpu : null;
+    els.wCpu.textContent = cpu !== null ? cpu.toFixed(1) + "%" : "—";
+    this.setMeter(els.wCpuBar, cpu !== null ? cpu / 100 : 0, true);
+    const mem = typeof s.watcherMemBytes === "number" ? s.watcherMemBytes : null;
+    els.wMem.textContent = mem !== null ? this.fmtBytes(mem) : "—";
+    this.setMeter(els.wMemBar, mem !== null ? mem / (4 * (1 << 30)) : 0, true);
+
+    // components checklist
+    const comps = [
+      ["APP BUNDLE", !!s.appBundle, ""],
+      ["GESTURE MODEL", !!s.modelPresent, typeof s.modelSizeBytes === "number" ? this.fmtBytes(s.modelSizeBytes) : ""],
+      ["CONFIG.LOCAL", !!s.configPresent, ""],
+    ];
+    els.components.innerHTML = "";
+    for (const [name, ok, extra] of comps) {
+      const li = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = extra ? `${name} · ${extra}` : name;
+      const st = document.createElement("span");
+      st.className = ok ? "st" : "st miss";
+      st.textContent = ok ? "OK" : "MISSING";
+      li.append(label, st);
+      els.components.appendChild(li);
     }
 
-    if (s.ntfyReachable === true) this.setCard(this.els.ntfy, "ONLINE", "ok");
-    else if (s.ntfyReachable === false) this.setCard(this.els.ntfy, "UNREACHABLE", "alert");
-    else this.setCard(this.els.ntfy, "NOT IN USE", "dim");
-
-    const provider = (s.notifyProvider || "none").toUpperCase();
-    this.setCard(this.els.notify, provider, provider === "NONE" ? "dim" : "ok");
-    this.els.notifySub.textContent =
-      provider === "NTFY" ? (s.ntfyTopicSet ? "topic configured" : "no topic set") : "push provider";
-
-    if (s.remoteEnabled) {
-      this.setCard(this.els.remote, "ENABLED", "ok");
-      this.els.remoteSub.textContent = s.remoteUnlockAllowed ? "remote unlock allowed" : "remote unlock blocked";
-    } else {
-      this.setCard(this.els.remote, "DISABLED", "dim");
-      this.els.remoteSub.textContent = "phone commands";
-    }
-
-    this.setCard(this.els.autostart, s.autostartInstalled ? "INSTALLED" : "NOT INSTALLED",
+    // autostart
+    this.setKv(els.aInstalled, s.autostartInstalled ? "INSTALLED" : "NOT INSTALLED",
       s.autostartInstalled ? "ok" : "dim");
+    this.setKv(els.aLoaded, s.agentLoaded ? "YES" : "NO", s.agentLoaded ? "ok" : "dim");
+    els.aLabel.textContent = typeof s.agentLabel === "string" ? s.agentLabel : "—";
 
+    // log file
+    els.lSize.textContent = this.fmtBytes(s.logSizeBytes);
+    els.lMtime.textContent = this.fmtClock(s.logMtime);
+    els.lLines.textContent = `${(s.logTail || []).length} LINES`;
+
+    // hex stream — real bytes from the latest log lines
+    const hexSrc = (s.logTail || []).slice(-10).join(" ");
+    let hex = "";
+    for (let i = 0; i < Math.min(hexSrc.length, 220); i++) {
+      const h = hexSrc.charCodeAt(i).toString(16).toUpperCase().padStart(2, "0").slice(-2);
+      hex += i % 8 === 5 ? `<b>${h}</b> ` : h + " ";
+    }
+    els.hexstream.innerHTML = hex || "NO DATA";
+
+    // gesture activity from log tail
+    const gestures = ["Open_Palm", "Closed_Fist", "Thumb_Up", "Thumb_Down", "Victory", "Pointing_Up", "ILoveYou"];
+    const counts = {};
+    let total = 0;
+    const perMin = {};
+    for (const line of s.logTail || []) {
+      const g = line.match(/제스처 인식:\s*\S*\s*(\w+)/);
+      if (g) {
+        counts[g[1]] = (counts[g[1]] || 0) + 1;
+        total++;
+      }
+      const t = line.match(/^\[(\d{2}):(\d{2}):\d{2}\]/);
+      if (t) {
+        const key = `${t[1]}:${t[2]}`;
+        perMin[key] = (perMin[key] || 0) + 1;
+      }
+    }
+    const maxCount = Math.max(1, ...Object.values(counts));
+    els.gTotal.textContent = `${total} EVENTS IN BUFFER`;
+    els.gRows.innerHTML = "";
+    for (const g of gestures) {
+      const n = counts[g] || 0;
+      const row = document.createElement("div");
+      row.className = "gest-row";
+      const name = document.createElement("span");
+      name.className = "gest-name";
+      name.textContent = g.replace("_", " ").toUpperCase();
+      const track = document.createElement("div");
+      track.className = "gest-track";
+      const fill = document.createElement("div");
+      fill.className = "gest-fill";
+      fill.style.width = `${(n / maxCount) * 100}%`;
+      track.appendChild(fill);
+      const num = document.createElement("span");
+      num.className = "gest-n";
+      num.textContent = String(n);
+      row.append(name, track, num);
+      els.gRows.appendChild(row);
+    }
+
+    // events-per-minute sparkline (last 30 minute buckets in the buffer)
+    const minutes = Object.keys(perMin).sort();
+    const last30 = minutes.slice(-30);
+    const sparkMax = Math.max(1, ...last30.map((k) => perMin[k]));
+    const bars = els.spark.children;
+    for (let i = 0; i < bars.length; i++) {
+      const key = last30[last30.length - bars.length + i];
+      const v = key ? perMin[key] : 0;
+      bars[i].style.height = `${Math.max(5, (v / sparkMax) * 100)}%`;
+      bars[i].className = v === sparkMax && v > 0 ? "hi" : "";
+    }
+    els.sparkNote.textContent = last30.length
+      ? `${last30[0]}–${last30[last30.length - 1]}`
+      : "";
+
+    // ntfy link
+    if (s.ntfyReachable === true) this.setKv(els.nServer, "ONLINE", "ok");
+    else if (s.ntfyReachable === false) this.setKv(els.nServer, "UNREACHABLE", "alert");
+    else this.setKv(els.nServer, "NOT IN USE", "dim");
+    els.nLat.textContent = typeof s.ntfyLatencyMs === "number" ? `${s.ntfyLatencyMs} MS` : "—";
+    this.setKv(els.nProvider, (s.notifyProvider || "none").toUpperCase(),
+      s.notifyProvider === "none" ? "dim" : "");
+    this.setKv(els.nTopic, s.ntfyTopicSet ? "CONFIGURED" : "NOT SET", s.ntfyTopicSet ? "ok" : "dim");
+
+    // remote control
+    this.setKv(els.rEnabled, s.remoteEnabled ? "ENABLED" : "DISABLED", s.remoteEnabled ? "ok" : "dim");
+    this.setKv(els.rUnlock, s.remoteEnabled ? (s.remoteUnlockAllowed ? "ALLOWED" : "BLOCKED") : "—",
+      s.remoteEnabled ? (s.remoteUnlockAllowed ? "ok" : "warn") : "dim");
+
+    // intrusions
     const n = s.intruderCount || 0;
-    this.setCard(this.els.intrusions, String(n), n > 0 ? "alert" : "ok");
+    els.iCount.textContent = String(n);
+    els.iCount.className = `big-num${n > 0 ? " alert" : ""}`;
+    els.iLast.textContent =
+      typeof s.lastIntrusionAt === "number" ? this.fmtClock(s.lastIntrusionAt) : "NONE";
 
-    const comp = [s.appBundle, s.modelPresent, s.configPresent];
-    const okCount = comp.filter(Boolean).length;
-    this.setCard(this.els.components, `${okCount}/3 OK`, okCount === 3 ? "ok" : "warn");
-    const missing = [];
-    if (!s.appBundle) missing.push("bundle");
-    if (!s.modelPresent) missing.push("model");
-    if (!s.configPresent) missing.push("config");
-    this.els.componentsSub.textContent = missing.length ? `missing: ${missing.join(", ")}` : "bundle / model / config";
+    // cam watch
+    els.scanSweep.className = `scan-sweep${running ? "" : " paused"}`;
+    els.sModel.textContent = s.modelPresent ? "MEDIAPIPE OK" : "MISSING";
 
     // event feed (newest first)
-    const tail = (s.logTail || []).slice(-9).reverse();
-    this.els.feed.innerHTML = "";
+    const tail = (s.logTail || []).slice(-16).reverse();
+    els.feed.innerHTML = "";
     if (!tail.length) {
-      this.els.feed.innerHTML = '<li class="feed-empty">NO EVENTS LOGGED</li>';
+      els.feed.innerHTML = '<li class="feed-empty">NO EVENTS LOGGED</li>';
     } else {
       for (const line of tail) {
         const ev = this.translate(line);
@@ -288,18 +463,62 @@ OmniOS.register("sp1", {
         msg.className = `feed-msg${ev.tone ? " " + ev.tone : ""}`;
         msg.textContent = ev.msg;
         li.append(ts, msg);
-        this.els.feed.appendChild(li);
+        els.feed.appendChild(li);
       }
     }
 
     const now = new Date();
-    const pad = (x) => String(x).padStart(2, "0");
-    this.els.sync.textContent = `SYNC ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    els.sync.textContent = `SYNC ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   },
 
   renderBridgeOffline() {
-    this.setBanner("warn", "NATIVE BRIDGE OFFLINE", "open the Omni OS mac app to see live status");
+    this.setState("warn", "BRIDGE OFFLINE", "OPEN THE OMNI OS MAC APP FOR LIVE STATUS");
     this.els.navDot.className = "nav-dot off";
+    this.els.link.textContent = "LINK OFFLINE";
+    this.els.link.className = "ts-item alert";
     this.els.sync.textContent = "SYNC —";
+  },
+
+  // sample payload for browser development (?mock=1)
+  mockPayload() {
+    const now = Date.now() / 1000;
+    const mkLines = [];
+    const gest = ["Open_Palm", "Closed_Fist", "Thumb_Up", "Thumb_Down", "Pointing_Up"];
+    for (let i = 60; i > 0; i--) {
+      const d = new Date((now - i * 45) * 1000);
+      const p = (x) => String(x).padStart(2, "0");
+      mkLines.push(
+        `[${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}] 제스처 인식: · ${gest[i % gest.length]}`
+      );
+    }
+    return {
+      now,
+      watcherPid: 9385,
+      watcherRunning: true,
+      watcherSince: now - 4123,
+      watcherCpu: 42.1,
+      watcherMemBytes: 1250000000,
+      stateLine: "[17:37:41] [OPEN] 락다운 해제",
+      failLine: null,
+      logTail: mkLines,
+      logSizeBytes: 52645,
+      logMtime: now - 12,
+      intruderCount: 0,
+      lastIntrusionAt: null,
+      autostartInstalled: true,
+      agentLabel: "com.geonhee.security-protocol-1",
+      agentLoaded: true,
+      appBundle: true,
+      modelPresent: true,
+      modelSizeBytes: 8373440,
+      configPresent: true,
+      notifyProvider: "ntfy",
+      ntfyTopicSet: true,
+      remoteEnabled: true,
+      remoteUnlockAllowed: true,
+      maxUnlockAttempts: 5,
+      ntfyReachable: true,
+      ntfyLatencyMs: 501,
+    };
   },
 });

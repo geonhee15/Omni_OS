@@ -31,58 +31,74 @@ static NSArray<NSString *> *tailLines(NSString *path, NSUInteger maxBytes, NSUIn
     return lines;
 }
 
+static NSString *runTool(NSString *path, NSArray<NSString *> *args) {
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:path];
+    task.arguments = args;
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = [NSPipe pipe];
+    NSError *err = nil;
+    if (![task launchAndReturnError:&err]) return nil;
+    [task waitUntilExit];
+    NSData *out = [pipe.fileHandleForReading readDataToEndOfFile];
+    return [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];
+}
+
 // True only if the pid is alive AND is actually the watcher script
 // (guards against a stale lock file whose pid got reused).
 static BOOL pidIsWatcher(int pid) {
     if (pid <= 0) return NO;
     errno = 0;
     if (kill(pid, 0) != 0 && errno != EPERM) return NO;
-
-    NSTask *task = [NSTask new];
-    task.executableURL = [NSURL fileURLWithPath:@"/bin/ps"];
-    task.arguments = @[ @"-p", [NSString stringWithFormat:@"%d", pid], @"-o", @"command=" ];
-    NSPipe *pipe = [NSPipe pipe];
-    task.standardOutput = pipe;
-    task.standardError = [NSPipe pipe];
-    NSError *err = nil;
-    if (![task launchAndReturnError:&err]) return YES; // ps unavailable; trust kill()
-    [task waitUntilExit];
-    NSData *out = [pipe.fileHandleForReading readDataToEndOfFile];
-    NSString *cmd = [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding] ?: @"";
+    NSString *cmd = runTool(@"/bin/ps",
+        @[ @"-p", [NSString stringWithFormat:@"%d", pid], @"-o", @"command=" ]);
+    if (cmd == nil) return YES; // ps unavailable; trust kill()
     return [cmd containsString:@"security_protocol"];
 }
 
-// ntfy.sh reachability, cached for 60s so 5s UI polling doesn't spam the network.
-static NSNumber *ntfyReachable(void) {
-    static NSNumber *cached = nil;
+// ntfy.sh reachability + latency, cached for 60s so 5s UI polling doesn't spam the network.
+static void ntfyCheck(NSNumber **reachable, NSNumber **latencyMs) {
+    static NSNumber *cachedOk = nil;
+    static NSNumber *cachedMs = nil;
     static NSTimeInterval cachedAt = 0;
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
-    if (cached != nil && now - cachedAt < 60) return cached;
+    if (cachedOk != nil && now - cachedAt < 60) {
+        *reachable = cachedOk;
+        *latencyMs = cachedMs;
+        return;
+    }
 
     NSMutableURLRequest *req =
         [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://ntfy.sh/v1/health"]];
     req.timeoutInterval = 3.0;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     __block BOOL ok = NO;
+    NSDate *t0 = [NSDate date];
+    __block NSTimeInterval elapsed = 0;
     NSURLSessionDataTask *task = [[NSURLSession sharedSession]
         dataTaskWithRequest:req
           completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
               ok = (error == nil && [(NSHTTPURLResponse *)resp statusCode] == 200);
+              elapsed = -[t0 timeIntervalSinceNow];
               dispatch_semaphore_signal(sem);
           }];
     [task resume];
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)));
 
-    cached = @(ok);
+    cachedOk = @(ok);
+    cachedMs = ok ? @((int)(elapsed * 1000)) : nil;
     cachedAt = now;
-    return cached;
+    *reachable = cachedOk;
+    *latencyMs = cachedMs;
 }
 
 NSDictionary *SP1CollectStatus(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSMutableDictionary *out = [NSMutableDictionary dictionary];
+    out[@"now"] = @([NSDate date].timeIntervalSince1970);
 
-    // watcher process (pid from the file lock)
+    // ── watcher process (pid from the file lock) ──
     NSString *lockPath = [SP1_DIR stringByAppendingPathComponent:@".security_protocol.lock"];
     NSString *pidStr = [[NSString stringWithContentsOfFile:lockPath
                                                   encoding:NSUTF8StringEncoding
@@ -93,12 +109,32 @@ NSDictionary *SP1CollectStatus(void) {
     out[@"watcherPid"] = @(pid);
     out[@"watcherRunning"] = @(running);
 
-    // Log analysis. Recent lines can be pure gesture spam, so the last
-    // state-changing marker may sit far back — scan a deep tail natively and
-    // hand JS only the found marker line plus a short tail for the event feed.
+    NSDate *lockMtime = [fm attributesOfItemAtPath:lockPath error:nil][NSFileModificationDate];
+    out[@"watcherSince"] = (running && lockMtime) ? @(lockMtime.timeIntervalSince1970) : (id)[NSNull null];
+
+    // process telemetry (cpu %, resident memory)
+    out[@"watcherCpu"] = [NSNull null];
+    out[@"watcherMemBytes"] = [NSNull null];
+    if (running) {
+        NSString *ps = runTool(@"/bin/ps",
+            @[ @"-p", [NSString stringWithFormat:@"%d", pid], @"-o", @"%cpu=,rss=" ]);
+        NSArray<NSString *> *parts = [ps componentsSeparatedByCharactersInSet:
+            [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSMutableArray<NSString *> *vals = [NSMutableArray array];
+        for (NSString *p in parts) if (p.length > 0) [vals addObject:p];
+        if (vals.count >= 2) {
+            out[@"watcherCpu"] = @(vals[0].doubleValue);
+            out[@"watcherMemBytes"] = @(vals[1].longLongValue * 1024);
+        }
+    }
+
+    // ── log analysis ──
+    // Recent lines can be pure gesture spam, so the last state-changing marker
+    // may sit far back — scan a deep tail natively and hand JS only the found
+    // marker line plus a short tail for the event feed / activity stats.
     // Marker strings mirror the log() calls in security_protocol.py.
-    NSArray<NSString *> *lines =
-        tailLines([SP1_DIR stringByAppendingPathComponent:@"protocol.log"], 4 * 1024 * 1024, NSUIntegerMax);
+    NSString *logPath = [SP1_DIR stringByAppendingPathComponent:@"protocol.log"];
+    NSArray<NSString *> *lines = tailLines(logPath, 4 * 1024 * 1024, NSUIntegerMax);
     NSArray<NSString *> *stateMarkers = @[
         @"입력 차단 활성화",          // lockdown engaged (shade phase)
         @"[LOCK] UNLOCK 선택",       // auth phase entered
@@ -118,32 +154,53 @@ NSDictionary *SP1CollectStatus(void) {
     }
     out[@"stateLine"] = stateLine ?: (id)[NSNull null];
     out[@"failLine"] = failLine ?: (id)[NSNull null];
-    out[@"logTail"] = lines.count > 30
-        ? [lines subarrayWithRange:NSMakeRange(lines.count - 30, 30)]
+    out[@"logTail"] = lines.count > 80
+        ? [lines subarrayWithRange:NSMakeRange(lines.count - 80, 80)]
         : lines;
 
-    // intrusion snapshots
+    NSDictionary *logAttrs = [fm attributesOfItemAtPath:logPath error:nil];
+    out[@"logSizeBytes"] = logAttrs[NSFileSize] ?: (id)[NSNull null];
+    NSDate *logMtime = logAttrs[NSFileModificationDate];
+    out[@"logMtime"] = logMtime ? @(logMtime.timeIntervalSince1970) : (id)[NSNull null];
+
+    // ── intrusion snapshots ──
+    NSString *intrudersDir = [SP1_DIR stringByAppendingPathComponent:@"intruders"];
     NSUInteger intruders = 0;
-    for (NSString *f in [fm contentsOfDirectoryAtPath:[SP1_DIR stringByAppendingPathComponent:@"intruders"]
-                                                error:nil]) {
-        if (![f hasPrefix:@"."]) intruders++;
+    NSDate *lastIntrusion = nil;
+    for (NSString *f in [fm contentsOfDirectoryAtPath:intrudersDir error:nil]) {
+        if ([f hasPrefix:@"."]) continue;
+        intruders++;
+        NSDate *m = [fm attributesOfItemAtPath:[intrudersDir stringByAppendingPathComponent:f]
+                                         error:nil][NSFileModificationDate];
+        if (m && (lastIntrusion == nil || [m compare:lastIntrusion] == NSOrderedDescending)) {
+            lastIntrusion = m;
+        }
     }
     out[@"intruderCount"] = @(intruders);
+    out[@"lastIntrusionAt"] = lastIntrusion ? @(lastIntrusion.timeIntervalSince1970) : (id)[NSNull null];
 
-    // autostart launch agent
-    BOOL autostart = NO;
+    // ── autostart launch agent ──
+    NSString *agentFile = nil;
     NSString *agentsDir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/LaunchAgents"];
     for (NSString *f in [fm contentsOfDirectoryAtPath:agentsDir error:nil]) {
-        if ([f containsString:@"security-protocol-1"]) { autostart = YES; break; }
+        if ([f containsString:@"security-protocol-1"]) { agentFile = f; break; }
     }
-    out[@"autostartInstalled"] = @(autostart);
+    out[@"autostartInstalled"] = @(agentFile != nil);
+    out[@"agentLabel"] = agentFile ? [agentFile stringByDeletingPathExtension] : (id)[NSNull null];
+    BOOL agentLoaded = NO;
+    if (agentFile != nil) {
+        NSString *list = runTool(@"/bin/launchctl", @[ @"list" ]);
+        agentLoaded = list != nil && [list containsString:[agentFile stringByDeletingPathExtension]];
+    }
+    out[@"agentLoaded"] = @(agentLoaded);
 
-    // components
+    // ── components ──
     out[@"appBundle"] = @([fm fileExistsAtPath:[SP1_DIR stringByAppendingPathComponent:@"SecurityProtocol1.app"]]);
-    out[@"modelPresent"] = @([fm fileExistsAtPath:
-        [SP1_DIR stringByAppendingPathComponent:@"models/gesture_recognizer.task"]]);
+    NSString *modelPath = [SP1_DIR stringByAppendingPathComponent:@"models/gesture_recognizer.task"];
+    out[@"modelPresent"] = @([fm fileExistsAtPath:modelPath]);
+    out[@"modelSizeBytes"] = [fm attributesOfItemAtPath:modelPath error:nil][NSFileSize] ?: (id)[NSNull null];
 
-    // config — expose flags only, never topic/token/gesture values
+    // ── config — expose flags only, never topic/token/gesture values ──
     NSData *cfgData = [NSData dataWithContentsOfFile:
         [SP1_DIR stringByAppendingPathComponent:@"config.local.json"]];
     NSDictionary *cfg = nil;
@@ -161,12 +218,18 @@ NSDictionary *SP1CollectStatus(void) {
     BOOL remoteEnabled = [remote[@"enabled"] boolValue];
     out[@"remoteEnabled"] = @(remoteEnabled);
     out[@"remoteUnlockAllowed"] = @([remote[@"allow_unlock"] boolValue]);
+    out[@"maxUnlockAttempts"] = [cfg[@"max_unlock_attempts"] isKindOfClass:[NSNumber class]]
+        ? cfg[@"max_unlock_attempts"] : @5;
 
-    // ntfy server check only matters if something actually uses ntfy
+    // ── ntfy server check — only matters if something actually uses ntfy ──
     if ([provider isEqualToString:@"ntfy"] || remoteEnabled) {
-        out[@"ntfyReachable"] = ntfyReachable();
+        NSNumber *reachable = nil, *latency = nil;
+        ntfyCheck(&reachable, &latency);
+        out[@"ntfyReachable"] = reachable ?: (id)[NSNull null];
+        out[@"ntfyLatencyMs"] = latency ?: (id)[NSNull null];
     } else {
         out[@"ntfyReachable"] = [NSNull null];
+        out[@"ntfyLatencyMs"] = [NSNull null];
     }
 
     return out;

@@ -53,65 +53,127 @@
       </div>
     </section>
 
-    <!-- panel 2: Security-Protocol-1 -->
+    <!-- panel 2: Security-Protocol-1 (dense HUD) -->
     <section class="panel panel-sp1" id="panel-sp1">
-      <header class="panel-head">
-        <div>
-          <h1 class="panel-title">SECURITY-PROTOCOL-1</h1>
-          <div class="panel-sub">CAMERA GESTURE LOCKDOWN SYSTEM</div>
-        </div>
-        <div class="sync-note" id="sp1-sync">SYNC &mdash;</div>
-      </header>
-
-      <div class="state-banner" id="sp1-banner">
-        <div class="state-label">SYSTEM STATE</div>
-        <div class="state-value" id="sp1-state">CHECKING&hellip;</div>
-        <div class="state-since" id="sp1-since"></div>
+      <div class="sp1-topstrip">
+        <span class="sp1-title">SECURITY-PROTOCOL-1</span>
+        <span class="ts-item">CAMERA GESTURE LOCKDOWN</span>
+        <span class="ts-spacer"></span>
+        <span class="ts-item" id="sp1-link">LINK &mdash;</span>
+        <span class="ts-item">POLL 5.0S</span>
+        <span class="ts-item" id="sp1-sync">SYNC &mdash;</span>
       </div>
 
-      <div class="card-grid">
-        <div class="card" id="card-watcher">
-          <div class="card-title">WATCHER</div>
-          <div class="card-value">&mdash;</div>
-          <div class="card-sub">gesture monitor process</div>
-        </div>
-        <div class="card" id="card-ntfy">
-          <div class="card-title">NTFY SERVER</div>
-          <div class="card-value">&mdash;</div>
-          <div class="card-sub">ntfy.sh</div>
-        </div>
-        <div class="card" id="card-notify">
-          <div class="card-title">NOTIFICATIONS</div>
-          <div class="card-value">&mdash;</div>
-          <div class="card-sub">push provider</div>
-        </div>
-        <div class="card" id="card-remote">
-          <div class="card-title">REMOTE CONTROL</div>
-          <div class="card-value">&mdash;</div>
-          <div class="card-sub">phone commands</div>
-        </div>
-        <div class="card" id="card-autostart">
-          <div class="card-title">AUTOSTART</div>
-          <div class="card-value">&mdash;</div>
-          <div class="card-sub">launch agent</div>
-        </div>
-        <div class="card" id="card-intrusions">
-          <div class="card-title">INTRUSIONS</div>
-          <div class="card-value">&mdash;</div>
-          <div class="card-sub">snapshots recorded</div>
-        </div>
-        <div class="card" id="card-components">
-          <div class="card-title">COMPONENTS</div>
-          <div class="card-value">&mdash;</div>
-          <div class="card-sub">bundle / model / config</div>
-        </div>
-      </div>
+      <div class="sp1-grid">
+        <!-- left column -->
+        <div class="sp1-col">
+          <div class="mod" id="mod-watcher">
+            <div class="mod-title">WATCHER</div>
+            <div class="watcher-state" id="w-state">&mdash;</div>
+            <div class="kv"><span>PID</span><span id="w-pid">&mdash;</span></div>
+            <div class="kv"><span>UPTIME</span><span id="w-uptime">&mdash;</span></div>
+            <div class="meter">
+              <div class="meter-label"><span>CPU</span><span id="w-cpu">&mdash;</span></div>
+              <div class="meter-bar" id="w-cpu-bar"></div>
+            </div>
+            <div class="meter">
+              <div class="meter-label"><span>MEM</span><span id="w-mem">&mdash;</span></div>
+              <div class="meter-bar" id="w-mem-bar"></div>
+            </div>
+          </div>
 
-      <div class="feed">
-        <div class="feed-title">EVENT FEED</div>
-        <ul class="feed-list" id="sp1-feed">
-          <li class="feed-empty">NO DATA</li>
-        </ul>
+          <div class="mod">
+            <div class="mod-title">COMPONENTS</div>
+            <ul class="checklist" id="w-components"></ul>
+          </div>
+
+          <div class="mod">
+            <div class="mod-title">AUTOSTART</div>
+            <div class="kv"><span>AGENT</span><span id="a-installed">&mdash;</span></div>
+            <div class="kv"><span>LOADED</span><span id="a-loaded">&mdash;</span></div>
+            <div class="agent-label" id="a-label">&mdash;</div>
+          </div>
+
+          <div class="mod">
+            <div class="mod-title">LOG FILE</div>
+            <div class="kv"><span>SIZE</span><span id="l-size">&mdash;</span></div>
+            <div class="kv"><span>LAST WRITE</span><span id="l-mtime">&mdash;</span></div>
+            <div class="kv"><span>BUFFER</span><span id="l-lines">&mdash;</span></div>
+          </div>
+
+          <div class="mod mod-hex">
+            <div class="mod-title">DATA STREAM</div>
+            <div class="hexstream" id="hexstream"></div>
+          </div>
+        </div>
+
+        <!-- center column -->
+        <div class="sp1-col sp1-col-center">
+          <div class="mod mod-state" id="mod-state">
+            <div class="mod-title">SYSTEM STATE</div>
+            <div class="state-value" id="sp1-state">CHECKING&hellip;</div>
+            <div class="state-since" id="sp1-since"></div>
+            <div class="attempts">
+              <span class="attempts-label">UNLOCK FAILS</span>
+              <div class="segs" id="sp1-attempts"></div>
+              <span class="attempts-n" id="sp1-attempts-n">&mdash;</span>
+            </div>
+          </div>
+
+          <div class="mod">
+            <div class="mod-title">GESTURE ACTIVITY <span class="mod-note" id="g-total"></span></div>
+            <div class="gest-rows" id="g-rows"></div>
+          </div>
+
+          <div class="mod">
+            <div class="mod-title">EVENTS / MIN <span class="mod-note" id="spark-note"></span></div>
+            <div class="spark" id="spark"></div>
+          </div>
+
+          <div class="mod mod-feed">
+            <div class="mod-title">EVENT FEED</div>
+            <ul class="feed-list" id="sp1-feed">
+              <li class="feed-empty">NO DATA</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- right column -->
+        <div class="sp1-col">
+          <div class="mod">
+            <div class="mod-title">NTFY LINK</div>
+            <div class="kv"><span>SERVER</span><span id="n-server">&mdash;</span></div>
+            <div class="kv"><span>LATENCY</span><span id="n-lat">&mdash;</span></div>
+            <div class="kv"><span>PROVIDER</span><span id="n-provider">&mdash;</span></div>
+            <div class="kv"><span>TOPIC</span><span id="n-topic">&mdash;</span></div>
+          </div>
+
+          <div class="mod">
+            <div class="mod-title">REMOTE CONTROL</div>
+            <div class="kv"><span>CHANNEL</span><span id="r-enabled">&mdash;</span></div>
+            <div class="kv"><span>UNLOCK</span><span id="r-unlock">&mdash;</span></div>
+            <div class="chips">
+              <span class="chip">LOCK</span><span class="chip">UNLOCK</span>
+              <span class="chip">SNAP</span><span class="chip">STATUS</span>
+            </div>
+          </div>
+
+          <div class="mod">
+            <div class="mod-title">INTRUSIONS</div>
+            <div class="big-num" id="i-count">&mdash;</div>
+            <div class="kv"><span>LAST CAPTURE</span><span id="i-last">&mdash;</span></div>
+          </div>
+
+          <div class="mod mod-scan">
+            <div class="mod-title">CAM WATCH</div>
+            <div class="scan-ring">
+              <div class="scan-grid"></div>
+              <div class="scan-sweep" id="scan-sweep"></div>
+              <div class="scan-dot"></div>
+            </div>
+            <div class="kv"><span>MODEL</span><span id="s-model">&mdash;</span></div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -121,7 +183,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1</span>
       <span class="divider">|</span>
-      <span>v0.2.0</span>
+      <span>v0.3.0</span>
     </footer>
   </div>
 
