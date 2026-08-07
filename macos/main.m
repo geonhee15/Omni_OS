@@ -2,9 +2,63 @@
 #import <WebKit/WebKit.h>
 #import "sp1_status.h"
 
+// Serves bundle Resources/web/* over omni://local/... — unlike bare file://,
+// a custom scheme gives the page a real origin, so fetch()/XHR work and the
+// Human/TensorFlow.js model loader can pull its model files.
+@interface OmniSchemeHandler : NSObject <WKURLSchemeHandler>
+@end
+
+@implementation OmniSchemeHandler
+
+- (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
+    NSURL *url = task.request.URL;
+    NSString *path = url.path.length ? url.path : @"/index.html";
+    if ([path isEqualToString:@"/"]) path = @"/index.html";
+
+    NSString *webRoot = [[NSBundle mainBundle].resourcePath stringByAppendingPathComponent:@"web"];
+    NSString *filePath = [[webRoot stringByAppendingPathComponent:path] stringByStandardizingPath];
+    NSData *data = [filePath hasPrefix:webRoot] ? [NSData dataWithContentsOfFile:filePath] : nil;
+    if (data == nil) {
+        [task didFailWithError:[NSError errorWithDomain:NSURLErrorDomain
+                                                   code:NSURLErrorFileDoesNotExist
+                                               userInfo:nil]];
+        return;
+    }
+
+    static NSDictionary<NSString *, NSString *> *mimes;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        mimes = @{
+            @"html" : @"text/html", @"css" : @"text/css",
+            @"js" : @"application/javascript", @"json" : @"application/json",
+            @"bin" : @"application/octet-stream", @"wasm" : @"application/wasm",
+            @"jpg" : @"image/jpeg", @"png" : @"image/png", @"svg" : @"image/svg+xml",
+        };
+    });
+    NSString *mime = mimes[filePath.pathExtension.lowercaseString] ?: @"application/octet-stream";
+    NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc]
+         initWithURL:url
+          statusCode:200
+         HTTPVersion:@"HTTP/1.1"
+        headerFields:@{
+            @"Content-Type" : mime,
+            @"Content-Length" : [NSString stringWithFormat:@"%lu", (unsigned long)data.length],
+            @"Access-Control-Allow-Origin" : @"*",
+        }];
+    [task didReceiveResponse:resp];
+    [task didReceiveData:data];
+    [task didFinish];
+}
+
+- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task {
+}
+
+@end
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, WKScriptMessageHandler>
 @property (strong) NSWindow *window;
 @property (strong) WKWebView *webView;
+@property (strong) OmniSchemeHandler *schemeHandler;
 @end
 
 @implementation AppDelegate
@@ -31,21 +85,23 @@
     // JS calls window.webkit.messageHandlers.omni.postMessage({id, cmd})
     WKWebViewConfiguration *config = [WKWebViewConfiguration new];
     [config.userContentController addScriptMessageHandler:self name:@"omni"];
+    self.schemeHandler = [OmniSchemeHandler new];
+    [config setURLSchemeHandler:self.schemeHandler forURLScheme:@"omni"];
 
     WKWebView *webView = [[WKWebView alloc] initWithFrame:window.contentView.bounds
                                             configuration:config];
     webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [webView setValue:@NO forKey:@"drawsBackground"];
 
-    NSURL *url = [[NSBundle mainBundle] URLForResource:@"index"
-                                         withExtension:@"html"
-                                          subdirectory:@"web"];
-    if (url == nil) {
+    NSString *indexPath = [[NSBundle mainBundle].resourcePath
+        stringByAppendingPathComponent:@"web/index.html"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:indexPath]) {
         NSLog(@"web/index.html not found in app bundle");
         [NSApp terminate:nil];
         return;
     }
-    [webView loadFileURL:url allowingReadAccessToURL:url.URLByDeletingLastPathComponent];
+    [webView loadRequest:[NSURLRequest requestWithURL:
+        [NSURL URLWithString:@"omni://local/index.html"]]];
 
     [window.contentView addSubview:webView];
     [window makeKeyAndOrderFront:nil];

@@ -191,15 +191,19 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1</span>
       <span class="divider">|</span>
-      <span>v0.4.0</span>
+      <span>v0.5.0</span>
     </footer>
   </div>
 
-  <!-- intruder lightbox -->
+  <!-- intruder lightbox with Human analysis overlay -->
   <div class="lightbox" id="lightbox" hidden>
     <div class="lightbox-inner">
-      <img id="lb-img" alt="intruder snapshot" />
+      <div class="lb-stage">
+        <img id="lb-img" alt="intruder snapshot" />
+        <canvas id="lb-canvas"></canvas>
+      </div>
       <div class="lightbox-meta" id="lb-meta"></div>
+      <div class="lb-analysis" id="lb-analysis"></div>
     </div>
   </div>
 

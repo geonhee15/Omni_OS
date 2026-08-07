@@ -28,6 +28,10 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   - 이벤트 피드 (한국어 로그를 영어 라벨로 변환 표시)
   - **INTRUDER GALLERY** — 침입 스냅샷을 카테고리별(WRONG GESTURE / KEYBOARD / MOUSE / REMOTE SNAP)로
     필터링해 보는 갤러리. 네이티브에서 썸네일 생성(ImageIO, mtime 캐시), 클릭하면 원본 크기 라이트박스
+  - **신경망 인물 분석** — 사진을 열면 [vladmandic/human](https://github.com/vladmandic/human)으로
+    얼굴 박스·페이스 메시·나이·성별·감정·신체 포즈·자세 단서를 즉석 분석해 HUD 오버레이로 표시.
+    라이브러리와 모델(`vendor/`, 약 16MB)은 앱에 번들되어 완전히 로컬에서 동작 — 사진이 기기 밖으로 나가지 않음.
+    WKWebView에서 모델 fetch가 되도록 `omni://` 커스텀 URL 스킴으로 앱 리소스를 서빙
   - 네이티브 브리지(WKScriptMessageHandler)로 5초마다 갱신. topic·토큰·제스처 값은 브리지로 절대 내보내지 않음
 
 ## 구조

@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.4.0",
+  version: "0.5.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -171,10 +171,15 @@ OmniOS.register("sp1", {
       lightbox: $("lightbox"),
       lbImg: $("lb-img"),
       lbMeta: $("lb-meta"),
+      lbCanvas: $("lb-canvas"),
+      lbAnalysis: $("lb-analysis"),
     };
     this.els.lightbox.addEventListener("click", () => {
+      this._lbToken++; // cancels any in-flight analysis render
       this.els.lightbox.hidden = true;
       this.els.lbImg.src = "";
+      this.els.lbCanvas.width = 0;
+      this.els.lbAnalysis.innerHTML = "";
     });
     this.buildBars();
     this.refresh();
@@ -275,6 +280,7 @@ OmniOS.register("sp1", {
     els.igNote.textContent = `${items.length} CAPTURES`;
     els.igGrid.innerHTML = "";
     els.igEmpty.hidden = shown.length > 0;
+    if (items.length > 0) this.prewarmHuman();
 
     for (const item of shown) {
       const cell = document.createElement("div");
@@ -301,8 +307,13 @@ OmniOS.register("sp1", {
     }
   },
 
+  _lbToken: 0,
+
   async openLightbox(item) {
     const els = this.els;
+    const token = ++this._lbToken;
+    els.lbCanvas.width = 0; // clear any previous overlay
+    els.lbAnalysis.innerHTML = "";
     // show the thumbnail immediately, then swap in the full-size image
     if (typeof item.thumb === "string" && item.thumb) {
       els.lbImg.src = item.thumb.startsWith("data:")
@@ -315,12 +326,148 @@ OmniOS.register("sp1", {
     if (OmniNative.available && item.name) {
       try {
         const r = await OmniNative.request("sp1.intruderImage", item.name, 20000);
-        if (r.image && !els.lightbox.hidden) {
+        if (r.image && token === this._lbToken) {
           els.lbImg.src = `data:image/jpeg;base64,${r.image}`;
         }
       } catch (e) {
         /* thumbnail stays */
       }
+    }
+    if (token === this._lbToken) this.analyzeLightbox(token);
+  },
+
+  // ── Human (vladmandic/human) neural analysis of the opened snapshot ──
+  _human: null,
+  _humanLoad: null,
+  _prewarmed: false,
+
+  // First inference compiles WebGL shaders (~30s). Kick that off in the
+  // background once the gallery has content, so clicking a photo is fast.
+  prewarmHuman() {
+    if (this._prewarmed) return;
+    this._prewarmed = true;
+    setTimeout(async () => {
+      try {
+        const human = await this.ensureHuman();
+        const c = document.createElement("canvas");
+        c.width = 256;
+        c.height = 256;
+        await human.detect(c);
+        this._prewarmDone = true;
+      } catch (e) {
+        /* prewarm is best-effort */
+      }
+    }, 1500);
+  },
+
+  ensureHuman() {
+    if (this._humanLoad) return this._humanLoad;
+    this._humanLoad = new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = "vendor/human.js";
+      sc.onload = resolve;
+      sc.onerror = () => reject(new Error("human.js failed to load"));
+      document.head.appendChild(sc);
+    }).then(() => {
+      const NS = window.Human;
+      const Cls = NS.Human || NS.default || NS;
+      this._human = new Cls({
+        modelBasePath: "vendor/models/",
+        backend: "webgl",
+        warmup: "none",
+        filter: { enabled: false },
+        face: {
+          enabled: true,
+          detector: { rotation: false, maxDetected: 5 },
+          mesh: { enabled: true },
+          iris: { enabled: false },
+          emotion: { enabled: true },
+          description: { enabled: true },
+          antispoof: { enabled: false },
+          liveness: { enabled: false },
+        },
+        body: { enabled: true, maxDetected: 2 },
+        hand: { enabled: false },
+        object: { enabled: false },
+        segmentation: { enabled: false },
+        gesture: { enabled: true },
+      });
+      return this._human;
+    });
+    this._humanLoad.catch(() => { this._humanLoad = null; }); // allow retry
+    return this._humanLoad;
+  },
+
+  async analyzeLightbox(token) {
+    const els = this.els;
+    const img = els.lbImg;
+    const line = (cls, html) => `<div class="lb-line ${cls}">${html}</div>`;
+    const pct = (v) => `${Math.round((v || 0) * 100)}%`;
+    els.lbAnalysis.innerHTML = line("dim", "LOADING NEURAL MODELS&hellip;");
+    try {
+      const human = await this.ensureHuman();
+      if (token !== this._lbToken) return;
+      if (!img.complete) {
+        await new Promise((res, rej) => {
+          img.addEventListener("load", res, { once: true });
+          img.addEventListener("error", rej, { once: true });
+        });
+      }
+      if (token !== this._lbToken) return;
+      els.lbAnalysis.innerHTML = line("dim",
+        this._prewarmDone ? "ANALYZING&hellip;" : "ANALYZING&hellip; FIRST RUN COMPILES SHADERS (~30S)");
+      const res = await human.detect(img);
+      this._prewarmDone = true;
+      if (token !== this._lbToken) return;
+
+      // overlay: canvas at source resolution, CSS-scaled onto the image
+      const canvas = els.lbCanvas;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const drawOpts = {
+        color: "rgba(53, 214, 255, 0.85)",
+        labelColor: "rgba(234, 252, 255, 0.95)",
+        shadowColor: "transparent",
+        lineWidth: 2,
+        pointSize: 2,
+        roundRect: 0,
+        font: '14px "Share Tech Mono", monospace',
+        drawBoxes: true,
+        drawLabels: false, // labels clutter the frame; the readout panel has the data
+        drawPoints: true,
+        drawPolygons: false,
+        drawGaze: false,
+        drawAttention: false,
+      };
+      await human.draw.face(canvas, res.face, drawOpts);
+      await human.draw.body(canvas, res.body, drawOpts);
+
+      // readout
+      const out = [];
+      out.push(line("", `<span class="tag">SCAN</span>${res.face.length} FACE · ${res.body.length} BODY · ` +
+        `${Math.round(res.performance?.total || 0)}MS · ${human.tf.getBackend().toUpperCase()}`));
+      res.face.forEach((f, i) => {
+        const emo = (f.emotion && f.emotion[0])
+          ? `${f.emotion[0].emotion.toUpperCase()} ${pct(f.emotion[0].score)}` : "—";
+        const gender = f.gender && f.gender !== "unknown"
+          ? `${f.gender.toUpperCase()} ${pct(f.genderScore)}` : "GENDER —";
+        const age = f.age ? `AGE ~${Math.round(f.age)}` : "AGE —";
+        out.push(line("", `<span class="tag">FACE ${i + 1}</span>${age} · ${gender} · ${emo} · CONF ${pct(f.score)}`));
+      });
+      res.body.forEach((b, i) => {
+        out.push(line("", `<span class="tag">BODY ${i + 1}</span>POSE CONF ${pct(b.score)} · ${b.keypoints.length} KEYPOINTS`));
+      });
+      const gestures = (res.gesture || []).map((g) => g.gesture).slice(0, 4);
+      if (gestures.length) {
+        out.push(line("", `<span class="tag">CUES</span>${gestures.join(" · ").toUpperCase()}`));
+      }
+      if (!res.face.length && !res.body.length) {
+        out.push(line("warn", "NO PERSON DETECTED IN FRAME"));
+      }
+      els.lbAnalysis.innerHTML = out.join("");
+    } catch (e) {
+      if (token !== this._lbToken) return;
+      els.lbAnalysis.innerHTML = line("alert", `ANALYSIS FAILED — ${(e && e.message) || e}`);
     }
   },
 

@@ -11,8 +11,9 @@ DEST="$ROOT/dist/Omni OS.app"
 
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/web"
 
-# 1. 웹 리소스 복사
+# 1. 웹 리소스 복사 (vendor: Human 라이브러리 + 모델)
 cp "$ROOT/index.html" "$ROOT/style.css" "$ROOT/app.js" "$APP/Contents/Resources/web/"
+cp -R "$ROOT/vendor" "$APP/Contents/Resources/web/vendor"
 
 # 2. Info.plist
 cp "$ROOT/macos/Info.plist" "$APP/Contents/"
