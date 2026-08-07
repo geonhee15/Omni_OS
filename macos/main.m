@@ -35,8 +35,10 @@
     dispatch_once(&once, ^{
         mimes = @{
             @"html" : @"text/html", @"css" : @"text/css",
-            @"js" : @"application/javascript", @"json" : @"application/json",
-            @"bin" : @"application/octet-stream", @"wasm" : @"application/wasm",
+            @"js" : @"application/javascript", @"mjs" : @"application/javascript",
+            @"json" : @"application/json",
+            @"bin" : @"application/octet-stream", @"task" : @"application/octet-stream",
+            @"wasm" : @"application/wasm",
             @"jpg" : @"image/jpeg", @"png" : @"image/png", @"svg" : @"image/svg+xml",
         };
     });

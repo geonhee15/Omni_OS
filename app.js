@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.7.3",
+  version: "0.8.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -1043,9 +1043,22 @@ OmniOS.register("r3d", {
     this._ctx = { renderer, scene, camera, controls };
     new ResizeObserver(() => this.resize()).observe(vp);
 
+    let lastT = performance.now();
     const loop = () => {
       requestAnimationFrame(loop);
       if (!this.els.panel.classList.contains("active")) return;
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - lastT) / 1000);
+      lastT = now;
+      // flick momentum: keeps spinning after a fast pinch release, with decay
+      if (this._spin && this._model) {
+        this._model.rotation.y += this._spin.y * dt;
+        this._model.rotation.x += this._spin.x * dt;
+        const decay = Math.exp(-dt / 0.6);
+        this._spin.y *= decay;
+        this._spin.x *= decay;
+        if (Math.hypot(this._spin.x, this._spin.y) < 0.04) this._spin = null;
+      }
       controls.update();
       renderer.render(scene, camera);
     };
@@ -1276,48 +1289,32 @@ OmniOS.register("r3d", {
   HAND_CONNECTIONS: [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],
     [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]],
 
-  ensureHandHuman() {
+  // MediaPipe Tasks HandLandmarker — purpose-built video hand tracker
+  // (GPU delegate + temporal tracking), far smoother than a per-frame detector.
+  ensureTracker() {
     const H = this._hands;
     if (H.load) return H.load;
     H.load = (async () => {
-      if (!window.Human) {
-        await new Promise((res, rej) => {
-          const sc = document.createElement("script");
-          sc.src = "vendor/human.js";
-          sc.onload = res;
-          sc.onerror = () => rej(new Error("human.js failed to load"));
-          document.head.appendChild(sc);
+      const mp = await import("./vendor/mediapipe/vision_bundle.js");
+      const fileset = await mp.FilesetResolver.forVisionTasks("vendor/mediapipe/wasm");
+      const make = (delegate) =>
+        mp.HandLandmarker.createFromOptions(fileset, {
+          baseOptions: {
+            modelAssetPath: "vendor/mediapipe/hand_landmarker.task",
+            delegate,
+          },
+          runningMode: "VIDEO",
+          numHands: 2,
+          minHandDetectionConfidence: 0.4,
+          minHandPresenceConfidence: 0.4,
+          minTrackingConfidence: 0.4,
         });
+      try {
+        H.tracker = await make("GPU");
+      } catch (e) {
+        H.tracker = await make("CPU");
       }
-      // Human's default hand skeleton is handlandmark-lite.json — we bundle
-      // the full variant, so both paths are explicit. A silent 404 here would
-      // just disable detection, so verify the files are reachable first.
-      for (const m of ["handtrack.json", "handlandmark-full.json"]) {
-        const resp = await fetch("vendor/models/" + m).catch(() => null);
-        if (!resp || !resp.ok) throw new Error(`hand model missing: ${m}`);
-      }
-      const NS = window.Human;
-      const Cls = NS.Human || NS.default || NS;
-      H.human = new Cls({
-        modelBasePath: "vendor/models/",
-        backend: "webgl",
-        warmup: "none",
-        filter: { enabled: false },
-        face: { enabled: false },
-        body: { enabled: false },
-        object: { enabled: false },
-        segmentation: { enabled: false },
-        gesture: { enabled: false },
-        hand: {
-          enabled: true,
-          maxDetected: 2,
-          minConfidence: 0.5,
-          detector: { modelPath: "handtrack.json" },
-          skeleton: { modelPath: "handlandmark-full.json" },
-        },
-      });
-      await H.human.load();
-      return H.human;
+      return H.tracker;
     })();
     H.load.catch(() => { H.load = null; });
     return H.load;
@@ -1347,8 +1344,8 @@ OmniOS.register("r3d", {
       await this.acquireCamera();
       this.els.handsHud.hidden = false;
       this.els.rhSp1.hidden = !H.sp1Paused;
-      this.els.rhStatus.textContent = "LOADING HAND MODELS\u2026";
-      await this.ensureHandHuman();
+      this.els.rhStatus.textContent = "LOADING HAND TRACKER\u2026";
+      await this.ensureTracker();
       H.on = true;
       H.prev = null;
       this.els.hands.textContent = "HANDS ON";
@@ -1374,6 +1371,11 @@ OmniOS.register("r3d", {
     if (this.els.rhVideo) this.els.rhVideo.srcObject = null;
     H.video = null;
     H.prev = null;
+    H.smooth = null;
+    H.handState = null;
+    H.display = null;
+    H.targetHands = null;
+    H.axisLock = null;
     this.els.handsHud.hidden = true;
     this.els.hands.textContent = "HANDS OFF";
     this.els.hands.classList.remove("active");
@@ -1428,39 +1430,35 @@ OmniOS.register("r3d", {
   handLoop() {
     const H = this._hands;
     H.failCount = 0;
-    H.lastParsed = [];
     H.lastDetectAt = 0;
+    H.lastVideoTime = -1;
     const step = async () => {
       if (!H.on) return;
       H.raf = requestAnimationFrame(step);
-      // PIP redraws every frame from the live video, decoupled from inference —
-      // the camera view stays smooth even if the tracker stalls
-      this.drawPip(H.lastParsed,
-        (H.video && H.video.videoWidth) || 640,
-        (H.video && H.video.videoHeight) || 480);
-      if (H.busy || !H.video || H.video.readyState < 2) return;
+      // PIP skeleton interpolates toward the latest result every frame (60fps),
+      // decoupled from inference — motion stays fluid
+      this.drawPip();
+      if (H.busy || !H.video || H.video.readyState < 2 || !H.tracker) return;
       const now = performance.now();
-      if (now - H.lastDetectAt < 66) return; // cap inference at ~15fps to
-      H.lastDetectAt = now;                  // avoid GPU contention with three.js
+      if (now - H.lastDetectAt < 33) return; // inference at ~30fps
+      if (H.video.currentTime === H.lastVideoTime) return; // no new frame yet
+      H.lastDetectAt = now;
+      H.lastVideoTime = H.video.currentTime;
       H.busy = true;
       try {
-        const res = await Promise.race([
-          H.human.detect(H.video),
-          new Promise((_, rej) =>
-            setTimeout(() => rej(new Error("detect timeout")), 2500)),
-        ]);
+        const res = H.tracker.detectForVideo(H.video, now);
         H.failCount = 0;
-        if (H.on) this.processHands(res.hand || []);
+        if (H.on) this.processHands(res);
       } catch (e) {
-        // tracker stalled or crashed — rebuild the Human instance in place
+        // tracker crashed — rebuild it in place
         H.failCount++;
         if (H.failCount >= 3 && H.on) {
           this.els.rhStatus.textContent = "TRACKER STALLED — RESTARTING…";
           H.failCount = 0;
-          H.human = null;
+          H.tracker = null;
           H.load = null;
           try {
-            await this.ensureHandHuman();
+            await this.ensureTracker();
             if (H.on) this.els.rhStatus.textContent = "TRACKING…";
           } catch (e2) {
             this.stopHands();
@@ -1474,27 +1472,113 @@ OmniOS.register("r3d", {
     step();
   },
 
-  processHands(hands) {
+  processHands(result) {
     const H = this._hands;
-    const vw = (H.video && H.video.videoWidth) || 640;
-    const vh = (H.video && H.video.videoHeight) || 480;
+    const now = performance.now();
+    const dt = Math.max(0.008, Math.min(0.1, (now - (H.lastProcessAt || now - 33)) / 1000));
+    H.lastProcessAt = now;
 
-    const parsed = hands.slice(0, 2).map((h) => {
-      const kp = h.keypoints || [];
-      if (kp.length < 21) return null;
-      const d = (a, b) => Math.hypot(kp[a][0] - kp[b][0], kp[a][1] - kp[b][1]);
-      const ref = Math.max(1, d(0, 9)); // wrist -> middle knuckle = hand scale
-      const pinch = d(4, 8) / ref < 0.4; // thumb tip near index tip
-      const px = 1 - (kp[4][0] + kp[8][0]) / 2 / vw; // mirrored for natural motion
-      const py = (kp[4][1] + kp[8][1]) / 2 / vh;
-      return { kp, pinch, px, py };
+    const lms = result.landmarks || [];
+    const handed = result.handedness || result.handednesses || [];
+
+    // exponential smoothing per hand (keyed by handedness so left/right keep
+    // their own filter state between frames)
+    H.smooth = H.smooth || {};
+    const seen = new Set();
+    const parsed = lms.slice(0, 2).map((lm, i) => {
+      if (!lm || lm.length < 21) return null;
+      const label = handed[i] && handed[i][0] ? handed[i][0].categoryName : `H${i}`;
+      seen.add(label);
+      let s = H.smooth[label];
+      if (!s) s = H.smooth[label] = { pts: lm.map((p) => ({ x: p.x, y: p.y })) };
+      const a = 0.55;
+      for (let k = 0; k < 21; k++) {
+        s.pts[k].x += (lm[k].x - s.pts[k].x) * a;
+        s.pts[k].y += (lm[k].y - s.pts[k].y) * a;
+      }
+      const P = s.pts;
+      // 4:3 aspect weighting so pinch distance is isotropic in screen space
+      const d = (m, n) => Math.hypot((P[m].x - P[n].x) * 4, (P[m].y - P[n].y) * 3);
+      const ref = Math.max(0.001, d(0, 9)); // wrist -> middle knuckle
+      const pinch = d(4, 8) / ref < 0.38;
+      const px = 1 - (P[4].x + P[8].x) / 2; // mirrored for natural motion
+      const py = (P[4].y + P[8].y) / 2;
+      return { label, pts: P, pinch, px, py };
     }).filter(Boolean);
+    for (const k of Object.keys(H.smooth)) if (!seen.has(k)) delete H.smooth[k];
+
+    // per-hand pinch lifecycle: velocity (for flick momentum) + stroke arming
+    // (for axis lock: pinch a straight bottom\u2192up stroke and HOLD \u2192 Y-axis lock,
+    //  left\u2192right stroke and HOLD \u2192 X-axis lock; other hand then rotates)
+    H.handState = H.handState || {};
+    for (const p of parsed) {
+      let hs = H.handState[p.label];
+      if (!hs) hs = H.handState[p.label] = {};
+      if (p.pinch && !hs.pinching) {
+        hs.pinching = true;
+        hs.start = { x: p.px, y: p.py };
+        hs.vel = { x: 0, y: 0 };
+        hs.stroke = null;
+        this._spin = null; // grabbing stops any residual spin
+      } else if (p.pinch && hs.pinching) {
+        const dx = p.px - (hs.px !== undefined ? hs.px : p.px);
+        const dy = p.py - (hs.py !== undefined ? hs.py : p.py);
+        hs.vel.x += (dx / dt - hs.vel.x) * 0.35;
+        hs.vel.y += (dy / dt - hs.vel.y) * 0.35;
+        if (Math.abs(dx) + Math.abs(dy) > 0.004) hs.lastMoveAt = now;
+        if (!hs.stroke && !H.axisLock) {
+          const sx = p.px - hs.start.x;
+          const sy = p.py - hs.start.y;
+          if (sy < -0.22 && Math.abs(sy) > 2.2 * Math.abs(sx)) hs.stroke = "y"; // bottom\u2192up
+          else if (sx > 0.22 && Math.abs(sx) > 2.2 * Math.abs(sy)) hs.stroke = "x"; // left\u2192right
+          if (hs.stroke) H.axisLock = { axis: hs.stroke, hand: p.label };
+        }
+      } else if (!p.pinch && hs.pinching) {
+        hs.pinching = false;
+        this.onPinchRelease(hs);
+      }
+      hs.px = p.px;
+      hs.py = p.py;
+    }
+    for (const [label, hs] of Object.entries(H.handState)) {
+      if (!seen.has(label)) {
+        // hand flew out of frame while pinching \u2192 same as a flick release
+        if (hs.pinching) {
+          hs.pinching = false;
+          this.onPinchRelease(hs);
+        }
+        delete H.handState[label];
+      }
+    }
+    if (H.axisLock) {
+      const hs = H.handState[H.axisLock.hand];
+      if (!hs || !hs.pinching) H.axisLock = null; // lock hand let go
+    }
 
     const pinches = parsed.filter((p) => p.pinch);
     const prev = H.prev;
-    let status = parsed.length ? `${parsed.length} HAND${parsed.length > 1 ? "S" : ""} \u00b7 PINCH TO GRAB` : "SHOW HANDS";
+    let status = parsed.length
+      ? `${parsed.length} HAND${parsed.length > 1 ? "S" : ""} \u00b7 PINCH TO GRAB`
+      : "SHOW HANDS";
 
-    if (pinches.length === 2) {
+    if (H.axisLock) {
+      const other = pinches.find((p) => p.label !== H.axisLock.hand);
+      status = `${H.axisLock.axis.toUpperCase()}-AXIS LOCK` +
+        (other ? "" : " \u00b7 PINCH OTHER HAND");
+      if (other) {
+        if (prev && prev.type === "axis" && prev.label === other.label) {
+          const dx = other.px - prev.x;
+          const dy = other.py - prev.y;
+          if (this._model) {
+            if (H.axisLock.axis === "y") this._model.rotation.y += dx * 5;
+            else this._model.rotation.x += dy * 4;
+          }
+        }
+        H.prev = { type: "axis", label: other.label, x: other.px, y: other.py };
+      } else {
+        H.prev = null;
+      }
+    } else if (pinches.length === 2) {
       const [a, b] = pinches;
       const dist = Math.hypot(a.px - b.px, a.py - b.py);
       const cx = (a.px + b.px) / 2;
@@ -1508,7 +1592,7 @@ OmniOS.register("r3d", {
       status = "ZOOM / PAN";
     } else if (pinches.length === 1) {
       const p = pinches[0];
-      if (prev && prev.type === "one") {
+      if (prev && prev.type === "one" && prev.label === p.label) {
         const dx = p.px - prev.x;
         const dy = p.py - prev.y;
         if (this._model) {
@@ -1516,14 +1600,28 @@ OmniOS.register("r3d", {
           this._model.rotation.x += dy * 3;
         }
       }
-      H.prev = { type: "one", x: p.px, y: p.py };
+      H.prev = { type: "one", label: p.label, x: p.px, y: p.py };
       status = "ROTATE";
     } else {
       H.prev = null;
     }
 
     this.els.rhStatus.textContent = status;
-    H.lastParsed = parsed; // PIP skeleton is drawn by the rAF loop
+    H.targetHands = parsed; // drawPip interpolates toward these
+  },
+
+  // flick release \u2192 the model keeps spinning with decay (cinematic);
+  // a still-hand release leaves it exactly where you put it \u2014 momentum only
+  // fires when the hand was actually moving within 150ms of letting go
+  onPinchRelease(hs) {
+    const vx = (hs.vel && hs.vel.x) || 0;
+    const vy = (hs.vel && hs.vel.y) || 0;
+    const speed = Math.hypot(vx, vy);
+    const moving = hs.lastMoveAt && performance.now() - hs.lastMoveAt < 150;
+    if (speed > 0.9 && moving && this._model) {
+      const clamp = (v, m) => Math.max(-m, Math.min(m, v));
+      this._spin = { y: clamp(vx * 5, 7), x: clamp(vy * 3, 5) };
+    }
   },
 
   zoomBy(f) {
@@ -1551,19 +1649,37 @@ OmniOS.register("r3d", {
   },
 
   // skeleton overlay only — the live video renders underneath as a real
-  // <video> element (mirrored via CSS)
-  drawPip(parsed, vw, vh) {
+  // <video> element (mirrored via CSS). Runs every rAF and interpolates the
+  // displayed skeleton toward the latest tracker result, so it glides at
+  // 60fps even though inference runs at ~30fps.
+  drawPip() {
+    const H = this._hands;
     const c = this.els.rhPip;
     const ctx = c.getContext("2d");
     const w = c.width;
     const h = c.height;
     ctx.clearRect(0, 0, w, h);
-    const sx = w / vw;
-    const sy = h / vh;
-    for (const p of parsed) {
-      const pt = (i) => [w - p.kp[i][0] * sx, p.kp[i][1] * sy];
-      ctx.strokeStyle = p.pinch ? "rgba(61, 255, 168, 0.9)" : "rgba(53, 214, 255, 0.8)";
-      ctx.lineWidth = 1;
+
+    const targets = H.targetHands || [];
+    H.display = H.display || {};
+    const seen = new Set();
+    for (const t of targets) {
+      seen.add(t.label);
+      let d = H.display[t.label];
+      if (!d) d = H.display[t.label] = { pts: t.pts.map((p) => ({ x: p.x, y: p.y })) };
+      const a = 0.45;
+      for (let i = 0; i < 21; i++) {
+        d.pts[i].x += (t.pts[i].x - d.pts[i].x) * a;
+        d.pts[i].y += (t.pts[i].y - d.pts[i].y) * a;
+      }
+      d.pinch = t.pinch;
+    }
+    for (const k of Object.keys(H.display)) if (!seen.has(k)) delete H.display[k];
+
+    for (const d of Object.values(H.display)) {
+      const pt = (i) => [(1 - d.pts[i].x) * w, d.pts[i].y * h];
+      ctx.strokeStyle = d.pinch ? "rgba(61, 255, 168, 0.9)" : "rgba(53, 214, 255, 0.8)";
+      ctx.lineWidth = 1.2;
       for (const [a, b] of this.HAND_CONNECTIONS) {
         const [x1, y1] = pt(a);
         const [x2, y2] = pt(b);
@@ -1572,7 +1688,7 @@ OmniOS.register("r3d", {
         ctx.lineTo(x2, y2);
         ctx.stroke();
       }
-      ctx.fillStyle = p.pinch ? "#3dffa8" : "#35d6ff";
+      ctx.fillStyle = d.pinch ? "#3dffa8" : "#35d6ff";
       for (let i = 0; i < 21; i++) {
         const [x, y] = pt(i);
         ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
