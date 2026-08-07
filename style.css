@@ -1110,10 +1110,32 @@ body {
   animation: pulse 1.6s ease-in-out infinite;
 }
 
-.rh-pip {
+/* PIP = real <video> element (kept rendered so WebKit never suspends it),
+   with a transparent canvas overlay for the hand skeleton */
+.rh-pip-wrap {
+  position: relative;
+  width: 220px;
+  height: 165px;
   border: 1px solid rgba(53, 214, 255, 0.3);
   background: #020813;
   box-shadow: 0 0 20px rgba(53, 214, 255, 0.12);
+  overflow: hidden;
+}
+
+.rh-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scaleX(-1); /* mirror for natural hand motion */
+  filter: brightness(0.85) saturate(0.85);
+}
+
+.rh-pip {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .rh-help {

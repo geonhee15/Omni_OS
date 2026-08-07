@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.7.1",
+  version: "0.7.2",
   bootTime: Date.now(),
   modules: {},
 
@@ -880,6 +880,7 @@ OmniOS.register("r3d", {
     this.els.rhStatus = $("rh-status");
     this.els.rhSp1 = $("rh-sp1");
     this.els.rhPip = $("rh-pip");
+    this.els.rhVideo = $("rh-video");
     this.els.hands.addEventListener("click", () => this.toggleHands());
     // leaving the panel always stops hand mode (and resumes the SP-1 watcher)
     document.addEventListener("omni:panel", (e) => {
@@ -1346,6 +1347,7 @@ OmniOS.register("r3d", {
       for (const t of H.stream.getTracks()) t.stop();
       H.stream = null;
     }
+    if (this.els.rhVideo) this.els.rhVideo.srcObject = null;
     H.video = null;
     H.prev = null;
     this.els.handsHud.hidden = true;
@@ -1357,8 +1359,9 @@ OmniOS.register("r3d", {
     H.sp1Paused = false;
   },
 
-  // getUserMedia + auto-reconnect when the track dies (camera contention,
-  // sleep/wake, another app grabbing the device)
+  // getUserMedia into the in-DOM PIP <video> (WebKit suspends playback of
+  // off-DOM/unrendered videos after ~1s — the element must stay visible),
+  // with auto-reconnect when the track dies or gets muted by the system.
   async acquireCamera() {
     const H = this._hands;
     H.stream = await navigator.mediaDevices.getUserMedia({
@@ -1369,12 +1372,18 @@ OmniOS.register("r3d", {
       t.addEventListener("ended", () => {
         if (H.on) this.restartCamera();
       });
+      t.addEventListener("mute", () => {
+        if (!H.on) return;
+        this.els.rhStatus.textContent = "CAMERA MUTED — RECOVERING…";
+        setTimeout(() => {
+          if (H.on && t.muted) this.restartCamera();
+        }, 2000);
+      });
+      t.addEventListener("unmute", () => {
+        if (H.on) this.els.rhStatus.textContent = "TRACKING…";
+      });
     }
-    if (!H.video) {
-      H.video = document.createElement("video");
-      H.video.muted = true;
-      H.video.playsInline = true;
-    }
+    H.video = this.els.rhVideo;
     H.video.srcObject = H.stream;
     await H.video.play();
   },
@@ -1517,24 +1526,14 @@ OmniOS.register("r3d", {
     camera.position.add(offset);
   },
 
+  // skeleton overlay only — the live video renders underneath as a real
+  // <video> element (mirrored via CSS)
   drawPip(parsed, vw, vh) {
     const c = this.els.rhPip;
     const ctx = c.getContext("2d");
     const w = c.width;
     const h = c.height;
     ctx.clearRect(0, 0, w, h);
-    const video = this._hands.video;
-    if (video && video.readyState >= 2) {
-      ctx.save();
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, -w, 0, w, h);
-      ctx.restore();
-      ctx.fillStyle = "rgba(2, 8, 19, 0.4)";
-      ctx.fillRect(0, 0, w, h);
-    } else {
-      ctx.fillStyle = "#020813";
-      ctx.fillRect(0, 0, w, h);
-    }
     const sx = w / vw;
     const sy = h / vh;
     for (const p of parsed) {

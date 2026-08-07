@@ -96,6 +96,7 @@ static void resumePausedSP1(void) {
 
     // JS calls window.webkit.messageHandlers.omni.postMessage({id, cmd})
     WKWebViewConfiguration *config = [WKWebViewConfiguration new];
+    config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
     [config.userContentController addScriptMessageHandler:self name:@"omni"];
     self.schemeHandler = [OmniSchemeHandler new];
     [config setURLSchemeHandler:self.schemeHandler forURLScheme:@"omni"];
