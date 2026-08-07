@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.9.0",
+  version: "0.10.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -1041,6 +1041,45 @@ OmniOS.register("r3d", {
     grid.material.opacity = 0.35;
     scene.add(grid);
 
+    // trackpad pinch (spread = explode, squeeze = reassemble).
+    // WebKit delivers GestureEvents; Chromium delivers ctrl+wheel.
+    const canvas = renderer.domElement;
+    const activeParts = () => {
+      const ws = this._workspaces[this._activeWs];
+      return ws && ws.parts ? ws : null;
+    };
+    if (typeof window.GestureEvent !== "undefined") {
+      canvas.addEventListener("gesturestart", (e) => {
+        const ws = activeParts();
+        if (!ws) return;
+        e.preventDefault();
+        this._pinchBase = { scale: e.scale, explode: ws.explode };
+      }, { passive: false });
+      canvas.addEventListener("gesturechange", (e) => {
+        const ws = activeParts();
+        if (!ws || !this._pinchBase) return;
+        e.preventDefault();
+        this.setExplode(this._pinchBase.explode + (e.scale - this._pinchBase.scale) * 1.4);
+        this.els.stats.textContent = `EXPLODE ${Math.round(ws.explode * 100)}%`;
+      }, { passive: false });
+      canvas.addEventListener("gestureend", (e) => {
+        e.preventDefault();
+        this._pinchBase = null;
+        const ws = activeParts();
+        if (ws) this.els.stats.textContent = ws.statsText;
+      }, { passive: false });
+    } else {
+      canvas.addEventListener("wheel", (e) => {
+        if (!e.ctrlKey) return; // plain scroll stays with orbit zoom
+        const ws = activeParts();
+        if (!ws) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.setExplode(ws.explode - e.deltaY * 0.012);
+        this.els.stats.textContent = `EXPLODE ${Math.round(ws.explode * 100)}%`;
+      }, { capture: true, passive: false });
+    }
+
     this._ctx = { renderer, scene, camera, controls };
     new ResizeObserver(() => this.resize()).observe(vp);
 
@@ -1051,6 +1090,7 @@ OmniOS.register("r3d", {
       const now = performance.now();
       const dt = Math.min(0.05, (now - lastT) / 1000);
       lastT = now;
+      this.tickAssembleAnim(now);
       // flick momentum: keeps spinning after a fast pinch release, with decay
       if (this._spin && this._model) {
         this._model.rotation.y += this._spin.y * dt;
@@ -1310,6 +1350,26 @@ OmniOS.register("r3d", {
     pivot.add(obj);
     pivot.position.y = sizeY / 2;
 
+    // explode vectors: for multi-part groups, each top-level part gets a
+    // direction pointing away from the assembly center (drives the assemble
+    // intro animation and the explode gestures)
+    let parts = null;
+    if ((obj.isGroup || obj.type === "Group") && obj.children.length > 1) {
+      pivot.updateWorldMatrix(true, true);
+      const whole = new THREE.Box3().setFromObject(pivot);
+      const centerW = whole.getCenter(new THREE.Vector3());
+      const s = obj.getWorldScale(new THREE.Vector3()).x || 1;
+      parts = obj.children.map((node) => {
+        const c = new THREE.Box3().setFromObject(node).getCenter(new THREE.Vector3());
+        return {
+          node,
+          base: node.position.clone(),
+          dir: c.clone().sub(centerW).divideScalar(s),
+          y: c.y,
+        };
+      });
+    }
+
     const fmt = (x) => x >= 1e6 ? (x / 1e6).toFixed(1) + "M" : x >= 1e3 ? (x / 1e3).toFixed(1) + "K" : String(x);
     const ext = name.includes(".") ? name.split(".").pop().toUpperCase() : "GROUP";
     const ws = {
@@ -1319,7 +1379,13 @@ OmniOS.register("r3d", {
       midY: sizeY / 2,
       mode: "full",
       cam: null,
-      statsText: `${ext} \u00b7 ${meshes} MESH \u00b7 ${fmt(verts)} VERTS \u00b7 ${fmt(tris)} TRIS`,
+      parts,
+      introOrder: parts ? parts.slice().sort((a, b) => a.y - b.y) : null,
+      explode: 0,
+      introPlayed: false,
+      anim: null,
+      statsText: `${ext} \u00b7 ${meshes} MESH \u00b7 ${fmt(verts)} VERTS \u00b7 ${fmt(tris)} TRIS`
+        + (parts ? ` \u00b7 ${parts.length} PARTS` : ""),
     };
     this._workspaces.push(ws);
     if (activate || this._activeWs < 0) {
@@ -1354,6 +1420,7 @@ OmniOS.register("r3d", {
       this.els.file.textContent = ws.name.toUpperCase();
       this.els.stats.textContent = ws.statsText;
       this.setMode(ws.mode);
+      if (ws.parts && !ws.introPlayed) this.playAssembleIntro(ws);
     } else {
       this.els.drop.hidden = false;
       this.els.file.textContent = "\u2014";
@@ -1399,6 +1466,45 @@ OmniOS.register("r3d", {
       tab.addEventListener("click", () => this.switchWorkspace(i));
       bar.appendChild(tab);
     });
+  },
+
+  // ── explode / assemble ──
+  setExplode(f) {
+    const ws = this._workspaces[this._activeWs];
+    if (!ws || !ws.parts) return;
+    ws.anim = null; // gestures cancel the intro animation
+    ws.explode = Math.max(0, Math.min(1.6, f));
+    for (const p of ws.parts) {
+      p.node.position.copy(p.base).addScaledVector(p.dir, ws.explode);
+    }
+  },
+
+  playAssembleIntro(ws) {
+    ws.introPlayed = true;
+    ws.anim = { t0: performance.now() };
+    // start fully exploded so there is no assembled flash before the first tick
+    for (const p of ws.parts) {
+      p.node.position.copy(p.base).addScaledVector(p.dir, 1.1);
+    }
+  },
+
+  // called every render frame; parts fly in one by one, bottom-up
+  tickAssembleAnim(now) {
+    const ws = this._workspaces[this._activeWs];
+    if (!ws || !ws.anim || !ws.parts) return;
+    const t = (now - ws.anim.t0) / 1000 - 0.25; // brief hold before the first part
+    let done = true;
+    ws.introOrder.forEach((p, i) => {
+      const lt = (t - i * 0.28) / 0.6;
+      const cl = Math.max(0, Math.min(1, lt));
+      if (cl < 1) done = false;
+      const ease = 1 - Math.pow(1 - cl, 3);
+      p.node.position.copy(p.base).addScaledVector(p.dir, (1 - ease) * 1.1);
+    });
+    if (done) {
+      ws.anim = null;
+      ws.explode = 0;
+    }
   },
 
   disposeObject(root) {
@@ -1704,10 +1810,16 @@ OmniOS.register("r3d", {
       // 4:3 aspect weighting so pinch distance is isotropic in screen space
       const d = (m, n) => Math.hypot((P[m].x - P[n].x) * 4, (P[m].y - P[n].y) * 3);
       const ref = Math.max(0.001, d(0, 9)); // wrist -> middle knuckle
-      const pinch = d(4, 8) / ref < 0.38;
+      // fist: all four fingertips curled back toward the wrist
+      const curl = (d(8, 0) + d(12, 0) + d(16, 0) + d(20, 0)) / 4 / ref;
+      const fist = curl < 1.3;
+      const pinch = !fist && d(4, 8) / ref < 0.38;
       const px = 1 - (P[4].x + P[8].x) / 2; // mirrored for natural motion
       const py = (P[4].y + P[8].y) / 2;
-      return { label, pts: P, pinch, px, py };
+      // palm center (for fist tracking)
+      const cx = 1 - (P[0].x + P[5].x + P[9].x + P[13].x + P[17].x) / 5;
+      const cy = (P[0].y + P[5].y + P[9].y + P[13].y + P[17].y) / 5;
+      return { label, pts: P, pinch, fist, px, py, cx, cy };
     }).filter(Boolean);
     for (const k of Object.keys(H.smooth)) if (!seen.has(k)) delete H.smooth[k];
 
@@ -1760,12 +1872,24 @@ OmniOS.register("r3d", {
     }
 
     const pinches = parsed.filter((p) => p.pinch);
+    const fists = parsed.filter((p) => p.fist);
     const prev = H.prev;
     let status = parsed.length
       ? `${parsed.length} HAND${parsed.length > 1 ? "S" : ""} \u00b7 PINCH TO GRAB`
       : "SHOW HANDS";
+    const ws = this._workspaces[this._activeWs];
 
-    if (H.axisLock) {
+    if (fists.length === 2 && ws && ws.parts) {
+      // both fists: pull apart to explode the assembly, bring together to rebuild
+      const [a, b] = fists;
+      const dist = Math.hypot(a.cx - b.cx, a.cy - b.cy);
+      if (prev && prev.type === "fists") {
+        this.setExplode(ws.explode + (dist - prev.dist) * 2.4);
+      }
+      H.prev = { type: "fists", dist };
+      status = `EXPLODE ${Math.round(ws.explode * 100)}%`;
+      this.els.stats.textContent = ws.statsText;
+    } else if (H.axisLock) {
       const other = pinches.find((p) => p.label !== H.axisLock.hand);
       status = `${H.axisLock.axis.toUpperCase()}-AXIS LOCK` +
         (other ? "" : " \u00b7 PINCH OTHER HAND");
