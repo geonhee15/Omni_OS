@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.8.0",
+  version: "0.9.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -837,7 +837,7 @@ OmniOS.register("sp1", {
 
 // ---------- module: Render 3D (three.js model viewer) ----------
 OmniOS.register("r3d", {
-  FORMATS: ["glb", "gltf", "fbx", "obj", "dae", "3mf", "stl", "ply"],
+  FORMATS: ["glb", "gltf", "fbx", "obj", "dae", "3mf", "step", "stp", "iges", "igs", "brep", "stl", "ply"],
   _three: null,
   _threeLoad: null,
   _ctx: null,
@@ -857,6 +857,7 @@ OmniOS.register("r3d", {
       stats: $("r3d-stats"),
       file: $("r3d-file"),
       modes: $("r3d-modes"),
+      tabs: $("r3d-tabs"),
     };
     $("r3d-open").addEventListener("click", () => this.els.input.click());
     $("r3d-load").addEventListener("click", () => this.els.input.click());
@@ -1081,17 +1082,17 @@ OmniOS.register("r3d", {
   },
 
   async loadFiles(files) {
-    this.els.stats.textContent = "LOADING…";
+    this.els.stats.textContent = "LOADING\u2026";
     try {
       const t = await this.ensureThree();
       this.initViewport();
       const { THREE } = t;
 
-      const main = files
-        .map((f) => ({ f, ext: f.name.split(".").pop().toLowerCase() }))
-        .filter((x) => this.FORMATS.includes(x.ext))
-        .sort((a, b) => this.FORMATS.indexOf(a.ext) - this.FORMATS.indexOf(b.ext))[0];
-      if (!main) throw new Error("unsupported format");
+      const extOf = (n) => n.split(".").pop().toLowerCase();
+      const models = files
+        .filter((f) => this.FORMATS.includes(extOf(f.name)))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      if (!models.length) throw new Error("unsupported format");
 
       // companion files (mtl, textures, .bin) resolve through blob URLs by basename
       this.revokeBlobs();
@@ -1108,18 +1109,39 @@ OmniOS.register("r3d", {
         return urlMap[base] || url;
       });
 
-      const obj = await this.parseModel(t, main, urlMap[main.f.name.toLowerCase()], files, manager, urlMap);
-      this.setModel(obj, main.f.name);
+      const raws = [];
+      for (const f of models) {
+        this.els.stats.textContent = `LOADING ${f.name.toUpperCase()}\u2026`;
+        const obj = await this.parseModel(t, f, extOf(f.name), urlMap, files, manager);
+        raws.push({ obj, name: f.name });
+      }
+
+      if (raws.length === 1) {
+        this.addWorkspace(raws[0].obj, raws[0].name, true);
+      } else {
+        // one workspace per part, plus an ASSEMBLY workspace that keeps every
+        // part in its native coordinates — parts exported in a shared frame
+        // (CAD assemblies, split print models) snap together automatically
+        const asm = new THREE.Group();
+        raws.forEach((r, i) => {
+          const clone = r.obj.clone(true);
+          this.colorizePart(clone, i);
+          asm.add(clone);
+        });
+        raws.forEach((r) => this.addWorkspace(r.obj, r.name, false));
+        this.addWorkspace(asm, `ASSEMBLY (${raws.length})`, true);
+      }
     } catch (e) {
       this.els.stats.textContent =
-        `LOAD FAILED — ${String((e && e.message) || e).toUpperCase().slice(0, 60)}`;
+        `LOAD FAILED \u2014 ${String((e && e.message) || e).toUpperCase().slice(0, 60)}`;
     }
   },
 
-  parseModel(t, main, url, files, manager, urlMap) {
+  parseModel(t, file, ext, urlMap, files, manager) {
+    const url = urlMap[file.name.toLowerCase()];
     const load = (loader) =>
       new Promise((res, rej) => loader.load(url, res, undefined, rej));
-    switch (main.ext) {
+    switch (ext) {
       case "stl":
         return load(new t.STLLoader(manager)).then((g) => this.meshFromGeometry(g));
       case "ply":
@@ -1145,7 +1167,72 @@ OmniOS.register("r3d", {
         return load(new t.ThreeMFLoader(manager));
       case "dae":
         return load(new t.ColladaLoader(manager)).then((d) => d.scene);
+      case "step":
+      case "stp":
+      case "iges":
+      case "igs":
+      case "brep":
+        return this.parseCad(t, file, ext);
     }
+  },
+
+  // ── CAD formats (STEP/IGES/BREP) via OpenCascade WASM ──
+  ensureOcct() {
+    if (this._occtLoad) return this._occtLoad;
+    this._occtLoad = (async () => {
+      if (!window.occtimportjs) {
+        await new Promise((res, rej) => {
+          const sc = document.createElement("script");
+          sc.src = "vendor/occt/occt-import-js.js";
+          sc.onload = res;
+          sc.onerror = () => rej(new Error("occt-import-js failed to load"));
+          document.head.appendChild(sc);
+        });
+      }
+      this._occt = await window.occtimportjs({
+        locateFile: () => "vendor/occt/occt-import-js.wasm",
+      });
+      return this._occt;
+    })();
+    this._occtLoad.catch(() => { this._occtLoad = null; });
+    return this._occtLoad;
+  },
+
+  async parseCad(t, file, ext) {
+    const { THREE } = t;
+    const occt = await this.ensureOcct();
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const fn = ext === "iges" || ext === "igs" ? "ReadIgesFile"
+      : ext === "brep" ? "ReadBrepFile" : "ReadStepFile";
+    const res = occt[fn](buf, null);
+    if (!res || !res.success || !res.meshes || !res.meshes.length) {
+      throw new Error("CAD parse failed");
+    }
+    // meshes arrive with assembly transforms already applied
+    const group = new THREE.Group();
+    for (const m of res.meshes) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position",
+        new THREE.Float32BufferAttribute(m.attributes.position.array, 3));
+      if (m.attributes.normal) {
+        geo.setAttribute("normal",
+          new THREE.Float32BufferAttribute(m.attributes.normal.array, 3));
+      } else {
+        geo.computeVertexNormals();
+      }
+      if (m.index) geo.setIndex(new THREE.Uint32BufferAttribute(m.index.array, 1));
+      const hasColor = Array.isArray(m.color);
+      const mat = new THREE.MeshStandardMaterial({
+        color: hasColor ? new THREE.Color(m.color[0], m.color[1], m.color[2]) : 0x9fb8cc,
+        roughness: 0.65,
+        metalness: 0.2,
+      });
+      if (!hasColor) mat.userData.autoDefault = true;
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.name = m.name || "";
+      group.add(mesh);
+    }
+    return group;
   },
 
   meshFromGeometry(geometry) {
@@ -1158,18 +1245,39 @@ OmniOS.register("r3d", {
       metalness: 0.15,
       vertexColors: hasColor,
     });
+    if (!hasColor) mat.userData.autoDefault = true;
     return new THREE.Mesh(geometry, mat);
   },
 
-  setModel(obj, name) {
+  // distinct colors for untextured parts inside an assembly view
+  PART_PALETTE: [0x35d6ff, 0xffc857, 0x3dffa8, 0xff7ab8, 0x8f9dff, 0xffa15e,
+    0x7de8d8, 0xd0ff6e, 0xc79bff, 0xff9d9d],
+
+  colorizePart(obj, i) {
     const { THREE } = this._three;
-    const { scene, camera, controls } = this._ctx;
-    if (this._model) {
-      scene.remove(this._model);
-      this.disposeObject(this._model);
-    }
-    this._model = obj;
-    scene.add(obj);
+    let mat = null;
+    obj.traverse((o) => {
+      if (!o.isMesh) return;
+      const ms = Array.isArray(o.material) ? o.material : [o.material];
+      if (!ms.every((m) => m && m.userData && m.userData.autoDefault)) return;
+      if (!mat) {
+        mat = new THREE.MeshStandardMaterial({
+          color: this.PART_PALETTE[i % this.PART_PALETTE.length],
+          roughness: 0.7,
+          metalness: 0.15,
+        });
+      }
+      o.material = mat;
+    });
+  },
+
+  // ── workspaces: every load becomes a named tab ──
+  _workspaces: [],
+  _activeWs: -1,
+  _wsSeq: 0,
+
+  addWorkspace(obj, name, activate) {
+    const { THREE } = this._three;
 
     let meshes = 0, verts = 0, tris = 0;
     obj.traverse((o) => {
@@ -1179,6 +1287,10 @@ OmniOS.register("r3d", {
       o.receiveShadow = true; // self-shadowing darkens holes and cavities
       o.userData._origMat = o.material;
       const g = o.geometry;
+      g.userData._refs = (g.userData._refs || 0) + 1; // shared with assembly clones
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+        if (m && m.userData) m.userData._refs = (m.userData._refs || 0) + 1;
+      }
       const n = g.attributes.position ? g.attributes.position.count : 0;
       verts += n;
       tris += Math.round(g.index ? g.index.count / 3 : n / 3);
@@ -1197,35 +1309,124 @@ OmniOS.register("r3d", {
     const pivot = new THREE.Group();
     pivot.add(obj);
     pivot.position.y = sizeY / 2;
-    scene.remove(this._model);
-    scene.add(pivot);
-    this._model = pivot;
 
-    controls.target.set(0, sizeY / 2, 0);
-    camera.position.set(4.5, 3.2, 5.5);
-    controls.update();
-
-    this.els.drop.hidden = true;
-    this.els.file.textContent = name.toUpperCase();
     const fmt = (x) => x >= 1e6 ? (x / 1e6).toFixed(1) + "M" : x >= 1e3 ? (x / 1e3).toFixed(1) + "K" : String(x);
-    this.els.stats.textContent =
-      `${name.split(".").pop().toUpperCase()} · ${meshes} MESH · ${fmt(verts)} VERTS · ${fmt(tris)} TRIS`;
-    this.setMode(this._mode);
+    const ext = name.includes(".") ? name.split(".").pop().toUpperCase() : "GROUP";
+    const ws = {
+      id: ++this._wsSeq,
+      name,
+      group: pivot,
+      midY: sizeY / 2,
+      mode: "full",
+      cam: null,
+      statsText: `${ext} \u00b7 ${meshes} MESH \u00b7 ${fmt(verts)} VERTS \u00b7 ${fmt(tris)} TRIS`,
+    };
+    this._workspaces.push(ws);
+    if (activate || this._activeWs < 0) {
+      this.switchWorkspace(this._workspaces.length - 1);
+    } else {
+      this.renderTabs();
+    }
+  },
+
+  switchWorkspace(i) {
+    const { scene, camera, controls } = this._ctx;
+    const cur = this._workspaces[this._activeWs];
+    if (cur) {
+      scene.remove(cur.group);
+      cur.cam = { pos: camera.position.clone(), target: controls.target.clone() };
+    }
+    this._activeWs = i;
+    const ws = this._workspaces[i];
+    this._model = ws ? ws.group : null;
+    this._spin = null;
+    if (ws) {
+      scene.add(ws.group);
+      if (ws.cam) {
+        camera.position.copy(ws.cam.pos);
+        controls.target.copy(ws.cam.target);
+      } else {
+        camera.position.set(4.5, 3.2, 5.5);
+        controls.target.set(0, ws.midY, 0);
+      }
+      controls.update();
+      this.els.drop.hidden = true;
+      this.els.file.textContent = ws.name.toUpperCase();
+      this.els.stats.textContent = ws.statsText;
+      this.setMode(ws.mode);
+    } else {
+      this.els.drop.hidden = false;
+      this.els.file.textContent = "\u2014";
+      this.els.stats.textContent = "NO MODEL";
+    }
+    this.renderTabs();
+  },
+
+  closeWorkspace(i) {
+    const ws = this._workspaces[i];
+    if (!ws) return;
+    const wasActive = i === this._activeWs;
+    if (wasActive) this._ctx.scene.remove(ws.group);
+    this._workspaces.splice(i, 1);
+    this.disposeObject(ws.group);
+    if (this._activeWs > i) this._activeWs--;
+    if (wasActive) {
+      this._activeWs = -1;
+      this.switchWorkspace(Math.min(i, this._workspaces.length - 1));
+    } else {
+      this.renderTabs();
+    }
+  },
+
+  renderTabs() {
+    const bar = this.els.tabs;
+    bar.hidden = this._workspaces.length === 0;
+    bar.innerHTML = "";
+    this._workspaces.forEach((ws, i) => {
+      const tab = document.createElement("div");
+      tab.className = `r3d-tab${i === this._activeWs ? " active" : ""}`;
+      const label = document.createElement("span");
+      label.className = "r3d-tab-label";
+      label.textContent = ws.name.toUpperCase();
+      const x = document.createElement("span");
+      x.className = "r3d-tab-x";
+      x.textContent = "\u2715";
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.closeWorkspace(i);
+      });
+      tab.append(label, x);
+      tab.addEventListener("click", () => this.switchWorkspace(i));
+      bar.appendChild(tab);
+    });
   },
 
   disposeObject(root) {
     root.traverse((o) => {
-      if (o.geometry) o.geometry.dispose();
-      for (const key of ["_origMat", "_colorMat", "_textureMat"]) {
-        const m = o.userData && o.userData[key];
-        if (!m) continue;
-        for (const mat of Array.isArray(m) ? m : [m]) {
-          if (mat.map) mat.map.dispose && mat.map.dispose();
+      if (o.geometry) {
+        const refs = (o.geometry.userData._refs || 1) - 1;
+        o.geometry.userData._refs = refs;
+        if (refs <= 0) o.geometry.dispose();
+      }
+      if (!o.userData) return;
+      const orig = o.userData._origMat;
+      for (const mat of Array.isArray(orig) ? orig : orig ? [orig] : []) {
+        const refs = ((mat.userData && mat.userData._refs) || 1) - 1;
+        if (mat.userData) mat.userData._refs = refs;
+        if (refs <= 0) {
+          if (mat.map && mat.map.dispose) mat.map.dispose();
+          mat.dispose && mat.dispose();
+        }
+      }
+      // per-workspace mode clones are never shared — dispose material only
+      // (their texture maps are shared with the original)
+      for (const key of ["_colorMat", "_textureMat"]) {
+        const m = o.userData[key];
+        for (const mat of Array.isArray(m) ? m : m ? [m] : []) {
           mat.dispose && mat.dispose();
         }
       }
     });
-    this.revokeBlobs();
   },
 
   TEX_SLOTS: ["map", "normalMap", "roughnessMap", "metalnessMap", "aoMap",
@@ -1233,6 +1434,7 @@ OmniOS.register("r3d", {
 
   convMaterial(m, mode) {
     const c = m.clone();
+    c.userData = {}; // clone JSON-copies refcounts/flags — clones own none of that
     if (mode === "color") {
       for (const s of this.TEX_SLOTS) if (s in c && c[s]) c[s] = null;
     } else if (mode === "texture") {
@@ -1249,6 +1451,8 @@ OmniOS.register("r3d", {
 
   setMode(mode) {
     this._mode = mode;
+    const ws = this._workspaces[this._activeWs];
+    if (ws) ws.mode = mode;
     this.els.modes.querySelectorAll("button").forEach((b) =>
       b.classList.toggle("active", b.dataset.mode === mode));
     if (!this._model) return;

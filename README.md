@@ -22,8 +22,11 @@ Xcode 없이 Command Line Tools만으로 빌드된다.
 UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
 
 - **CLOCK** — 중앙 디지털 시계 (시간 / 날짜 / 업타임), 회전 링 HUD
-- **RENDER_3D** — three.js 기반 3D 모델 뷰어. STL·OBJ/MTL·GLTF/GLB·FBX·PLY·3MF·DAE를
+- **RENDER_3D** — three.js 기반 3D 모델 뷰어. STL·OBJ/MTL·GLTF/GLB·FBX·PLY·3MF·DAE에 더해
+  **STEP/IGES/BREP**(OpenCascade WASM, 원본 CAD 색상·조립 좌표 유지)를
   파일 선택 또는 드래그&드롭으로 로드 (동반 파일 — mtl·텍스처·bin — 함께 선택하면 자동 연결).
+  **워크스페이스 탭**: 로드마다 파일명 탭이 생기고, 여러 파일을 한 번에 선택하면 파트별 탭과 함께
+  원본 좌표를 보존한 **ASSEMBLY 탭**(파트별 구분 색상)을 자동 생성 — 공유 좌표계로 내보낸 파트는 자동 조립.
   표시 모드 4종: FULL(원본 재질) / COLOR(색상만) / TEXTURE(텍스처만) / WIREFRAME(메인 컬러 청록 와이어프레임).
   LIGHTS 토글(입체 조명 ↔ 균일 평면광) + KEY/AMBIENT/SHADOW 슬라이더, 오빗 컨트롤, 자동 스케일 정규화, 그리드 바닥.
   **HANDS 모드** — 웹캠 손 추적(MediaPipe Tasks HandLandmarker, GPU)으로 영화식 제스처 컨트롤:

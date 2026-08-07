@@ -1067,6 +1067,58 @@ body {
   gap: 6px;
 }
 
+/* workspace tabs */
+.r3d-tabs {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.r3d-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.r3d-tabs[hidden] {
+  display: none;
+}
+
+.r3d-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid rgba(53, 214, 255, 0.2);
+  background: rgba(5, 18, 36, 0.5);
+  font-size: 8.5px;
+  letter-spacing: 1.4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.r3d-tab:hover {
+  color: var(--cyan);
+}
+
+.r3d-tab.active {
+  color: var(--cyan);
+  border-color: var(--cyan);
+  background: rgba(53, 214, 255, 0.08);
+  text-shadow: 0 0 8px var(--cyan-soft);
+}
+
+.r3d-tab-x {
+  color: rgba(111, 168, 201, 0.6);
+  font-size: 8px;
+}
+
+.r3d-tab-x:hover {
+  color: var(--alert);
+}
+
 /* hand-tracking HUD (PIP + status) */
 .r3d-hands-hud {
   position: absolute;
