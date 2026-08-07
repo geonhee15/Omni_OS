@@ -26,6 +26,8 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   - 시스템 상태 (LOCKDOWN / UNLOCKED / WATCHER OFFLINE) — protocol.log의 상태 마커로 판별
   - 감시 프로세스(PID 검증), ntfy 서버 연결, 알림 프로바이더, 원격 제어, 자동 시작, 침입 스냅샷 수, 구성요소 점검
   - 이벤트 피드 (한국어 로그를 영어 라벨로 변환 표시)
+  - **INTRUDER GALLERY** — 침입 스냅샷을 카테고리별(WRONG GESTURE / KEYBOARD / MOUSE / REMOTE SNAP)로
+    필터링해 보는 갤러리. 네이티브에서 썸네일 생성(ImageIO, mtime 캐시), 클릭하면 원본 크기 라이트박스
   - 네이티브 브리지(WKScriptMessageHandler)로 5초마다 갱신. topic·토큰·제스처 값은 브리지로 절대 내보내지 않음
 
 ## 구조

@@ -1,4 +1,5 @@
 #import "sp1_status.h"
+#import <ImageIO/ImageIO.h>
 #import <signal.h>
 #import <errno.h>
 
@@ -233,4 +234,91 @@ NSDictionary *SP1CollectStatus(void) {
     }
 
     return out;
+}
+
+// ─── intruder gallery ───
+
+// Decode + downscale + re-encode as JPEG base64 (pure ImageIO, no AppKit).
+static NSString *jpegBase64(NSString *path, CGFloat maxPx, CGFloat quality) {
+    NSURL *url = [NSURL fileURLWithPath:path];
+    CGImageSourceRef src = CGImageSourceCreateWithURL((__bridge CFURLRef)url, NULL);
+    if (!src) return nil;
+    NSDictionary *opts = @{
+        (id)kCGImageSourceCreateThumbnailFromImageAlways : @YES,
+        (id)kCGImageSourceThumbnailMaxPixelSize : @(maxPx),
+        (id)kCGImageSourceCreateThumbnailWithTransform : @YES,
+    };
+    CGImageRef img = CGImageSourceCreateThumbnailAtIndex(src, 0, (__bridge CFDictionaryRef)opts);
+    CFRelease(src);
+    if (!img) return nil;
+    NSMutableData *data = [NSMutableData data];
+    CGImageDestinationRef dst = CGImageDestinationCreateWithData(
+        (__bridge CFMutableDataRef)data, CFSTR("public.jpeg"), 1, NULL);
+    if (!dst) { CGImageRelease(img); return nil; }
+    CGImageDestinationAddImage(dst, img,
+        (__bridge CFDictionaryRef)@{(id)kCGImageDestinationLossyCompressionQuality : @(quality)});
+    BOOL ok = CGImageDestinationFinalize(dst);
+    CFRelease(dst);
+    CGImageRelease(img);
+    return ok ? [data base64EncodedStringWithOptions:0] : nil;
+}
+
+NSArray *SP1CollectIntruders(void) {
+    // thumbnails are expensive — cache by "name|mtime"
+    static NSMutableDictionary<NSString *, NSString *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = [SP1_DIR stringByAppendingPathComponent:@"intruders"];
+    NSDateFormatter *df = [NSDateFormatter new];
+    df.dateFormat = @"yyyyMMdd_HHmmss";
+    df.timeZone = [NSTimeZone localTimeZone];
+
+    NSMutableArray *items = [NSMutableArray array];
+    for (NSString *f in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([f hasPrefix:@"."] || ![f.pathExtension.lowercaseString isEqualToString:@"jpg"]) continue;
+        NSString *path = [dir stringByAppendingPathComponent:f];
+        NSDate *mtime = [fm attributesOfItemAtPath:path error:nil][NSFileModificationDate] ?: [NSDate date];
+
+        // filename: YYYYMMDD_HHMMSS_<reason>.jpg (reason itself may contain "_")
+        NSString *base = f.stringByDeletingPathExtension;
+        NSArray<NSString *> *parts = [base componentsSeparatedByString:@"_"];
+        NSString *reason = @"unknown";
+        NSDate *shot = nil;
+        if (parts.count >= 3) {
+            reason = [[parts subarrayWithRange:NSMakeRange(2, parts.count - 2)]
+                         componentsJoinedByString:@"_"];
+            shot = [df dateFromString:[NSString stringWithFormat:@"%@_%@", parts[0], parts[1]]];
+        }
+        NSString *key = [NSString stringWithFormat:@"%@|%.0f", f, mtime.timeIntervalSince1970];
+        NSString *thumb = cache[key];
+        if (thumb == nil) {
+            thumb = jpegBase64(path, 360, 0.7);
+            if (thumb) cache[key] = thumb;
+        }
+        [items addObject:@{
+            @"name" : f,
+            @"epoch" : @((shot ?: mtime).timeIntervalSince1970),
+            @"reason" : reason.lowercaseString,
+            @"thumb" : thumb ?: (id)[NSNull null],
+        }];
+    }
+
+    [items sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [b[@"epoch"] compare:a[@"epoch"]]; // newest first
+    }];
+    if (items.count > 48) [items removeObjectsInRange:NSMakeRange(48, items.count - 48)];
+    return items;
+}
+
+NSDictionary *SP1IntruderImage(NSString *name) {
+    if (![name isKindOfClass:[NSString class]] || name.length == 0) return nil;
+    if ([name containsString:@"/"] || [name containsString:@".."]) return nil;
+    if (![name.pathExtension.lowercaseString isEqualToString:@"jpg"]) return nil;
+    NSString *path = [[SP1_DIR stringByAppendingPathComponent:@"intruders"]
+                         stringByAppendingPathComponent:name];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
+    NSString *b64 = jpegBase64(path, 1600, 0.85);
+    return b64 ? @{@"name" : name, @"image" : b64} : nil;
 }

@@ -175,6 +175,14 @@
           </div>
         </div>
       </div>
+
+      <!-- intruder gallery -->
+      <div class="mod mod-gallery">
+        <div class="mod-title">INTRUDER GALLERY <span class="mod-note" id="ig-note"></span></div>
+        <div class="ig-tabs" id="ig-tabs"></div>
+        <div class="ig-grid" id="ig-grid"></div>
+        <div class="ig-empty" id="ig-empty" hidden>NO CAPTURES IN THIS CATEGORY</div>
+      </div>
     </section>
 
     <!-- bottom bar -->
@@ -183,8 +191,16 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1</span>
       <span class="divider">|</span>
-      <span>v0.3.0</span>
+      <span>v0.4.0</span>
     </footer>
+  </div>
+
+  <!-- intruder lightbox -->
+  <div class="lightbox" id="lightbox" hidden>
+    <div class="lightbox-inner">
+      <img id="lb-img" alt="intruder snapshot" />
+      <div class="lightbox-meta" id="lb-meta"></div>
+    </div>
   </div>
 
   <script src="app.js"></script>

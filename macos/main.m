@@ -65,12 +65,20 @@
     NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
     NSNumber *msgId = [body[@"id"] isKindOfClass:[NSNumber class]] ? body[@"id"] : nil;
     NSString *cmd = [body[@"cmd"] isKindOfClass:[NSString class]] ? body[@"cmd"] : nil;
+    NSString *arg = [body[@"arg"] isKindOfClass:[NSString class]] ? body[@"arg"] : nil;
     if (msgId == nil || cmd == nil) return;
 
     if ([cmd isEqualToString:@"sp1.status"]) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            NSDictionary *status = SP1CollectStatus();
-            [self deliverPayload:status forId:msgId];
+            [self deliverPayload:SP1CollectStatus() forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"sp1.intruders"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:@{ @"items" : SP1CollectIntruders() } forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"sp1.intruderImage"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:(SP1IntruderImage(arg) ?: @{}) forId:msgId];
         });
     }
     // unknown commands are ignored; the JS side times out on its own

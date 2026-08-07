@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.3.0",
+  version: "0.4.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -17,7 +17,7 @@ const OmniNative = {
   _pending: {},
   available: !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.omni),
 
-  request(cmd, timeoutMs = 8000) {
+  request(cmd, arg = null, timeoutMs = 8000) {
     if (!this.available) return Promise.reject(new Error("bridge offline"));
     const id = ++this._seq;
     return new Promise((resolve, reject) => {
@@ -26,7 +26,7 @@ const OmniNative = {
         reject(new Error("bridge timeout"));
       }, timeoutMs);
       this._pending[id] = { resolve, timer };
-      window.webkit.messageHandlers.omni.postMessage({ id, cmd });
+      window.webkit.messageHandlers.omni.postMessage({ id, cmd, arg });
     });
   },
 
@@ -164,7 +164,18 @@ OmniOS.register("sp1", {
       iLast: $("i-last"),
       sModel: $("s-model"),
       scanSweep: $("scan-sweep"),
+      igNote: $("ig-note"),
+      igTabs: $("ig-tabs"),
+      igGrid: $("ig-grid"),
+      igEmpty: $("ig-empty"),
+      lightbox: $("lightbox"),
+      lbImg: $("lb-img"),
+      lbMeta: $("lb-meta"),
     };
+    this.els.lightbox.addEventListener("click", () => {
+      this.els.lightbox.hidden = true;
+      this.els.lbImg.src = "";
+    });
     this.buildBars();
     this.refresh();
     setInterval(() => this.refresh(), this.POLL_MS);
@@ -184,6 +195,10 @@ OmniOS.register("sp1", {
       // dev convenience: ?mock=1 renders the panel with sample data in a browser
       if (location.search.includes("mock=1")) {
         this.render(this.mockPayload());
+        if (this._galleryItems === null) {
+          this._galleryItems = this.mockGallery();
+          this.renderGallery();
+        }
         return;
       }
       this.renderBridgeOffline();
@@ -196,6 +211,138 @@ OmniOS.register("sp1", {
       this.setState("warn", "SYNC ERROR", "native bridge did not respond");
       this.els.navDot.className = "nav-dot off";
     }
+  },
+
+  // ── intruder gallery ──
+  GALLERY_CATS: [
+    ["all", "ALL"],
+    ["wrong_gesture", "WRONG GESTURE"],
+    ["keyboard", "KEYBOARD"],
+    ["mouse", "MOUSE"],
+    ["snap", "REMOTE SNAP"],
+  ],
+  _galleryItems: null,
+  _galleryCat: "all",
+  _lastIntruderCount: null,
+
+  async fetchGallery() {
+    try {
+      const r = await OmniNative.request("sp1.intruders", null, 20000);
+      this._galleryItems = r.items || [];
+      this.renderGallery();
+    } catch (e) {
+      /* keep whatever we had; next count change retries */
+      this._lastIntruderCount = null;
+    }
+  },
+
+  catTone(reason) {
+    if (reason === "wrong_gesture") return "alert";
+    if (reason === "keyboard" || reason === "mouse") return "warn";
+    return "";
+  },
+
+  fmtDateTime(epoch) {
+    if (typeof epoch !== "number") return "—";
+    const d = new Date(epoch * 1000);
+    const mon = d.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+    const pad = (x) => String(x).padStart(2, "0");
+    return `${mon} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  },
+
+  renderGallery() {
+    const items = this._galleryItems || [];
+    const els = this.els;
+
+    // tabs with per-category counts
+    els.igTabs.innerHTML = "";
+    for (const [key, label] of this.GALLERY_CATS) {
+      const n = key === "all" ? items.length : items.filter((i) => i.reason === key).length;
+      const tab = document.createElement("button");
+      tab.className = `ig-tab${this._galleryCat === key ? " active" : ""}`;
+      tab.innerHTML = `${label}<span class="cnt">${n}</span>`;
+      tab.addEventListener("click", () => {
+        this._galleryCat = key;
+        this.renderGallery();
+      });
+      els.igTabs.appendChild(tab);
+    }
+
+    const shown = this._galleryCat === "all"
+      ? items
+      : items.filter((i) => i.reason === this._galleryCat);
+
+    els.igNote.textContent = `${items.length} CAPTURES`;
+    els.igGrid.innerHTML = "";
+    els.igEmpty.hidden = shown.length > 0;
+
+    for (const item of shown) {
+      const cell = document.createElement("div");
+      cell.className = "ig-cell";
+      if (typeof item.thumb === "string" && item.thumb) {
+        const img = document.createElement("img");
+        img.src = item.thumb.startsWith("data:")
+          ? item.thumb
+          : `data:image/jpeg;base64,${item.thumb}`;
+        img.loading = "lazy";
+        cell.appendChild(img);
+      }
+      const label = document.createElement("div");
+      label.className = "ig-label";
+      const ts = document.createElement("span");
+      ts.textContent = this.fmtDateTime(item.epoch);
+      const tag = document.createElement("span");
+      tag.className = `ig-tag ${this.catTone(item.reason)}`;
+      tag.textContent = (item.reason || "?").replace(/_/g, " ").toUpperCase();
+      label.append(ts, tag);
+      cell.appendChild(label);
+      cell.addEventListener("click", () => this.openLightbox(item));
+      els.igGrid.appendChild(cell);
+    }
+  },
+
+  async openLightbox(item) {
+    const els = this.els;
+    // show the thumbnail immediately, then swap in the full-size image
+    if (typeof item.thumb === "string" && item.thumb) {
+      els.lbImg.src = item.thumb.startsWith("data:")
+        ? item.thumb
+        : `data:image/jpeg;base64,${item.thumb}`;
+    }
+    els.lbMeta.textContent =
+      `${this.fmtDateTime(item.epoch)} · ${(item.reason || "?").replace(/_/g, " ").toUpperCase()} · ${item.name || ""}`;
+    els.lightbox.hidden = false;
+    if (OmniNative.available && item.name) {
+      try {
+        const r = await OmniNative.request("sp1.intruderImage", item.name, 20000);
+        if (r.image && !els.lightbox.hidden) {
+          els.lbImg.src = `data:image/jpeg;base64,${r.image}`;
+        }
+      } catch (e) {
+        /* thumbnail stays */
+      }
+    }
+  },
+
+  mockGallery() {
+    const now = Date.now() / 1000;
+    const svg = (label, color) =>
+      "data:image/svg+xml;utf8," +
+      encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240">` +
+          `<rect width="320" height="240" fill="#081a2e"/>` +
+          `<circle cx="160" cy="105" r="52" fill="none" stroke="${color}" stroke-width="2" opacity="0.7"/>` +
+          `<text x="160" y="215" fill="${color}" font-family="monospace" font-size="15" text-anchor="middle">${label}</text>` +
+        `</svg>`
+      );
+    const reasons = ["wrong_gesture", "keyboard", "mouse", "snap", "wrong_gesture", "keyboard"];
+    const colors = { wrong_gesture: "#ff4d5e", keyboard: "#ffc857", mouse: "#ffc857", snap: "#35d6ff" };
+    return reasons.map((r, i) => ({
+      name: `mock_${i}.jpg`,
+      epoch: now - i * 3700,
+      reason: r,
+      thumb: svg(r.replace("_", " ").toUpperCase(), colors[r]),
+    }));
   },
 
   // The native side scans a deep log tail and hands us the most recent
@@ -283,6 +430,12 @@ OmniOS.register("sp1", {
     const running = !!s.watcherRunning;
     const els = this.els;
     const pad = (x) => String(x).padStart(2, "0");
+
+    // refresh the gallery whenever the snapshot count changes (and on first sync)
+    if (OmniNative.available && s.intruderCount !== this._lastIntruderCount) {
+      this._lastIntruderCount = s.intruderCount;
+      this.fetchGallery();
+    }
 
     // top strip + sidebar dot
     els.link.textContent = "LINK ACTIVE";

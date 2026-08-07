@@ -20,7 +20,7 @@ cp "$ROOT/macos/Info.plist" "$APP/Contents/"
 # 3. 컴파일
 clang -fobjc-arc -O2 "$ROOT/macos/main.m" "$ROOT/macos/sp1_status.m" \
   -o "$APP/Contents/MacOS/OmniOS" \
-  -framework Cocoa -framework WebKit
+  -framework Cocoa -framework WebKit -framework ImageIO -framework CoreGraphics
 
 # 4. 아이콘 (icon.svg → AppIcon.icns)
 ICONSET="$(mktemp -d)/AppIcon.iconset"
