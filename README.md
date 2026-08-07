@@ -34,7 +34,9 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   LIGHTS 토글(입체 조명 ↔ 균일 평면광) + KEY/AMBIENT/SHADOW 슬라이더, 오빗 컨트롤, 자동 스케일 정규화, 그리드 바닥.
   **HANDS 모드** — 웹캠 손 추적(MediaPipe Tasks HandLandmarker, GPU)으로 영화식 제스처 컨트롤:
   한 손 핀치 드래그 = 회전, 양손 핀치 = 줌/팬, 빠르게 날리며 핀치 해제 = 모멘텀 스핀(감쇠),
-  핀치로 아래→위 직선 스트로크 후 유지 = Y축 잠금 / 왼→오른쪽 = X축 잠금(반대 손이 해당 축만 회전).
+  핀치로 아래→위 직선 스트로크 후 유지 = Y축 잠금 / 왼→오른쪽 = X축 잠금 /
+  **원을 그린 뒤 멈추고 유지 = Z축 잠금**(반대 손이 해당 축만 회전),
+  양손 주먹을 세게 당기며 놓으면 분해가 관성으로 끝까지 진행.
   랜드마크 지수평활 + 60fps 보간 스켈레톤. 켜는 동안 Security-Protocol-1 워처를 깨끗하게 종료
   (launchctl bootout)해 카메라를 해제하고, 끄거나 앱 종료 시 자동 재기동
 - **SECURITY-PROTOCOL-1** — [Security-Protocol-1](https://github.com/geonhee15/Security-Protocol-1) 실시간 상태 대시보드

@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.10.0",
+  version: "0.11.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -1091,6 +1091,23 @@ OmniOS.register("r3d", {
       const dt = Math.min(0.05, (now - lastT) / 1000);
       lastT = now;
       this.tickAssembleAnim(now);
+      // explode momentum: a hard two-fist yank coasts the explode to its end
+      if (this._explodeVel) {
+        const ws = this._workspaces[this._activeWs];
+        if (ws && ws.parts) {
+          let f = ws.explode + this._explodeVel * dt;
+          this._explodeVel *= Math.exp(-dt / 0.9);
+          if (f >= 1.6) { f = 1.6; this._explodeVel = 0; }
+          if (f <= 0) { f = 0; this._explodeVel = 0; }
+          if (Math.abs(this._explodeVel) < 0.05) this._explodeVel = 0;
+          this.setExplode(f);
+          this.els.stats.textContent = this._explodeVel
+            ? `EXPLODE ${Math.round(ws.explode * 100)}%`
+            : ws.statsText;
+        } else {
+          this._explodeVel = 0;
+        }
+      }
       // flick momentum: keeps spinning after a fast pinch release, with decay
       if (this._spin && this._model) {
         this._model.rotation.y += this._spin.y * dt;
@@ -1835,6 +1852,10 @@ OmniOS.register("r3d", {
         hs.start = { x: p.px, y: p.py };
         hs.vel = { x: 0, y: 0 };
         hs.stroke = null;
+        hs.heading = null; // circle-gesture tracking (Z-axis lock)
+        hs.turn = 0;
+        hs.circle = false;
+        hs.stillFrames = 0;
         this._spin = null; // grabbing stops any residual spin
       } else if (p.pinch && hs.pinching) {
         const dx = p.px - (hs.px !== undefined ? hs.px : p.px);
@@ -1842,7 +1863,33 @@ OmniOS.register("r3d", {
         hs.vel.x += (dx / dt - hs.vel.x) * 0.35;
         hs.vel.y += (dy / dt - hs.vel.y) * 0.35;
         if (Math.abs(dx) + Math.abs(dy) > 0.004) hs.lastMoveAt = now;
-        if (!hs.stroke && !H.axisLock) {
+        // circle gesture: consistent heading rotation past ~300\u00b0, then hold
+        // still while pinched \u2192 Z-axis lock (tracked before the stroke check
+        // so a curving path can never mis-arm the straight-stroke locks)
+        if (Math.hypot(dx, dy) > 0.003) {
+          const h = Math.atan2(dy, dx);
+          if (hs.heading !== null) {
+            let dh = h - hs.heading;
+            while (dh > Math.PI) dh -= 2 * Math.PI;
+            while (dh < -Math.PI) dh += 2 * Math.PI;
+            if (hs.turn !== 0 && Math.sign(dh) !== Math.sign(hs.turn) && Math.abs(dh) > 0.15) {
+              hs.turn = dh; // direction reversed \u2014 restart the sweep
+            } else {
+              hs.turn += dh;
+            }
+          }
+          hs.heading = h;
+          hs.stillFrames = 0;
+          if (Math.abs(hs.turn) > 5.2) hs.circle = true;
+        } else if (hs.pinching) {
+          hs.stillFrames++;
+          if (hs.circle && !hs.stroke && !H.axisLock && hs.stillFrames >= 4) {
+            hs.stroke = "z";
+            H.axisLock = { axis: "z", hand: p.label };
+          }
+        }
+        // straight-stroke locks only when the path hasn't been curving
+        if (!hs.stroke && !H.axisLock && Math.abs(hs.turn) < 1.5) {
           const sx = p.px - hs.start.x;
           const sy = p.py - hs.start.y;
           if (sy < -0.22 && Math.abs(sy) > 2.2 * Math.abs(sx)) hs.stroke = "y"; // bottom\u2192up
@@ -1879,12 +1926,25 @@ OmniOS.register("r3d", {
       : "SHOW HANDS";
     const ws = this._workspaces[this._activeWs];
 
+    // fists just released after a hard yank \u2192 explode coasts to the end
+    if (prev && prev.type === "fists" && fists.length < 2) {
+      if (Math.abs(H.explodeVel || 0) > 0.6) {
+        this._explodeVel = Math.max(-3.5, Math.min(3.5, H.explodeVel));
+      }
+      H.explodeVel = 0;
+    }
+
     if (fists.length === 2 && ws && ws.parts) {
       // both fists: pull apart to explode the assembly, bring together to rebuild
       const [a, b] = fists;
       const dist = Math.hypot(a.cx - b.cx, a.cy - b.cy);
       if (prev && prev.type === "fists") {
-        this.setExplode(ws.explode + (dist - prev.dist) * 2.4);
+        const dd = (dist - prev.dist) * 2.4;
+        this.setExplode(ws.explode + dd);
+        H.explodeVel = (H.explodeVel || 0) + (dd / dt - (H.explodeVel || 0)) * 0.4;
+      } else {
+        H.explodeVel = 0;
+        this._explodeVel = 0; // fresh grab stops any coasting
       }
       H.prev = { type: "fists", dist };
       status = `EXPLODE ${Math.round(ws.explode * 100)}%`;
@@ -1899,7 +1959,8 @@ OmniOS.register("r3d", {
           const dy = other.py - prev.y;
           if (this._model) {
             if (H.axisLock.axis === "y") this._model.rotation.y += dx * 5;
-            else this._model.rotation.x += dy * 4;
+            else if (H.axisLock.axis === "x") this._model.rotation.x += dy * 4;
+            else this._model.rotation.z += dx * 4;
           }
         }
         H.prev = { type: "axis", label: other.label, x: other.px, y: other.py };
