@@ -11,6 +11,14 @@
     rel="stylesheet"
   />
   <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/build/three.module.js",
+        "fflate": "./vendor/three/examples/jsm/libs/fflate.module.js"
+      }
+    }
+  </script>
 </head>
 <body>
   <!-- background layers -->
@@ -30,6 +38,10 @@
         <span class="nav-icon">&#11041;</span>
         <span class="nav-label">SECURITY-PROTOCOL-1</span>
         <span class="nav-dot" id="sp1-nav-dot"></span>
+      </button>
+      <button class="nav-item" data-panel="r3d">
+        <span class="nav-icon">&#9672;</span>
+        <span class="nav-label">RENDER_3D</span>
       </button>
     </nav>
     <div class="sidebar-foot">
@@ -185,13 +197,52 @@
       </div>
     </section>
 
+    <!-- panel 3: Render 3D -->
+    <section class="panel panel-r3d" id="panel-r3d">
+      <div class="sp1-topstrip">
+        <span class="sp1-title">RENDER_3D</span>
+        <span class="ts-item">MODEL VIEWER</span>
+        <span class="ts-spacer"></span>
+        <span class="ts-item" id="r3d-stats">NO MODEL</span>
+      </div>
+
+      <div class="r3d-viewport" id="r3d-viewport">
+        <div class="r3d-drop" id="r3d-drop">
+          <div class="r3d-drop-title">DROP 3D MODEL HERE</div>
+          <div class="r3d-drop-sub">STL &middot; OBJ/MTL &middot; GLTF/GLB &middot; FBX &middot; PLY &middot; 3MF &middot; DAE</div>
+          <div class="r3d-open-wrap">
+            <button class="r3d-open" id="r3d-open">
+              <span class="r3d-open-icon">&#9672;</span>
+              <span>OPEN FILES</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="r3d-toolbar">
+        <button class="ig-tab" id="r3d-load">LOAD</button>
+        <span class="r3d-file" id="r3d-file">&mdash;</span>
+        <button class="ig-tab active" id="r3d-lights">LIGHTS ON</button>
+        <span class="divider">|</span>
+        <div class="r3d-modes" id="r3d-modes">
+          <button class="ig-tab active" data-mode="full">FULL</button>
+          <button class="ig-tab" data-mode="color">COLOR</button>
+          <button class="ig-tab" data-mode="texture">TEXTURE</button>
+          <button class="ig-tab" data-mode="wireframe">WIREFRAME</button>
+        </div>
+      </div>
+
+      <input type="file" id="r3d-input" multiple hidden
+        accept=".stl,.obj,.mtl,.gltf,.glb,.fbx,.ply,.3mf,.dae,.png,.jpg,.jpeg,.tga,.bmp,.webp,.bin" />
+    </section>
+
     <!-- bottom bar -->
     <footer class="bottombar">
       <span id="uptime">UPTIME 00:00:00</span>
       <span class="divider">|</span>
-      <span>MODULES: CLOCK &middot; SP-1</span>
+      <span>MODULES: CLOCK &middot; SP-1 &middot; R3D</span>
       <span class="divider">|</span>
-      <span>v0.5.0</span>
+      <span>v0.6.0</span>
     </footer>
   </div>
 

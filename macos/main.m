@@ -55,7 +55,7 @@
 
 @end
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, WKScriptMessageHandler>
+@interface AppDelegate : NSObject <NSApplicationDelegate, WKScriptMessageHandler, WKUIDelegate>
 @property (strong) NSWindow *window;
 @property (strong) WKWebView *webView;
 @property (strong) OmniSchemeHandler *schemeHandler;
@@ -91,6 +91,7 @@
     WKWebView *webView = [[WKWebView alloc] initWithFrame:window.contentView.bounds
                                             configuration:config];
     webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    webView.UIDelegate = self; // <input type="file"> needs runOpenPanel below
     [webView setValue:@NO forKey:@"drawsBackground"];
 
     NSString *indexPath = [[NSBundle mainBundle].resourcePath
@@ -112,6 +113,21 @@
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     return YES;
+}
+
+// ---- file picker for <input type="file"> ----
+
+- (void)webView:(WKWebView *)webView
+    runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
+              initiatedByFrame:(WKFrameInfo *)frame
+             completionHandler:(void (^)(NSArray<NSURL *> *URLs))completionHandler {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = parameters.allowsMultipleSelection;
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        completionHandler(result == NSModalResponseOK ? panel.URLs : nil);
+    }];
 }
 
 // ---- native bridge ----

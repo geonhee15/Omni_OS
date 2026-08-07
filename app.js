@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.5.0",
+  version: "0.6.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -820,5 +820,363 @@ OmniOS.register("sp1", {
       ntfyReachable: true,
       ntfyLatencyMs: 501,
     };
+  },
+});
+
+// ---------- module: Render 3D (three.js model viewer) ----------
+OmniOS.register("r3d", {
+  FORMATS: ["glb", "gltf", "fbx", "obj", "dae", "3mf", "stl", "ply"],
+  _three: null,
+  _threeLoad: null,
+  _ctx: null,
+  _model: null,
+  _mode: "full",
+  _blobUrls: [],
+  _lights: null,
+  _lightsOn: true,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      panel: $("panel-r3d"),
+      viewport: $("r3d-viewport"),
+      drop: $("r3d-drop"),
+      input: $("r3d-input"),
+      stats: $("r3d-stats"),
+      file: $("r3d-file"),
+      modes: $("r3d-modes"),
+    };
+    $("r3d-open").addEventListener("click", () => this.els.input.click());
+    $("r3d-load").addEventListener("click", () => this.els.input.click());
+    this.els.input.addEventListener("change", () => {
+      if (this.els.input.files.length) this.loadFiles([...this.els.input.files]);
+      this.els.input.value = "";
+    });
+
+    const panel = this.els.panel;
+    panel.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      panel.classList.add("dragging");
+    });
+    panel.addEventListener("dragleave", (e) => {
+      if (e.target === panel) panel.classList.remove("dragging");
+    });
+    panel.addEventListener("drop", (e) => {
+      e.preventDefault();
+      panel.classList.remove("dragging");
+      if (e.dataTransfer.files.length) this.loadFiles([...e.dataTransfer.files]);
+    });
+
+    this.els.modes.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => this.setMode(b.dataset.mode)));
+
+    this.els.lights = $("r3d-lights");
+    this.els.lights.addEventListener("click", () => this.toggleLights());
+  },
+
+  toggleLights() {
+    this._lightsOn = !this._lightsOn;
+    this.els.lights.textContent = this._lightsOn ? "LIGHTS ON" : "LIGHTS OFF";
+    this.els.lights.classList.toggle("active", this._lightsOn);
+    this.applyLights();
+  },
+
+  applyLights() {
+    if (!this._lights) return; // viewport not built yet; initViewport applies state
+    const on = this._lightsOn;
+    this._lights.hemi.visible = on;
+    this._lights.key.visible = on;
+    this._lights.fill.visible = on;
+    this._lights.flat.visible = !on;
+  },
+
+  ensureThree() {
+    if (this._threeLoad) return this._threeLoad;
+    this._threeLoad = (async () => {
+      const THREE = await import("three");
+      const [
+        { OrbitControls },
+        { STLLoader },
+        { OBJLoader },
+        { MTLLoader },
+        { GLTFLoader },
+        { FBXLoader },
+        { PLYLoader },
+        { ThreeMFLoader },
+        { ColladaLoader },
+      ] = await Promise.all([
+        import("./vendor/three/examples/jsm/controls/OrbitControls.js"),
+        import("./vendor/three/examples/jsm/loaders/STLLoader.js"),
+        import("./vendor/three/examples/jsm/loaders/OBJLoader.js"),
+        import("./vendor/three/examples/jsm/loaders/MTLLoader.js"),
+        import("./vendor/three/examples/jsm/loaders/GLTFLoader.js"),
+        import("./vendor/three/examples/jsm/loaders/FBXLoader.js"),
+        import("./vendor/three/examples/jsm/loaders/PLYLoader.js"),
+        import("./vendor/three/examples/jsm/loaders/3MFLoader.js"),
+        import("./vendor/three/examples/jsm/loaders/ColladaLoader.js"),
+      ]);
+      this._three = { THREE, OrbitControls, STLLoader, OBJLoader, MTLLoader,
+        GLTFLoader, FBXLoader, PLYLoader, ThreeMFLoader, ColladaLoader };
+      return this._three;
+    })();
+    this._threeLoad.catch(() => { this._threeLoad = null; });
+    return this._threeLoad;
+  },
+
+  initViewport() {
+    if (this._ctx) return;
+    const { THREE, OrbitControls } = this._three;
+    const vp = this.els.viewport;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(vp.clientWidth || 640, vp.clientHeight || 480);
+    vp.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(
+      45, (vp.clientWidth || 640) / (vp.clientHeight || 480), 0.01, 5000);
+    camera.position.set(4.5, 3.2, 5.5);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+
+    // lit rig (hemisphere + key + fill) vs flat rig (uniform ambient, no shading)
+    const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x0a1a2a, 1.2);
+    scene.add(hemi);
+    const key = new THREE.DirectionalLight(0xffffff, 1.8);
+    key.position.set(5, 10, 7);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0x88bbff, 0.5);
+    fill.position.set(-6, -3, -5);
+    scene.add(fill);
+    const flat = new THREE.AmbientLight(0xffffff, 1.5);
+    scene.add(flat);
+    this._lights = { hemi, key, fill, flat };
+    this.applyLights();
+
+    const grid = new THREE.GridHelper(12, 24, 0x35d6ff, 0x123048);
+    grid.material.transparent = true;
+    grid.material.opacity = 0.35;
+    scene.add(grid);
+
+    this._ctx = { renderer, scene, camera, controls };
+    new ResizeObserver(() => this.resize()).observe(vp);
+
+    const loop = () => {
+      requestAnimationFrame(loop);
+      if (!this.els.panel.classList.contains("active")) return;
+      controls.update();
+      renderer.render(scene, camera);
+    };
+    loop();
+  },
+
+  resize() {
+    if (!this._ctx) return;
+    const vp = this.els.viewport;
+    const w = vp.clientWidth, h = vp.clientHeight;
+    if (!w || !h) return;
+    this._ctx.camera.aspect = w / h;
+    this._ctx.camera.updateProjectionMatrix();
+    this._ctx.renderer.setSize(w, h);
+  },
+
+  revokeBlobs() {
+    for (const u of this._blobUrls) URL.revokeObjectURL(u);
+    this._blobUrls = [];
+  },
+
+  async loadFiles(files) {
+    this.els.stats.textContent = "LOADING…";
+    try {
+      const t = await this.ensureThree();
+      this.initViewport();
+      const { THREE } = t;
+
+      const main = files
+        .map((f) => ({ f, ext: f.name.split(".").pop().toLowerCase() }))
+        .filter((x) => this.FORMATS.includes(x.ext))
+        .sort((a, b) => this.FORMATS.indexOf(a.ext) - this.FORMATS.indexOf(b.ext))[0];
+      if (!main) throw new Error("unsupported format");
+
+      // companion files (mtl, textures, .bin) resolve through blob URLs by basename
+      this.revokeBlobs();
+      const urlMap = {};
+      for (const f of files) {
+        const u = URL.createObjectURL(f);
+        this._blobUrls.push(u);
+        urlMap[f.name.toLowerCase()] = u;
+      }
+      const manager = new THREE.LoadingManager();
+      manager.setURLModifier((url) => {
+        if (url.startsWith("blob:") || url.startsWith("data:")) return url;
+        const base = decodeURIComponent(url.split("/").pop().split("?")[0]).toLowerCase();
+        return urlMap[base] || url;
+      });
+
+      const obj = await this.parseModel(t, main, urlMap[main.f.name.toLowerCase()], files, manager, urlMap);
+      this.setModel(obj, main.f.name);
+    } catch (e) {
+      this.els.stats.textContent =
+        `LOAD FAILED — ${String((e && e.message) || e).toUpperCase().slice(0, 60)}`;
+    }
+  },
+
+  parseModel(t, main, url, files, manager, urlMap) {
+    const load = (loader) =>
+      new Promise((res, rej) => loader.load(url, res, undefined, rej));
+    switch (main.ext) {
+      case "stl":
+        return load(new t.STLLoader(manager)).then((g) => this.meshFromGeometry(g));
+      case "ply":
+        return load(new t.PLYLoader(manager)).then((g) => this.meshFromGeometry(g));
+      case "obj": {
+        const objLoader = new t.OBJLoader(manager);
+        const mtlFile = files.find((f) => f.name.toLowerCase().endsWith(".mtl"));
+        if (!mtlFile) return load(objLoader);
+        return new Promise((res, rej) =>
+          new t.MTLLoader(manager).load(urlMap[mtlFile.name.toLowerCase()], res, undefined, rej)
+        ).then((mtl) => {
+          mtl.preload();
+          objLoader.setMaterials(mtl);
+          return load(objLoader);
+        });
+      }
+      case "glb":
+      case "gltf":
+        return load(new t.GLTFLoader(manager)).then((g) => g.scene);
+      case "fbx":
+        return load(new t.FBXLoader(manager));
+      case "3mf":
+        return load(new t.ThreeMFLoader(manager));
+      case "dae":
+        return load(new t.ColladaLoader(manager)).then((d) => d.scene);
+    }
+  },
+
+  meshFromGeometry(geometry) {
+    const { THREE } = this._three;
+    if (!geometry.attributes.normal) geometry.computeVertexNormals();
+    const hasColor = !!geometry.attributes.color;
+    const mat = new THREE.MeshStandardMaterial({
+      color: hasColor ? 0xffffff : 0x9fb8cc,
+      roughness: 0.7,
+      metalness: 0.15,
+      vertexColors: hasColor,
+    });
+    return new THREE.Mesh(geometry, mat);
+  },
+
+  setModel(obj, name) {
+    const { THREE } = this._three;
+    const { scene, camera, controls } = this._ctx;
+    if (this._model) {
+      scene.remove(this._model);
+      this.disposeObject(this._model);
+    }
+    this._model = obj;
+    scene.add(obj);
+
+    let meshes = 0, verts = 0, tris = 0;
+    obj.traverse((o) => {
+      if (!o.isMesh) return;
+      meshes++;
+      o.userData._origMat = o.material;
+      const g = o.geometry;
+      const n = g.attributes.position ? g.attributes.position.count : 0;
+      verts += n;
+      tris += Math.round(g.index ? g.index.count / 3 : n / 3);
+    });
+
+    // normalize: fit into a ~4 unit box, sit on the grid, center at origin
+    const box = new THREE.Box3().setFromObject(obj);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    obj.scale.setScalar(4 / maxDim);
+    const box2 = new THREE.Box3().setFromObject(obj);
+    const center = box2.getCenter(new THREE.Vector3());
+    obj.position.x -= center.x;
+    obj.position.z -= center.z;
+    obj.position.y -= box2.min.y;
+
+    controls.target.set(0, (box2.max.y - box2.min.y) / 2, 0);
+    camera.position.set(4.5, 3.2, 5.5);
+    controls.update();
+
+    this.els.drop.hidden = true;
+    this.els.file.textContent = name.toUpperCase();
+    const fmt = (x) => x >= 1e6 ? (x / 1e6).toFixed(1) + "M" : x >= 1e3 ? (x / 1e3).toFixed(1) + "K" : String(x);
+    this.els.stats.textContent =
+      `${name.split(".").pop().toUpperCase()} · ${meshes} MESH · ${fmt(verts)} VERTS · ${fmt(tris)} TRIS`;
+    this.setMode(this._mode);
+  },
+
+  disposeObject(root) {
+    root.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      for (const key of ["_origMat", "_colorMat", "_textureMat"]) {
+        const m = o.userData && o.userData[key];
+        if (!m) continue;
+        for (const mat of Array.isArray(m) ? m : [m]) {
+          if (mat.map) mat.map.dispose && mat.map.dispose();
+          mat.dispose && mat.dispose();
+        }
+      }
+    });
+    this.revokeBlobs();
+  },
+
+  TEX_SLOTS: ["map", "normalMap", "roughnessMap", "metalnessMap", "aoMap",
+    "emissiveMap", "bumpMap", "alphaMap", "specularMap", "displacementMap", "lightMap"],
+
+  convMaterial(m, mode) {
+    const c = m.clone();
+    if (mode === "color") {
+      for (const s of this.TEX_SLOTS) if (s in c && c[s]) c[s] = null;
+    } else if (mode === "texture") {
+      if (c.map) {
+        if (c.color) c.color.set(0xffffff);
+      } else {
+        if (c.color) c.color.set(0x8fa8bb);
+      }
+      c.vertexColors = false;
+    }
+    c.needsUpdate = true;
+    return c;
+  },
+
+  setMode(mode) {
+    this._mode = mode;
+    this.els.modes.querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.mode === mode));
+    if (!this._model) return;
+    const { THREE } = this._three;
+    if (!this._wireMat) {
+      this._wireMat = new THREE.MeshBasicMaterial({
+        color: 0x35d6ff,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.75,
+      });
+    }
+    this._model.traverse((o) => {
+      if (!o.isMesh) return;
+      const orig = o.userData._origMat;
+      if (mode === "full") {
+        o.material = orig;
+      } else if (mode === "wireframe") {
+        o.material = this._wireMat;
+      } else {
+        const key = `_${mode}Mat`;
+        if (!o.userData[key]) {
+          o.userData[key] = Array.isArray(orig)
+            ? orig.map((x) => this.convMaterial(x, mode))
+            : this.convMaterial(orig, mode);
+        }
+        o.material = o.userData[key];
+      }
+    });
   },
 });

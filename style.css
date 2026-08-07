@@ -892,6 +892,180 @@ body {
   color: rgba(111, 168, 201, 0.5);
 }
 
+/* ---------- panel: Render 3D ---------- */
+.panel-r3d {
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px 6px;
+}
+
+.r3d-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid rgba(53, 214, 255, 0.18);
+  background:
+    radial-gradient(circle at 50% 60%, rgba(47, 123, 255, 0.08) 0%, transparent 60%),
+    rgba(3, 10, 20, 0.6);
+  overflow: hidden;
+}
+
+.r3d-viewport canvas {
+  display: block;
+}
+
+.panel-r3d.dragging .r3d-viewport {
+  border-color: var(--cyan);
+  box-shadow: inset 0 0 40px rgba(53, 214, 255, 0.15);
+}
+
+.r3d-drop[hidden] {
+  display: none;
+}
+
+.r3d-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.r3d-drop-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 3px;
+  color: #eafcff;
+  text-shadow: 0 0 12px var(--cyan-soft);
+}
+
+.r3d-drop-sub {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+}
+
+/* OPEN FILES — HUD 스타일 버튼: 코너 브래킷 + 스캔 광택 + 글로우 */
+.r3d-open-wrap {
+  position: relative;
+  pointer-events: auto;
+  padding: 5px;
+  margin-top: 8px;
+}
+
+.r3d-open-wrap::before,
+.r3d-open-wrap::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transition: width 0.2s, height 0.2s;
+  pointer-events: none;
+}
+
+.r3d-open-wrap::before {
+  top: 0;
+  left: 0;
+  border-top: 1px solid var(--cyan);
+  border-left: 1px solid var(--cyan);
+}
+
+.r3d-open-wrap::after {
+  bottom: 0;
+  right: 0;
+  border-bottom: 1px solid var(--cyan);
+  border-right: 1px solid var(--cyan);
+}
+
+.r3d-open-wrap:hover::before,
+.r3d-open-wrap:hover::after {
+  width: 100%;
+  height: 100%;
+}
+
+.r3d-open {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: #eafcff;
+  text-shadow: 0 0 8px var(--cyan-soft);
+  background: linear-gradient(180deg, rgba(53, 214, 255, 0.16), rgba(53, 214, 255, 0.04));
+  border: 1px solid rgba(53, 214, 255, 0.55);
+  box-shadow:
+    0 0 18px rgba(53, 214, 255, 0.15),
+    inset 0 0 14px rgba(53, 214, 255, 0.08);
+  padding: 11px 30px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.r3d-open::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 45%;
+  left: -60%;
+  background: linear-gradient(100deg, transparent, rgba(234, 252, 255, 0.22), transparent);
+  animation: btn-sweep 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes btn-sweep {
+  0%, 55% { left: -60%; }
+  100% { left: 130%; }
+}
+
+.r3d-open:hover {
+  background: linear-gradient(180deg, rgba(53, 214, 255, 0.28), rgba(53, 214, 255, 0.08));
+  box-shadow:
+    0 0 28px rgba(53, 214, 255, 0.35),
+    inset 0 0 18px rgba(53, 214, 255, 0.14);
+}
+
+.r3d-open-icon {
+  font-size: 13px;
+  color: var(--cyan);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.r3d-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--cyan-faint);
+  background: rgba(5, 18, 36, 0.5);
+  padding: 7px 12px;
+}
+
+.r3d-file {
+  flex: 1;
+  min-width: 0;
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.r3d-modes {
+  display: flex;
+  gap: 6px;
+}
+
 /* lightbox */
 .lightbox {
   position: fixed;
