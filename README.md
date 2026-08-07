@@ -19,8 +19,14 @@ Xcode 없이 Command Line Tools만으로 빌드된다.
 
 ## 현재 기능
 
-- 중앙 디지털 시계 (시간 / 날짜 / 업타임)
-- 자비스 스타일 HUD (회전 링, 그리드, 스캔라인)
+UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
+
+- **CLOCK** — 중앙 디지털 시계 (시간 / 날짜 / 업타임), 회전 링 HUD
+- **SECURITY-PROTOCOL-1** — [Security-Protocol-1](https://github.com/geonhee15/Security-Protocol-1) 실시간 상태 대시보드
+  - 시스템 상태 (LOCKDOWN / UNLOCKED / WATCHER OFFLINE) — protocol.log의 상태 마커로 판별
+  - 감시 프로세스(PID 검증), ntfy 서버 연결, 알림 프로바이더, 원격 제어, 자동 시작, 침입 스냅샷 수, 구성요소 점검
+  - 이벤트 피드 (한국어 로그를 영어 라벨로 변환 표시)
+  - 네이티브 브리지(WKScriptMessageHandler)로 5초마다 갱신. topic·토큰·제스처 값은 브리지로 절대 내보내지 않음
 
 ## 구조
 
@@ -29,7 +35,8 @@ Xcode 없이 Command Line Tools만으로 빌드된다.
 | `index.html` | 레이아웃 |
 | `style.css` | HUD 테마 |
 | `app.js` | `OmniOS` 코어 + 모듈 등록 시스템 |
-| `macos/main.m` | 네이티브 맥 앱 래퍼 (WKWebView) |
+| `macos/main.m` | 네이티브 맥 앱 래퍼 (WKWebView + JS 브리지) |
+| `macos/sp1_status.m` | Security-Protocol-1 상태 수집 (프로세스/로그/설정/ntfy) |
 | `macos/build.sh` | 앱 번들 빌드 스크립트 (아이콘 포함) |
 | `macos/icon.svg` | 앱 아이콘 원본 |
 

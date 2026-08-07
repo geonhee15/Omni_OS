@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -13,41 +13,117 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- 배경 레이어 -->
+  <!-- background layers -->
   <div class="bg-grid"></div>
   <div class="bg-glow"></div>
   <div class="scanline"></div>
 
-  <!-- 상단 바 -->
-  <header class="topbar">
+  <!-- sidebar -->
+  <aside class="sidebar">
     <div class="logo">OMNI_OS</div>
-    <div class="top-status">
+    <nav class="nav">
+      <button class="nav-item active" data-panel="clock">
+        <span class="nav-icon">&#9711;</span>
+        <span class="nav-label">CLOCK</span>
+      </button>
+      <button class="nav-item" data-panel="sp1">
+        <span class="nav-icon">&#11041;</span>
+        <span class="nav-label">SECURITY-PROTOCOL-1</span>
+        <span class="nav-dot" id="sp1-nav-dot"></span>
+      </button>
+    </nav>
+    <div class="sidebar-foot">
       <span class="dot"></span>
-      <span id="system-status">SYSTEM ONLINE</span>
+      <span>SYSTEM ONLINE</span>
     </div>
-  </header>
+  </aside>
 
-  <!-- 중앙 시계 -->
-  <main class="center-stage">
-    <div class="clock-hud">
-      <div class="ring ring-outer"></div>
-      <div class="ring ring-mid"></div>
-      <div class="ring ring-inner"></div>
-      <div class="clock-core">
-        <div class="clock-time" id="clock-time">--:--:--</div>
-        <div class="clock-date" id="clock-date"></div>
+  <!-- main area -->
+  <div class="main">
+    <!-- panel 1: clock -->
+    <section class="panel panel-clock active" id="panel-clock">
+      <div class="clock-hud">
+        <div class="ring ring-outer"></div>
+        <div class="ring ring-mid"></div>
+        <div class="ring ring-inner"></div>
+        <div class="clock-core">
+          <div class="clock-time" id="clock-time">--:--:--</div>
+          <div class="clock-date" id="clock-date"></div>
+        </div>
       </div>
-    </div>
-  </main>
+    </section>
 
-  <!-- 하단 바 -->
-  <footer class="bottombar">
-    <span id="uptime">UPTIME 00:00:00</span>
-    <span class="divider">|</span>
-    <span>MODULES: CLOCK</span>
-    <span class="divider">|</span>
-    <span>v0.1.0</span>
-  </footer>
+    <!-- panel 2: Security-Protocol-1 -->
+    <section class="panel panel-sp1" id="panel-sp1">
+      <header class="panel-head">
+        <div>
+          <h1 class="panel-title">SECURITY-PROTOCOL-1</h1>
+          <div class="panel-sub">CAMERA GESTURE LOCKDOWN SYSTEM</div>
+        </div>
+        <div class="sync-note" id="sp1-sync">SYNC &mdash;</div>
+      </header>
+
+      <div class="state-banner" id="sp1-banner">
+        <div class="state-label">SYSTEM STATE</div>
+        <div class="state-value" id="sp1-state">CHECKING&hellip;</div>
+        <div class="state-since" id="sp1-since"></div>
+      </div>
+
+      <div class="card-grid">
+        <div class="card" id="card-watcher">
+          <div class="card-title">WATCHER</div>
+          <div class="card-value">&mdash;</div>
+          <div class="card-sub">gesture monitor process</div>
+        </div>
+        <div class="card" id="card-ntfy">
+          <div class="card-title">NTFY SERVER</div>
+          <div class="card-value">&mdash;</div>
+          <div class="card-sub">ntfy.sh</div>
+        </div>
+        <div class="card" id="card-notify">
+          <div class="card-title">NOTIFICATIONS</div>
+          <div class="card-value">&mdash;</div>
+          <div class="card-sub">push provider</div>
+        </div>
+        <div class="card" id="card-remote">
+          <div class="card-title">REMOTE CONTROL</div>
+          <div class="card-value">&mdash;</div>
+          <div class="card-sub">phone commands</div>
+        </div>
+        <div class="card" id="card-autostart">
+          <div class="card-title">AUTOSTART</div>
+          <div class="card-value">&mdash;</div>
+          <div class="card-sub">launch agent</div>
+        </div>
+        <div class="card" id="card-intrusions">
+          <div class="card-title">INTRUSIONS</div>
+          <div class="card-value">&mdash;</div>
+          <div class="card-sub">snapshots recorded</div>
+        </div>
+        <div class="card" id="card-components">
+          <div class="card-title">COMPONENTS</div>
+          <div class="card-value">&mdash;</div>
+          <div class="card-sub">bundle / model / config</div>
+        </div>
+      </div>
+
+      <div class="feed">
+        <div class="feed-title">EVENT FEED</div>
+        <ul class="feed-list" id="sp1-feed">
+          <li class="feed-empty">NO DATA</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- bottom bar -->
+    <footer class="bottombar">
+      <span id="uptime">UPTIME 00:00:00</span>
+      <span class="divider">|</span>
+      <span>MODULES: CLOCK &middot; SP-1</span>
+      <span class="divider">|</span>
+      <span>v0.2.0</span>
+    </footer>
+  </div>
 
   <script src="app.js"></script>
 </body>

@@ -1,8 +1,10 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import "sp1_status.h"
 
-@interface AppDelegate : NSObject <NSApplicationDelegate>
+@interface AppDelegate : NSObject <NSApplicationDelegate, WKScriptMessageHandler>
 @property (strong) NSWindow *window;
+@property (strong) WKWebView *webView;
 @end
 
 @implementation AppDelegate
@@ -18,16 +20,20 @@
     window.titlebarAppearsTransparent = YES;
     window.titleVisibility = NSWindowTitleHidden;
     window.title = @"OMNI_OS";
-    // 웹 화면의 --bg-deep(#020813)와 동일한 색으로 타이틀바를 자연스럽게 잇는다
+    // Same color as the web UI's --bg-deep (#020813) so the titlebar blends in.
     window.backgroundColor = [NSColor colorWithSRGBRed:0x02 / 255.0
                                                  green:0x08 / 255.0
                                                   blue:0x13 / 255.0
                                                  alpha:1.0];
-    window.minSize = NSMakeSize(640, 480);
+    window.minSize = NSMakeSize(760, 520);
     [window center];
 
+    // JS calls window.webkit.messageHandlers.omni.postMessage({id, cmd})
+    WKWebViewConfiguration *config = [WKWebViewConfiguration new];
+    [config.userContentController addScriptMessageHandler:self name:@"omni"];
+
     WKWebView *webView = [[WKWebView alloc] initWithFrame:window.contentView.bounds
-                                            configuration:[WKWebViewConfiguration new]];
+                                            configuration:config];
     webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [webView setValue:@NO forKey:@"drawsBackground"];
 
@@ -44,11 +50,53 @@
     [window.contentView addSubview:webView];
     [window makeKeyAndOrderFront:nil];
     self.window = window;
+    self.webView = webView;
     [NSApp activateIgnoringOtherApps:YES];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     return YES;
+}
+
+// ---- native bridge ----
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    NSDictionary *body = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
+    NSNumber *msgId = [body[@"id"] isKindOfClass:[NSNumber class]] ? body[@"id"] : nil;
+    NSString *cmd = [body[@"cmd"] isKindOfClass:[NSString class]] ? body[@"cmd"] : nil;
+    if (msgId == nil || cmd == nil) return;
+
+    if ([cmd isEqualToString:@"sp1.status"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            NSDictionary *status = SP1CollectStatus();
+            [self deliverPayload:status forId:msgId];
+        });
+    }
+    // unknown commands are ignored; the JS side times out on its own
+}
+
+- (void)deliverPayload:(NSDictionary *)payload forId:(NSNumber *)msgId {
+    NSError *err = nil;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&err];
+    if (json == nil) {
+        NSLog(@"bridge: JSON encode failed: %@", err);
+        return;
+    }
+    NSMutableString *jsonStr = [[[NSString alloc] initWithData:json
+                                                      encoding:NSUTF8StringEncoding] mutableCopy];
+    // U+2028/U+2029 are valid JSON but not valid inline JS — escape them.
+    [jsonStr replaceOccurrencesOfString:[NSString stringWithFormat:@"%C", (unichar)0x2028]
+                             withString:@"\\u2028"
+                                options:0 range:NSMakeRange(0, jsonStr.length)];
+    [jsonStr replaceOccurrencesOfString:[NSString stringWithFormat:@"%C", (unichar)0x2029]
+                             withString:@"\\u2029"
+                                options:0 range:NSMakeRange(0, jsonStr.length)];
+    NSString *js = [NSString stringWithFormat:
+        @"window.OmniNative && window.OmniNative._deliver(%@, %@)", msgId, jsonStr];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.webView evaluateJavaScript:js completionHandler:nil];
+    });
 }
 
 @end
@@ -58,7 +106,7 @@ int main(int argc, const char *argv[]) {
         NSApplication *app = [NSApplication sharedApplication];
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
 
-        // Cmd+Q, Cmd+W, Cmd+M이 동작하도록 최소한의 메뉴 구성
+        // Minimal menu so Cmd+Q / Cmd+W / Cmd+M work.
         NSMenu *mainMenu = [NSMenu new];
         NSMenuItem *appMenuItem = [NSMenuItem new];
         [mainMenu addItem:appMenuItem];
