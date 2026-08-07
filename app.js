@@ -872,6 +872,35 @@ OmniOS.register("r3d", {
 
     this.els.lights = $("r3d-lights");
     this.els.lights.addEventListener("click", () => this.toggleLights());
+
+    // lighting sliders: key intensity / ambient intensity / shadow strength
+    this.els.lightbar = $("r3d-lightbar");
+    this.els.sliders = {
+      key: { input: $("r3d-sl-key"), val: $("r3d-sl-key-v"), digits: 1 },
+      amb: { input: $("r3d-sl-amb"), val: $("r3d-sl-amb-v"), digits: 2 },
+      shadow: { input: $("r3d-sl-shadow"), val: $("r3d-sl-shadow-v"), digits: 2 },
+    };
+    for (const s of Object.values(this.els.sliders)) {
+      s.input.addEventListener("input", () => this.applyLightSettings());
+    }
+  },
+
+  applyLightSettings() {
+    const sl = this.els.sliders;
+    const key = parseFloat(sl.key.input.value);
+    const amb = parseFloat(sl.amb.input.value);
+    const shadow = parseFloat(sl.shadow.input.value);
+    sl.key.val.textContent = key.toFixed(sl.key.digits);
+    sl.amb.val.textContent = amb.toFixed(sl.amb.digits);
+    sl.shadow.val.textContent = shadow.toFixed(sl.shadow.digits);
+    if (!this._lights) return;
+    this._lights.key.intensity = key;
+    this._lights.hemi.intensity = amb;
+    this._lights.fill.intensity = amb / 3;
+    if ("intensity" in this._lights.key.shadow) {
+      this._lights.key.shadow.intensity = shadow; // scales self-shadow darkness
+    }
+    this._lights.catcher.material.opacity = 0.4 * shadow;
   },
 
   toggleLights() {
@@ -888,6 +917,8 @@ OmniOS.register("r3d", {
     this._lights.key.visible = on;
     this._lights.fill.visible = on;
     this._lights.flat.visible = !on;
+    this._lights.catcher.visible = on; // no shadows in flat mode
+    if (this.els.lightbar) this.els.lightbar.classList.toggle("disabled", !on);
   },
 
   ensureThree() {
@@ -931,6 +962,8 @@ OmniOS.register("r3d", {
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setSize(vp.clientWidth || 640, vp.clientHeight || 480);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     vp.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -942,19 +975,40 @@ OmniOS.register("r3d", {
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
 
-    // lit rig (hemisphere + key + fill) vs flat rig (uniform ambient, no shading)
-    const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x0a1a2a, 1.2);
+    // lit rig (hemisphere + key + fill) vs flat rig (uniform ambient, no shading).
+    // Ambient terms stay low so shadowed cavities actually read dark.
+    const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x0a1a2a, 0.75);
     scene.add(hemi);
-    const key = new THREE.DirectionalLight(0xffffff, 1.8);
+    const key = new THREE.DirectionalLight(0xffffff, 3.4);
     key.position.set(5, 10, 7);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.left = -6;
+    key.shadow.camera.right = 6;
+    key.shadow.camera.top = 6;
+    key.shadow.camera.bottom = -6;
+    key.shadow.camera.near = 0.1;
+    key.shadow.camera.far = 40;
+    key.shadow.bias = -0.0005;
+    key.shadow.normalBias = 0.02;
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0x88bbff, 0.5);
+    const fill = new THREE.DirectionalLight(0x88bbff, 0.25);
     fill.position.set(-6, -3, -5);
     scene.add(fill);
     const flat = new THREE.AmbientLight(0xffffff, 1.5);
     scene.add(flat);
-    this._lights = { hemi, key, fill, flat };
+
+    // invisible ground that only catches the drop shadow (grid is just lines)
+    const catcher = new THREE.Mesh(
+      new THREE.PlaneGeometry(40, 40).rotateX(-Math.PI / 2),
+      new THREE.ShadowMaterial({ opacity: 0.4 })
+    );
+    catcher.receiveShadow = true;
+    scene.add(catcher);
+
+    this._lights = { hemi, key, fill, flat, catcher };
     this.applyLights();
+    this.applyLightSettings(); // pick up current slider values
 
     const grid = new THREE.GridHelper(12, 24, 0x35d6ff, 0x123048);
     grid.material.transparent = true;
@@ -1083,6 +1137,8 @@ OmniOS.register("r3d", {
     obj.traverse((o) => {
       if (!o.isMesh) return;
       meshes++;
+      o.castShadow = true;
+      o.receiveShadow = true; // self-shadowing darkens holes and cavities
       o.userData._origMat = o.material;
       const g = o.geometry;
       const n = g.attributes.position ? g.attributes.position.count : 0;

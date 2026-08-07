@@ -1066,6 +1066,64 @@ body {
   gap: 6px;
 }
 
+/* lighting sliders */
+.r3d-lightbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--cyan-faint);
+  background: rgba(5, 18, 36, 0.5);
+  padding: 8px 14px;
+  transition: opacity 0.2s;
+}
+
+.r3d-lightbar.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.r3l-label {
+  font-size: 8px;
+  letter-spacing: 1.8px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.r3l-val {
+  font-size: 8.5px;
+  letter-spacing: 1px;
+  color: #bfe9f7;
+  width: 30px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.r3l-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  min-width: 60px;
+  height: 3px;
+  background: rgba(53, 214, 255, 0.15);
+  outline: none;
+  cursor: pointer;
+}
+
+.r3l-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan-soft);
+  cursor: pointer;
+}
+
+.r3l-slider:hover::-webkit-slider-thumb {
+  box-shadow: 0 0 14px var(--cyan);
+}
+
 /* lightbox */
 .lightbox {
   position: fixed;
