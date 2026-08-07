@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OMNI_OS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 배경 레이어 -->
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+  <div class="scanline"></div>
+
+  <!-- 상단 바 -->
+  <header class="topbar">
+    <div class="logo">OMNI_OS</div>
+    <div class="top-status">
+      <span class="dot"></span>
+      <span id="system-status">SYSTEM ONLINE</span>
+    </div>
+  </header>
+
+  <!-- 중앙 시계 -->
+  <main class="center-stage">
+    <div class="clock-hud">
+      <div class="ring ring-outer"></div>
+      <div class="ring ring-mid"></div>
+      <div class="ring ring-inner"></div>
+      <div class="clock-core">
+        <div class="clock-time" id="clock-time">--:--:--</div>
+        <div class="clock-date" id="clock-date"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 하단 바 -->
+  <footer class="bottombar">
+    <span id="uptime">UPTIME 00:00:00</span>
+    <span class="divider">|</span>
+    <span>MODULES: CLOCK</span>
+    <span class="divider">|</span>
+    <span>v0.1.0</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
