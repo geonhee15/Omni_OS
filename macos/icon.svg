@@ -1,0 +1,35 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="75%">
+      <stop offset="0%" stop-color="#0a2138"/>
+      <stop offset="100%" stop-color="#020813"/>
+    </radialGradient>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#eafcff"/>
+      <stop offset="45%" stop-color="#35d6ff"/>
+      <stop offset="100%" stop-color="#35d6ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- macOS 스타일 라운드 사각형 배경 -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="none" stroke="#35d6ff" stroke-opacity="0.25" stroke-width="6"/>
+
+  <!-- HUD 링 -->
+  <g filter="url(#glow)">
+    <circle cx="512" cy="512" r="300" fill="none" stroke="#35d6ff" stroke-opacity="0.5" stroke-width="8" stroke-dasharray="28 22"/>
+    <circle cx="512" cy="512" r="240" fill="none" stroke="#35d6ff" stroke-width="14" stroke-dasharray="640 900" stroke-linecap="round" transform="rotate(-60 512 512)"/>
+    <circle cx="512" cy="512" r="180" fill="none" stroke="#35d6ff" stroke-opacity="0.35" stroke-width="8"/>
+  </g>
+
+  <!-- 중앙 코어 -->
+  <circle cx="512" cy="512" r="150" fill="url(#core)"/>
+  <circle cx="512" cy="512" r="64" fill="#eafcff" filter="url(#glow)"/>
+</svg>
