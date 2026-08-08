@@ -106,6 +106,8 @@ OmniOS.register("sp1", {
     { match: "해제 단계", label: "UNLOCK STEP OK", tone: "ok" },
     { match: "해제 시퀀스 시간 초과", label: "UNLOCK SEQUENCE TIMEOUT", tone: "warn" },
     { match: "트리거 제스처 감지", label: "TRIGGER GESTURE DETECTED", tone: "warn" },
+    { match: "더블 클랩 감지", label: "DOUBLE CLAP — LOCKDOWN TRIGGER", tone: "warn" },
+    { match: "클랩 1/2 감지", label: "CLAP 1/2 DETECTED", tone: "" },
     { match: "제스처 인식:", label: null, tone: "" }, // handled specially (extract gesture name)
     { match: "[REMOTE] 명령 수신:", label: null, tone: "warn" }, // extract command
     { match: "[REMOTE] 원격 락다운 요청", label: "REMOTE LOCK REQUEST", tone: "warn" },
