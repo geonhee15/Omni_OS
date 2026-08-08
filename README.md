@@ -40,7 +40,8 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   랜드마크 지수평활 + 60fps 보간 스켈레톤. 켜는 동안 Security-Protocol-1 워처를 깨끗하게 종료
   (launchctl bootout)해 카메라를 해제하고, 끄거나 앱 종료 시 자동 재기동
 - **SECURITY-PROTOCOL-1** — [Security-Protocol-1](https://github.com/geonhee15/Security-Protocol-1) 실시간 상태 대시보드
-  - 시스템 상태 (LOCKDOWN / UNLOCKED / WATCHER OFFLINE) — protocol.log의 상태 마커로 판별
+  - 시스템 상태 (LOCKDOWN / UNLOCKED / WATCHER OFFLINE) — protocol.log의 상태 마커로 판별.
+    워처가 꺼져 있으면 **START WATCHER 버튼**으로 앱에서 바로 기동 (launchctl bootstrap / 앱 번들 실행)
   - 감시 프로세스(PID 검증), ntfy 서버 연결, 알림 프로바이더, 원격 제어, 자동 시작, 침입 스냅샷 수, 구성요소 점검
   - 이벤트 피드 (한국어 로그를 영어 라벨로 변환 표시)
   - **INTRUDER GALLERY** — 침입 스냅샷을 카테고리별(WRONG GESTURE / KEYBOARD / MOUSE / REMOTE SNAP)로

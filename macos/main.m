@@ -188,6 +188,11 @@
             SP1ResumeWatcher();
             [self deliverPayload:@{ @"resumed" : @YES } forId:msgId];
         });
+    } else if ([cmd isEqualToString:@"sp1.start"]) {
+        // panel START button when the watcher is found offline
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:@{ @"started" : @(SP1StartWatcher()) } forId:msgId];
+        });
     }
     // unknown commands are ignored; the JS side times out on its own
 }

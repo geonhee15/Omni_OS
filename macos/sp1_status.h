@@ -26,3 +26,7 @@ BOOL SP1PauseWatcher(void);
 // Brings a paused watcher back: bootstrap the launch agent, or relaunch the
 // app bundle for manually-started watchers. No-op if nothing was paused.
 void SP1ResumeWatcher(void);
+
+// Starts the watcher regardless of pause state (for the panel's START button
+// when the watcher is found offline). Returns YES once it is running.
+BOOL SP1StartWatcher(void);

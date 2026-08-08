@@ -115,6 +115,30 @@ BOOL SP1PauseWatcher(void) {
     return NO;
 }
 
+BOOL SP1StartWatcher(void) {
+    if (SP1RunningWatcherPid() > 0) return YES;
+    gPauseMethod = 0; // manual start supersedes any stale pause bookkeeping
+    NSString *label = nil;
+    NSString *plist = sp1AgentPlist(&label);
+    if (plist != nil) {
+        NSString *gui = [NSString stringWithFormat:@"gui/%d", getuid()];
+        runTool(@"/bin/launchctl", @[ @"bootstrap", gui, plist ]);
+        if (label != nil) {
+            // if the job was already loaded but idle, kick it explicitly
+            runTool(@"/bin/launchctl",
+                    @[ @"kickstart", [NSString stringWithFormat:@"%@/%@", gui, label] ]);
+        }
+    } else {
+        runTool(@"/usr/bin/open",
+                @[ [SP1_DIR stringByAppendingPathComponent:@"SecurityProtocol1.app"] ]);
+    }
+    for (int i = 0; i < 60; i++) { // watcher writes its pid lock early in startup
+        if (SP1RunningWatcherPid() > 0) return YES;
+        usleep(100000);
+    }
+    return NO;
+}
+
 void SP1ResumeWatcher(void) {
     if (gPauseMethod == 1) {
         NSString *label = nil;

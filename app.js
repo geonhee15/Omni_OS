@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.11.0",
+  version: "0.11.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -151,6 +151,7 @@ OmniOS.register("sp1", {
       hexstream: $("hexstream"),
       attempts: $("sp1-attempts"),
       attemptsN: $("sp1-attempts-n"),
+      start: $("sp1-start"),
       gTotal: $("g-total"),
       gRows: $("g-rows"),
       spark: $("spark"),
@@ -175,6 +176,7 @@ OmniOS.register("sp1", {
       lbCanvas: $("lb-canvas"),
       lbAnalysis: $("lb-analysis"),
     };
+    this.els.start.addEventListener("click", () => this.startWatcher());
     this.els.lightbox.addEventListener("click", () => {
       this._lbToken++; // cancels any in-flight analysis render
       this.els.lightbox.hidden = true;
@@ -493,6 +495,28 @@ OmniOS.register("sp1", {
     }));
   },
 
+  // Panel START button: bring the watcher up (launchctl bootstrap or app
+  // bundle) and poll until the panel reflects the running state.
+  async startWatcher() {
+    if (!OmniNative.available) return;
+    const btn = this.els.start;
+    btn.disabled = true;
+    btn.textContent = "STARTING…";
+    try {
+      await OmniNative.request("sp1.start", null, 20000);
+      for (let i = 0; i < 8; i++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        const s = await OmniNative.request("sp1.status");
+        this.render(s);
+        if (s.watcherRunning) break;
+      }
+    } catch (e) {
+      /* next 5s poll shows the real state */
+    }
+    btn.disabled = false;
+    btn.textContent = "▷ START WATCHER";
+  },
+
   // The native side scans a deep log tail and hands us the most recent
   // state-changing marker line. Every release path in security_protocol.py
   // logs "[OPEN]", so this classification is exact.
@@ -592,6 +616,7 @@ OmniOS.register("sp1", {
     // system state module
     const handPause = !!(OmniOS.modules.r3d && OmniOS.modules.r3d._hands &&
       OmniOS.modules.r3d._hands.sp1Paused);
+    els.start.hidden = true; // unhidden only when genuinely offline below
     if (!running) {
       if (handPause) {
         this.setState("warn", "PAUSED", "WATCHER SUSPENDED FOR HAND CONTROL");
@@ -599,6 +624,7 @@ OmniOS.register("sp1", {
       } else {
         this.setState("alert", "OFFLINE", "MONITORING PROCESS IS NOT RUNNING");
         els.navDot.className = "nav-dot alert";
+        els.start.hidden = !OmniNative.available;
       }
     } else if (state.mode === "LOCKDOWN") {
       const bits = [`PHASE ${state.phase}`];
@@ -785,6 +811,7 @@ OmniOS.register("sp1", {
 
   renderBridgeOffline() {
     this.setState("warn", "BRIDGE OFFLINE", "OPEN THE OMNI OS MAC APP FOR LIVE STATUS");
+    this.els.start.hidden = true;
     this.els.navDot.className = "nav-dot off";
     this.els.link.textContent = "LINK OFFLINE";
     this.els.link.className = "ts-item alert";

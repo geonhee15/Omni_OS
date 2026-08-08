@@ -609,6 +609,34 @@ body {
   color: var(--text-dim);
 }
 
+/* start-watcher button (shown only when the watcher is offline) */
+.sp1-start {
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--ok);
+  background: rgba(61, 255, 168, 0.06);
+  border: 1px solid rgba(61, 255, 168, 0.4);
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.sp1-start:hover {
+  background: rgba(61, 255, 168, 0.14);
+  box-shadow: 0 0 14px rgba(61, 255, 168, 0.25);
+}
+
+.sp1-start:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sp1-start[hidden] {
+  display: none;
+}
+
 /* gesture activity */
 .gest-rows {
   display: flex;
