@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.14.1",
+  version: "0.14.2",
   bootTime: Date.now(),
   modules: {},
 
@@ -2523,6 +2523,7 @@ OmniOS.register("ide", {
       out: $("ino-out"),
       mon: $("ino-mon"),
       monToggle: $("ino-mon-toggle"),
+      monPort: $("ino-mon-port"),
       baud: $("ino-baud"),
       send: $("ino-send"),
       sendBtn: $("ino-send-btn"),
@@ -2585,9 +2586,12 @@ OmniOS.register("ide", {
     // querying the toolchain spawns arduino-cli several times — only do it
     // once the user actually opens this panel
     document.addEventListener("omni:panel", (e) => {
-      if (e.detail === "ino" && !this._booted) {
+      if (e.detail !== "ino") return;
+      if (!this._booted) {
         this._booted = true;
         this.bootstrap();
+      } else {
+        this.refreshPorts(); // pick up boards plugged in since last visit
       }
     });
   },
@@ -2856,32 +2860,59 @@ OmniOS.register("ide", {
   async refreshPorts() {
     try {
       const r = await OmniNative.request("arduino.ports", null, 30000);
-      const ports = r.ports || [];
-      const sel = this.els.port;
-      const prev = localStorage.getItem("ino-port") || sel.value;
+      this.renderPorts(r.ports || []);
+    } catch (e) {
+      this.log(this.els.out, `port scan failed: ${e.message}`, "err");
+    }
+  },
+
+  // fills the BOARD select and the serial-monitor bar select, kept in sync.
+  // USB serial adapters (usbserial/usbmodem/SLAB/wchusb) sort first — those
+  // are actual dev boards; Bluetooth/debug ports are dropped entirely.
+  renderPorts(ports) {
+    const isUsb = (a) => /usbserial|usbmodem|SLAB|wchusb/i.test(a);
+    const usable = ports
+      .filter((p) => p.address && !p.address.includes("Bluetooth") &&
+        !p.address.includes("debug-console"))
+      .sort((a, b) => (isUsb(b.address) ? 1 : 0) - (isUsb(a.address) ? 1 : 0));
+
+    const fill = (sel) => {
       sel.innerHTML = "";
-      for (const p of ports) {
-        const addr = p.address;
-        if (!addr || addr.includes("Bluetooth") || addr.includes("debug-console")) continue;
+      for (const p of usable) {
         const opt = document.createElement("option");
-        opt.value = addr;
+        opt.value = p.address;
         opt.textContent = p.board
-          ? `${addr.replace("/dev/cu.", "")} \u00b7 ${p.board}`
-          : addr.replace("/dev/cu.", "");
-        if (p.fqbn && !this.els.fqbn.value) this.els.fqbn.value = p.fqbn;
+          ? `${p.address.replace("/dev/cu.", "")} \u00b7 ${p.board}`
+          : p.address.replace("/dev/cu.", "");
         sel.appendChild(opt);
       }
-      if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
-      sel.onchange = () => localStorage.setItem("ino-port", sel.value);
-      if (!sel.options.length) {
+      if (!usable.length) {
         const opt = document.createElement("option");
         opt.value = "";
         opt.textContent = "no boards found";
         sel.appendChild(opt);
       }
-    } catch (e) {
-      this.log(this.els.out, `port scan failed: ${e.message}`, "err");
-    }
+    };
+    fill(this.els.port);
+    fill(this.els.monPort);
+
+    const detected = usable.find((p) => p.fqbn);
+    if (detected && !this.els.fqbn.value) this.els.fqbn.value = detected.fqbn;
+
+    const prev = localStorage.getItem("ino-port");
+    const pick = (prev && usable.some((p) => p.address === prev))
+      ? prev
+      : (usable.find((p) => isUsb(p.address)) || usable[0] || { address: "" }).address;
+    this.setPort(pick);
+
+    this.els.port.onchange = () => this.setPort(this.els.port.value);
+    this.els.monPort.onchange = () => this.setPort(this.els.monPort.value);
+  },
+
+  setPort(addr) {
+    this.els.port.value = addr;
+    this.els.monPort.value = addr;
+    if (addr) localStorage.setItem("ino-port", addr);
   },
 
   // full board catalog from the installed cores (for FQBN search)

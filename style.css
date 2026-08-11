@@ -1718,3 +1718,5 @@ body {
 .ino-editor .cm-comment { color: rgba(111, 168, 201, 0.65); font-style: italic; }
 .ino-editor .cm-meta { color: #ff7ab8; }
 .ino-editor .cm-operator { color: #8f9dff; }
+
+.ino-mon-port { width: 190px; }
