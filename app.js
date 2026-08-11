@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.15.0",
+  version: "0.15.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -3040,6 +3040,7 @@ OmniOS.register("ide", {
       this._monOpen = true;
       this._serialBuf = "";
       this._series = {};
+      this.clearPartialLine();
       this.els.monToggle.textContent = "CLOSE";
       this.els.monToggle.classList.add("active");
       this.log(this.els.mon, `\u25cf ${port} @ ${baud}`, "okl");
@@ -3097,6 +3098,7 @@ OmniOS.register("ide", {
     while ((idx = this._serialBuf.indexOf("\n")) >= 0) {
       const line = this._serialBuf.slice(0, idx).replace(/\r$/, "");
       this._serialBuf = this._serialBuf.slice(idx + 1);
+      this.clearPartialLine(); // the pending fragment just completed
       if (line.length) {
         // surface any IPv4 the sketch prints (ARC-Scan boot log) as a
         // one-click handoff to the ARC-SCAN panel
@@ -3112,7 +3114,36 @@ OmniOS.register("ide", {
         this.plotLine(line);
       }
     }
-    if (this._serialBuf.length > 4096) this._serialBuf = ""; // runaway guard
+    if (this._serialBuf.length > 4096) {
+      this._serialBuf = this._serialBuf.slice(-2048); // keep the tail, not nothing
+    }
+    // show newline-less output live (e.g. "WiFi 연결 중...." progress dots) —
+    // without this, prints that never end in \n are invisible
+    this.renderPartialLine();
+  },
+
+  renderPartialLine() {
+    const buf = this._serialBuf.replace(/\r/g, "");
+    if (!buf.length) {
+      this.clearPartialLine();
+      return;
+    }
+    if (!this._partialEl || !this._partialEl.isConnected) {
+      this._partialEl = document.createElement("div");
+      this._partialEl.className = "partial";
+      this.els.mon.appendChild(this._partialEl);
+    } else if (this._partialEl !== this.els.mon.lastChild) {
+      this.els.mon.appendChild(this._partialEl);
+    }
+    this._partialEl.textContent = buf;
+    this.els.mon.scrollTop = this.els.mon.scrollHeight;
+  },
+
+  clearPartialLine() {
+    if (this._partialEl) {
+      this._partialEl.remove();
+      this._partialEl = null;
+    }
   },
 
   // Arduino serial-plotter protocol: "a:1 b:2" or "1,2,3" or "1 2 3"

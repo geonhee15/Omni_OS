@@ -1728,3 +1728,14 @@ body {
 }
 
 .ino-ip-chip[hidden] { display: none; }
+
+.ino-log .partial {
+  color: #eafcff;
+}
+
+.ino-log .partial::after {
+  content: "\258c";
+  color: var(--cyan);
+  animation: pulse 1s ease-in-out infinite;
+  margin-left: 1px;
+}
