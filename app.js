@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.13.0",
+  version: "0.13.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -2491,6 +2491,7 @@ OmniOS.register("ide", {
       port: $("ino-port"),
       refresh: $("ino-refresh"),
       fqbn: $("ino-fqbn"),
+      fqbnList: $("ino-fqbn-list"),
       chips: $("ino-fqbn-chips"),
       libQ: $("ino-lib-q"),
       libSearch: $("ino-lib-search"),
@@ -2520,6 +2521,11 @@ OmniOS.register("ide", {
     this.els.fqbn.value = localStorage.getItem("ino-fqbn") || "";
     this.els.fqbn.addEventListener("change", () =>
       localStorage.setItem("ino-fqbn", this.els.fqbn.value.trim()));
+    // live board search: type a board name (e.g. "s3", "uno") to pick its FQBN
+    this.els.fqbn.addEventListener("input", () => this.suggestBoards());
+    this.els.fqbn.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this.els.fqbnList.innerHTML = "";
+    });
     this.els.chips.querySelectorAll(".chip").forEach((c) =>
       c.addEventListener("click", () => {
         this.els.fqbn.value = this.FQBN_CHIPS[c.textContent] || "";
@@ -2573,8 +2579,9 @@ OmniOS.register("ide", {
       this.els.cli.className = "ts-item ok";
       const s = await OmniNative.request("arduino.sketches");
       this.renderSketches(s.sketches || []);
-      this.refreshPorts();
-      this.libInstalled();
+      await this.refreshPorts();
+      await this.libInstalled();
+      await this.loadBoards();
     } catch (e) {
       this.els.cli.textContent = "CLI ERROR";
       this.els.cli.className = "ts-item alert";
@@ -2763,6 +2770,43 @@ OmniOS.register("ide", {
       }
     } catch (e) {
       this.log(this.els.out, `port scan failed: ${e.message}`, "err");
+    }
+  },
+
+  // full board catalog from the installed cores (for FQBN search)
+  async loadBoards() {
+    try {
+      const r = await this.runCollect(["board", "listall", "--json"]);
+      this._boards = (r && r.boards) || [];
+    } catch (e) {
+      this._boards = [];
+    }
+  },
+
+  suggestBoards() {
+    const q = this.els.fqbn.value.trim().toLowerCase();
+    const box = this.els.fqbnList;
+    box.innerHTML = "";
+    if (!q || q.length < 2 || !this._boards || !this._boards.length) return;
+    if (q.split(":").length >= 3) return; // already a full FQBN — don't nag
+    const hits = this._boards.filter((b) =>
+      (b.name || "").toLowerCase().includes(q) ||
+      (b.fqbn || "").toLowerCase().includes(q)).slice(0, 10);
+    for (const b of hits) {
+      const it = document.createElement("div");
+      it.className = "ino-item";
+      const name = document.createElement("span");
+      name.textContent = b.name;
+      const f = document.createElement("span");
+      f.className = "sub";
+      f.textContent = b.fqbn;
+      it.append(name, f);
+      it.addEventListener("click", () => {
+        this.els.fqbn.value = b.fqbn;
+        localStorage.setItem("ino-fqbn", b.fqbn);
+        box.innerHTML = "";
+      });
+      box.appendChild(it);
     }
   },
 
