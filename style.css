@@ -53,11 +53,15 @@ body {
   pointer-events: none;
 }
 
+/* compositor-only sweep: animating `top` relayouts a full-width band every
+   frame, which showed up as UI lag */
 .scanline {
   position: fixed;
   left: 0;
   right: 0;
+  top: -140px;
   height: 140px;
+  will-change: transform;
   background: linear-gradient(
     to bottom,
     transparent,
@@ -69,8 +73,8 @@ body {
 }
 
 @keyframes scan {
-  from { top: -140px; }
-  to { top: 100vh; }
+  from { transform: translateY(0); }
+  to { transform: translateY(calc(100vh + 140px)); }
 }
 
 /* ---------- sidebar ---------- */

@@ -135,6 +135,114 @@ static NSString *jsStr(NSString *s) {
     [_job terminate];
 }
 
+// ── structured queries (parsed natively, compact result) ──
+
+// Runs arduino-cli and returns parsed JSON. Output is read straight into a
+// buffer — no per-line JS evaluation, which is what made large --json
+// responses (board listall: ~6 MB) lock up the UI.
+- (id)runJSON:(NSArray<NSString *> *)args timeout:(NSTimeInterval)timeout {
+    NSString *cli = [ArduinoBridge cliPath];
+    if (cli == nil) return nil;
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:cli];
+    task.arguments = args;
+    NSPipe *outP = [NSPipe pipe];
+    task.standardOutput = outP;
+    task.standardError = [NSPipe pipe];
+    NSError *err = nil;
+    if (![task launchAndReturnError:&err]) return nil;
+
+    NSMutableData *buf = [NSMutableData data];
+    NSFileHandle *fh = outP.fileHandleForReading;
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
+    while (YES) {
+        NSData *chunk = [fh availableData];
+        if (chunk.length == 0) break;
+        [buf appendData:chunk];
+        if ([deadline timeIntervalSinceNow] < 0) {
+            [task terminate];
+            break;
+        }
+    }
+    [task waitUntilExit];
+    if (buf.length == 0) return nil;
+    return [NSJSONSerialization JSONObjectWithData:buf options:0 error:nil];
+}
+
+static NSString *strOr(id v, NSString *fallback) {
+    return [v isKindOfClass:[NSString class]] ? v : fallback;
+}
+
+- (NSArray<NSDictionary *> *)listPorts {
+    id json = [self runJSON:@[ @"board", @"list", @"--json" ] timeout:20];
+    NSArray *ports = [json isKindOfClass:[NSDictionary class]]
+        ? (json[@"detected_ports"] ?: json[@"ports"]) : nil;
+    NSMutableArray *out = [NSMutableArray array];
+    for (id p in (ports ?: @[])) {
+        if (![p isKindOfClass:[NSDictionary class]]) continue;
+        id portInfo = p[@"port"] ?: p;
+        NSString *addr = strOr(portInfo[@"address"], nil);
+        if (addr == nil) continue;
+        NSArray *matching = [p[@"matching_boards"] isKindOfClass:[NSArray class]]
+            ? p[@"matching_boards"] : nil;
+        NSDictionary *b = matching.count ? matching[0] : nil;
+        [out addObject:@{
+            @"address" : addr,
+            @"board" : strOr(b[@"name"], @""),
+            @"fqbn" : strOr(b[@"fqbn"], @""),
+        }];
+    }
+    return out;
+}
+
+- (NSArray<NSDictionary *> *)listBoards {
+    id json = [self runJSON:@[ @"board", @"listall", @"--json" ] timeout:40];
+    NSArray *boards = [json isKindOfClass:[NSDictionary class]] ? json[@"boards"] : nil;
+    NSMutableArray *out = [NSMutableArray array];
+    for (id b in (boards ?: @[])) {
+        if (![b isKindOfClass:[NSDictionary class]]) continue;
+        NSString *fqbn = strOr(b[@"fqbn"], nil);
+        if (fqbn == nil) continue;
+        [out addObject:@{ @"name" : strOr(b[@"name"], fqbn), @"fqbn" : fqbn }];
+    }
+    return out;
+}
+
+- (NSArray<NSDictionary *> *)listInstalledLibs {
+    id json = [self runJSON:@[ @"lib", @"list", @"--json" ] timeout:25];
+    NSArray *libs = [json isKindOfClass:[NSDictionary class]]
+        ? (json[@"installed_libraries"] ?: json[@"libraries"]) : nil;
+    NSMutableArray *out = [NSMutableArray array];
+    for (id entry in (libs ?: @[])) {
+        if (![entry isKindOfClass:[NSDictionary class]]) continue;
+        id lib = [entry[@"library"] isKindOfClass:[NSDictionary class]] ? entry[@"library"] : entry;
+        NSString *name = strOr(lib[@"name"], nil);
+        if (name == nil) continue;
+        [out addObject:@{ @"name" : name, @"version" : strOr(lib[@"version"], @"") }];
+    }
+    return out;
+}
+
+- (NSArray<NSDictionary *> *)searchLibs:(NSString *)query {
+    if (query.length == 0) return @[];
+    id json = [self runJSON:@[ @"lib", @"search", query, @"--json" ] timeout:30];
+    NSArray *libs = [json isKindOfClass:[NSDictionary class]] ? json[@"libraries"] : nil;
+    NSMutableArray *out = [NSMutableArray array];
+    for (id lib in (libs ?: @[])) {
+        if (![lib isKindOfClass:[NSDictionary class]]) continue;
+        NSString *name = strOr(lib[@"name"], nil);
+        if (name == nil) continue;
+        id latest = [lib[@"latest"] isKindOfClass:[NSDictionary class]] ? lib[@"latest"] : nil;
+        [out addObject:@{
+            @"name" : name,
+            @"version" : strOr(latest[@"version"], @""),
+            @"sentence" : strOr(latest[@"sentence"], @""),
+        }];
+        if (out.count >= 25) break;   // the index is huge; the UI shows a dozen
+    }
+    return out;
+}
+
 // ── sketchbook ──
 
 - (NSArray<NSDictionary *> *)sketches {

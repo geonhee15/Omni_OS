@@ -289,12 +289,16 @@ NSDictionary *SP1CollectStatus(void) {
     }
     out[@"autostartInstalled"] = @(agentFile != nil);
     out[@"agentLabel"] = agentFile ? [agentFile stringByDeletingPathExtension] : (id)[NSNull null];
-    BOOL agentLoaded = NO;
-    if (agentFile != nil) {
+    // `launchctl list` dumps every user agent — cache it, this rarely changes
+    static BOOL cachedLoaded = NO;
+    static NSTimeInterval loadedAt = 0;
+    NSTimeInterval nowTs = [NSDate date].timeIntervalSince1970;
+    if (agentFile != nil && nowTs - loadedAt > 30) {
         NSString *list = runTool(@"/bin/launchctl", @[ @"list" ]);
-        agentLoaded = list != nil && [list containsString:[agentFile stringByDeletingPathExtension]];
+        cachedLoaded = list != nil && [list containsString:[agentFile stringByDeletingPathExtension]];
+        loadedAt = nowTs;
     }
-    out[@"agentLoaded"] = @(agentLoaded);
+    out[@"agentLoaded"] = @(agentFile != nil && cachedLoaded);
 
     // ── components ──
     out[@"appBundle"] = @([fm fileExistsAtPath:[SP1_DIR stringByAppendingPathComponent:@"SecurityProtocol1.app"]]);

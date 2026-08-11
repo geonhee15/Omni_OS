@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.13.1",
+  version: "0.13.2",
   bootTime: Date.now(),
   modules: {},
 
@@ -126,6 +126,8 @@ OmniOS.register("sp1", {
     { match: "손쉬운 사용", label: "ACCESSIBILITY PERMISSION MISSING", tone: "alert" },
   ],
 
+  _visible: false,
+
   init() {
     const $ = (id) => document.getElementById(id);
     this.els = {
@@ -188,7 +190,18 @@ OmniOS.register("sp1", {
     });
     this.buildBars();
     this.refresh();
-    setInterval(() => this.refresh(), this.POLL_MS);
+    // full-rate polling only while the panel is on screen; in the background
+    // it drops to 1/6 rate so the status shell (sidebar dot) stays fresh
+    // without spawning ps/launchctl every 5s
+    document.addEventListener("omni:panel", (e) => {
+      this._visible = e.detail === "sp1";
+      if (this._visible) this.refresh();
+    });
+    let tick = 0;
+    setInterval(() => {
+      tick++;
+      if (this._visible || tick % 6 === 0) this.refresh();
+    }, this.POLL_MS);
   },
 
   buildBars() {
@@ -2473,7 +2486,6 @@ OmniOS.register("ide", {
 
   _sketch: null,
   _running: false,
-  _collect: null, // {lines:[], resolve} when capturing structured output
   _monOpen: false,
   _serialBuf: "",
   _series: {},
@@ -2563,7 +2575,14 @@ OmniOS.register("ide", {
       this.log(this.els.out, "ARDUINO TOOLCHAIN REQUIRES THE OMNI OS MAC APP", "sys");
       return;
     }
-    this.bootstrap();
+    // querying the toolchain spawns arduino-cli several times — only do it
+    // once the user actually opens this panel
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "ino" && !this._booted) {
+        this._booted = true;
+        this.bootstrap();
+      }
+    });
   },
 
   async bootstrap() {
@@ -2581,7 +2600,7 @@ OmniOS.register("ide", {
       this.renderSketches(s.sketches || []);
       await this.refreshPorts();
       await this.libInstalled();
-      await this.loadBoards();
+      this.loadBoards(); // biggest query — let it finish in the background
     } catch (e) {
       this.els.cli.textContent = "CLI ERROR";
       this.els.cli.className = "ts-item alert";
@@ -2633,46 +2652,13 @@ OmniOS.register("ide", {
     }
   },
 
-  runCollect(args) {
-    // structured (JSON) output — captured, not printed
-    return new Promise(async (resolve, reject) => {
-      if (this._running) return reject(new Error("busy"));
-      this._running = true;
-      this._collect = { lines: [], resolve, reject };
-      try {
-        const r = await OmniNative.request("arduino.run",
-          JSON.stringify({ args }), 15000);
-        if (!r.ok) throw new Error("cli busy/missing");
-      } catch (e) {
-        this._running = false;
-        this._collect = null;
-        reject(e);
-      }
-    });
-  },
-
   onJobLine(line, isErr) {
-    if (this._collect) {
-      if (!isErr) this._collect.lines.push(line);
-      return;
-    }
     this.log(this.els.out, line, isErr ? "err" : "");
   },
 
   onJobDone(code) {
     this._running = false;
     this.els.stop.hidden = true;
-    if (this._collect) {
-      const c = this._collect;
-      this._collect = null;
-      this.setJob("IDLE", "");
-      try {
-        c.resolve(JSON.parse(c.lines.join("\n") || "null"));
-      } catch (e) {
-        c.reject(new Error("bad json from cli"));
-      }
-      return;
-    }
     this.setJob(code === 0 ? "DONE" : `EXIT ${code}`, code === 0 ? "ok" : "alert");
     this.log(this.els.out, code === 0 ? "\u2713 success" : `\u2717 exited with code ${code}`,
       code === 0 ? "okl" : "err");
@@ -2745,19 +2731,20 @@ OmniOS.register("ide", {
 
   async refreshPorts() {
     try {
-      const r = await this.runCollect(["board", "list", "--json"]);
-      const ports = (r && (r.detected_ports || r.ports)) || [];
+      const r = await OmniNative.request("arduino.ports", null, 30000);
+      const ports = r.ports || [];
       const sel = this.els.port;
       const prev = localStorage.getItem("ino-port") || sel.value;
       sel.innerHTML = "";
       for (const p of ports) {
-        const addr = p.port ? p.port.address : p.address;
+        const addr = p.address;
         if (!addr || addr.includes("Bluetooth") || addr.includes("debug-console")) continue;
-        const board = (p.matching_boards && p.matching_boards[0]) || null;
         const opt = document.createElement("option");
         opt.value = addr;
-        opt.textContent = board ? `${addr.replace("/dev/cu.", "")} \u00b7 ${board.name}` : addr.replace("/dev/cu.", "");
-        if (board && board.fqbn && !this.els.fqbn.value) this.els.fqbn.value = board.fqbn;
+        opt.textContent = p.board
+          ? `${addr.replace("/dev/cu.", "")} \u00b7 ${p.board}`
+          : addr.replace("/dev/cu.", "");
+        if (p.fqbn && !this.els.fqbn.value) this.els.fqbn.value = p.fqbn;
         sel.appendChild(opt);
       }
       if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
@@ -2776,8 +2763,8 @@ OmniOS.register("ide", {
   // full board catalog from the installed cores (for FQBN search)
   async loadBoards() {
     try {
-      const r = await this.runCollect(["board", "listall", "--json"]);
-      this._boards = (r && r.boards) || [];
+      const r = await OmniNative.request("arduino.boards", null, 60000);
+      this._boards = r.boards || [];
     } catch (e) {
       this._boards = [];
     }
@@ -2817,8 +2804,9 @@ OmniOS.register("ide", {
     if (!q) return;
     this.els.libResults.innerHTML = '<div class="ino-item">searching\u2026</div>';
     try {
-      const r = await this.runCollect(["lib", "search", q, "--json"]);
-      const libs = (r && r.libraries) || [];
+      const r = await OmniNative.request("arduino.libSearch",
+        JSON.stringify({ q }), 40000);
+      const libs = r.libs || [];
       const box = this.els.libResults;
       box.innerHTML = "";
       if (!libs.length) box.innerHTML = '<div class="ino-item">no results</div>';
@@ -2830,7 +2818,7 @@ OmniOS.register("ide", {
         name.textContent = lib.name;
         const ver = document.createElement("span");
         ver.className = "sub";
-        ver.textContent = (lib.latest && lib.latest.version) || "";
+        ver.textContent = lib.version || "";
         it.append(name, ver);
         it.addEventListener("click", () => this.libInstall(lib.name));
         box.appendChild(it);
@@ -2856,13 +2844,12 @@ OmniOS.register("ide", {
 
   async libInstalled() {
     try {
-      const r = await this.runCollect(["lib", "list", "--json"]);
-      const libs = (r && (r.installed_libraries || r.libraries)) || [];
+      const r = await OmniNative.request("arduino.libList", null, 30000);
+      const libs = r.libs || [];
       const box = this.els.libInstalled;
       box.innerHTML = "";
       this.els.libCount.textContent = String(libs.length);
-      for (const entry of libs.slice(0, 40)) {
-        const lib = entry.library || entry;
+      for (const lib of libs.slice(0, 40)) {
         const it = document.createElement("div");
         it.className = "ino-item";
         const name = document.createElement("span");

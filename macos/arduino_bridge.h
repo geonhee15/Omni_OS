@@ -17,8 +17,17 @@
 + (NSString *)cliPath;
 
 // One job at a time. args are passed to arduino-cli verbatim (no shell).
+// Streaming — for human-readable output (compile/upload/lib install).
 - (BOOL)runJob:(NSArray<NSString *> *)args;
 - (void)cancelJob;
+
+// Structured queries. arduino-cli --json output can be enormous
+// (board listall is ~6 MB / 190k lines), so these parse natively and hand back
+// only the few fields the UI needs — never streamed line by line.
+- (NSArray<NSDictionary *> *)listPorts;
+- (NSArray<NSDictionary *> *)listBoards;
+- (NSArray<NSDictionary *> *)listInstalledLibs;
+- (NSArray<NSDictionary *> *)searchLibs:(NSString *)query;
 
 // Sketchbook (~/Documents/Arduino) folders that contain a .ino.
 - (NSArray<NSDictionary *> *)sketches;

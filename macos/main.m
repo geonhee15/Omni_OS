@@ -183,6 +183,23 @@
     } else if ([cmd isEqualToString:@"arduino.cancel"]) {
         [self.arduino cancelJob];
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.ports"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:@{ @"ports" : [self.arduino listPorts] } forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"arduino.boards"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:@{ @"boards" : [self.arduino listBoards] } forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"arduino.libList"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:@{ @"libs" : [self.arduino listInstalledLibs] } forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"arduino.libSearch"]) {
+        NSString *q = [a[@"q"] isKindOfClass:[NSString class]] ? a[@"q"] : @"";
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:@{ @"libs" : [self.arduino searchLibs:q] } forId:msgId];
+        });
     } else if ([cmd isEqualToString:@"arduino.sketches"]) {
         [self deliverPayload:@{ @"sketches" : [self.arduino sketches] } forId:msgId];
     } else if ([cmd isEqualToString:@"arduino.pickSketch"]) {
