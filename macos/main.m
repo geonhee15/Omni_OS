@@ -346,6 +346,33 @@
         } else {
             [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
         }
+    } else if ([cmd isEqualToString:@"arc.savePly"]) {
+        // save the current point cloud via NSSavePanel
+        NSDictionary *a = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+        }
+        NSString *b64 = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
+        NSString *fname = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : @"arc_scan.ply";
+        NSData *data = b64 ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
+        if (data == nil) {
+            [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
+        } else {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSSavePanel *panel = [NSSavePanel savePanel];
+                panel.nameFieldStringValue = fname;
+                [panel beginSheetModalForWindow:self.window
+                              completionHandler:^(NSModalResponse result) {
+                    BOOL ok = NO;
+                    if (result == NSModalResponseOK && panel.URL != nil) {
+                        ok = [data writeToURL:panel.URL atomically:YES];
+                    }
+                    [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+                }];
+            });
+        }
     } else if ([cmd isEqualToString:@"arc.disconnect"]) {
         [self.arcTask cancel];
         self.arcTask = nil;

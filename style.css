@@ -1773,3 +1773,28 @@ body {
   color: rgba(111, 168, 201, 0.6);
   margin-bottom: 4px;
 }
+
+/* floor plan minimap */
+.arc-plan {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 3;
+  border: 1px solid rgba(53, 214, 255, 0.25);
+  background: rgba(3, 12, 24, 0.85);
+  padding: 8px 10px;
+  pointer-events: none;
+}
+
+.arc-plan[hidden] { display: none; }
+
+.arc-plan .arc-an-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.arc-plan-area { color: var(--ok); }
+
+.r3d-toolbar { flex-wrap: wrap; }

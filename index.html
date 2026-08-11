@@ -403,6 +403,10 @@
           <div class="arc-az" id="as-room">EST ROOM &mdash;</div>
         </div>
         <div class="arc-side" id="arc-side"></div>
+        <div class="arc-plan" id="arc-plan" hidden>
+          <div class="arc-an-title">FLOOR PLAN <span id="arc-plan-area" class="arc-plan-area">&mdash;</span></div>
+          <canvas id="arc-plan-cv" width="228" height="228"></canvas>
+        </div>
         <div class="arc-hint" id="arc-hint">
           <div class="r3d-drop-title">ROOM LIDAR OFFLINE</div>
           <div class="r3d-drop-sub">ENTER THE ESP32 ADDRESS AND CONNECT &mdash; WS PORT 81</div>
@@ -423,7 +427,11 @@
           <button class="ig-tab active" data-mode="point">POINT</button>
           <button class="ig-tab" data-mode="line">LINE</button>
           <button class="ig-tab" data-mode="retouch">RETOUCH</button>
+          <button class="ig-tab" data-mode="plan">PLAN</button>
         </div>
+        <span class="divider">|</span>
+        <button class="ig-tab" id="arc-save">&#128190; PLY</button>
+        <button class="ig-tab" id="arc-to-r3d">&#8594; RENDER_3D</button>
         <span class="r3d-file" id="arc-note">POINTS COLORED BY HEIGHT &middot; 7 CH &times; 180&deg; SWEEP</span>
         <span class="r3l-label">PT SIZE</span>
         <input type="range" class="r3l-slider arc-size" id="arc-size" min="1" max="7" step="0.5" value="2.5" />
@@ -436,7 +444,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
       <span class="divider">|</span>
-      <span>v0.16.0</span>
+      <span>v0.17.0</span>
     </footer>
   </div>
 

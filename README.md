@@ -47,8 +47,11 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   채널별 실시간 거리 리드아웃, 방위각 스윕 표시, 링버퍼 30만 포인트, 자동 재연결.
   START SCAN/STOP/CENTER 스캔 컨트롤, **SCAN ANALYTICS**(거리 히스토그램 + 평균·중앙값·σ·유효율·
   스윕 수 · 좌표 분포 퍼센타일 기반 **추정 방 크기 W×D×H**), 뷰 모드 3종 —
-  POINT / **LINE**(채널별 최신 스윕 등고선) / **RETOUCH**(방위각별 벽 반경 중앙값 + 미디언 스무딩으로
-  추정한 반투명 방 셸).
+  **POINT / LINE / RETOUCH / PLAN을 독립 토글로 자유 조합** — LINE은 채널별 최신 스윕 등고선,
+  RETOUCH는 방위각별 벽 반경 중앙값 + 미디언 스무딩으로 추정한 반투명 방 셸,
+  **PLAN은 점유 격자(8×8m, 5cm 셀) 기반 2D 평면도 미니맵**(방 윤곽 + 면적 ㎡ 계산).
+  **PLY 내보내기**(NSSavePanel 저장) 및 **→ RENDER_3D 원클릭 핸드오프** — 스캔을 그대로
+  RENDER_3D 워크스페이스에 포인트 클라우드로 열어 오빗/제스처로 감상 (패널 간 연동).
   앱에서는 네이티브 WebSocket 릴레이(NSURLSessionWebSocketTask) 사용 — omni:// 보안 컨텍스트에서
   평문 ws://가 차단되는 문제 회피. 브라우저 개발 모드는 JS WebSocket 폴백
 - **ARDUINO IDE** — Arduino IDE.app에 번들된 arduino-cli를 백엔드로 쓰는 임베디드 툴체인 패널.

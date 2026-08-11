@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.16.0",
+  version: "0.17.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -1244,7 +1244,10 @@ OmniOS.register("r3d", {
       case "stl":
         return load(new t.STLLoader(manager)).then((g) => this.meshFromGeometry(g));
       case "ply":
-        return load(new t.PLYLoader(manager)).then((g) => this.meshFromGeometry(g));
+        return load(new t.PLYLoader(manager)).then((g) =>
+          g.index || g.attributes.normal
+            ? this.meshFromGeometry(g)
+            : this.pointsFromGeometry(g)); // faceless PLY = point cloud scan
       case "obj": {
         const objLoader = new t.OBJLoader(manager);
         const mtlFile = files.find((f) => f.name.toLowerCase().endsWith(".mtl"));
@@ -1334,6 +1337,20 @@ OmniOS.register("r3d", {
     return group;
   },
 
+  // point-cloud PLY (e.g. an ARC-SCAN export) — render as points, not triangles
+  pointsFromGeometry(geometry) {
+    const { THREE } = this._three;
+    const hasColor = !!geometry.attributes.color;
+    const mat = new THREE.PointsMaterial({
+      size: 0.02,
+      vertexColors: hasColor,
+      color: hasColor ? 0xffffff : 0x9fb8cc,
+      sizeAttenuation: true,
+    });
+    if (!hasColor) mat.userData.autoDefault = true;
+    return new THREE.Points(geometry, mat);
+  },
+
   meshFromGeometry(geometry) {
     const { THREE } = this._three;
     if (!geometry.attributes.normal) geometry.computeVertexNormals();
@@ -1380,10 +1397,8 @@ OmniOS.register("r3d", {
 
     let meshes = 0, verts = 0, tris = 0;
     obj.traverse((o) => {
-      if (!o.isMesh) return;
+      if (!o.isMesh && !o.isPoints) return; // point clouds (PLY scans) count too
       meshes++;
-      o.castShadow = true;
-      o.receiveShadow = true; // self-shadowing darkens holes and cavities
       o.userData._origMat = o.material;
       const g = o.geometry;
       g.userData._refs = (g.userData._refs || 0) + 1; // shared with assembly clones
@@ -1392,7 +1407,11 @@ OmniOS.register("r3d", {
       }
       const n = g.attributes.position ? g.attributes.position.count : 0;
       verts += n;
-      tris += Math.round(g.index ? g.index.count / 3 : n / 3);
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true; // self-shadowing darkens holes and cavities
+        tris += Math.round(g.index ? g.index.count / 3 : n / 3);
+      }
     });
 
     // normalize: fit into a ~4 unit box, then wrap in a pivot group whose
@@ -2167,6 +2186,11 @@ OmniOS.register("arc", {
       asSweeps: $("as-sweeps"),
       asRoom: $("as-room"),
       modes: $("arc-modes"),
+      plan: $("arc-plan"),
+      planCv: $("arc-plan-cv"),
+      planArea: $("arc-plan-area"),
+      savePly: $("arc-save"),
+      toR3d: $("arc-to-r3d"),
       side: $("arc-side"),
       hint: $("arc-hint"),
       ip: $("arc-ip"),
@@ -2186,7 +2210,9 @@ OmniOS.register("arc", {
     this.els.clear.addEventListener("click", () => this.clearCloud());
     this.els.start.addEventListener("click", () => this.sendCmd("start"));
     this.els.modes.querySelectorAll("button").forEach((b) =>
-      b.addEventListener("click", () => this.setViewMode(b.dataset.mode)));
+      b.addEventListener("click", () => this.toggleLayer(b.dataset.mode)));
+    this.els.savePly.addEventListener("click", () => this.exportPly(false));
+    this.els.toR3d.addEventListener("click", () => this.exportPly(true));
     this.resetStats();
     this.els.stop.addEventListener("click", () => this.sendCmd("stop"));
     this.els.center.addEventListener("click", () => this.sendCmd("center"));
@@ -2302,7 +2328,7 @@ OmniOS.register("arc", {
     cloud.frustumCulled = false;
     scene.add(cloud);
 
-    this._ctx = { renderer, scene, camera, controls, geo, positions, colors, material, azLine };
+    this._ctx = { renderer, scene, camera, controls, geo, positions, colors, material, azLine, cloud };
     new ResizeObserver(() => this.resize()).observe(vp);
 
     const loop = () => {
@@ -2462,6 +2488,14 @@ OmniOS.register("arc", {
         S.histY[Math.max(0, Math.min(79, Math.floor((p.y + 0.5) / 4 * 80)))]++;
         S.histX[Math.max(0, Math.min(79, Math.floor((p.x + 4) / 8 * 80)))]++;
         S.histZ[Math.max(0, Math.min(79, Math.floor((p.z + 4) / 8 * 80)))]++;
+        if (p.y > 0.15 && p.y < 2.3) { // walls & furniture, not floor/ceiling
+          const cx = Math.floor((p.x + 4) / 8 * 160);
+          const cz = Math.floor((p.z + 4) / 8 * 160);
+          if (cx >= 0 && cx < 160 && cz >= 0 && cz < 160) {
+            const oi = cz * 160 + cx;
+            if (this._occ[oi] < 65535) this._occ[oi]++;
+          }
+        }
       } else {
         this._gridOk[ch * 181 + az] = 0;
       }
@@ -2475,8 +2509,9 @@ OmniOS.register("arc", {
     if (nowMs - (this._anAt || 0) > 500) {
       this._anAt = nowMs;
       this.renderAnalytics();
-      if (this._viewMode === "line") this.buildLines();
-      if (this._viewMode === "retouch") this.buildRoom();
+      if (this._layers.line) this.buildLines();
+      if (this._layers.retouch) this.buildRoom();
+      if (this._layers.plan) this.renderPlan();
     }
     if (this._azEl) this._azEl.textContent = `AZIMUTH ${a}\u00b0`;
     if (this._ctx) this._ctx.azLine.rotation.y = (a * Math.PI) / 180;
@@ -2542,14 +2577,123 @@ OmniOS.register("arc", {
     return { x, y, z };
   },
 
+  // ── PLAN: occupancy-grid 2D floor plan minimap ──
+  renderPlan() {
+    const cv = this.els.planCv;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(2, 8, 19, 0.9)";
+    ctx.fillRect(0, 0, W, H);
+    // fine grid
+    ctx.strokeStyle = "rgba(53, 214, 255, 0.08)";
+    for (let m = 0; m <= 8; m++) {
+      const t = (m / 8) * W;
+      ctx.beginPath(); ctx.moveTo(t, 0); ctx.lineTo(t, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, t); ctx.lineTo(W, t); ctx.stroke();
+    }
+    // occupancy cells (log intensity)
+    const cell = W / 160;
+    for (let cz = 0; cz < 160; cz++) {
+      for (let cx = 0; cx < 160; cx++) {
+        const n = this._occ[cz * 160 + cx];
+        if (!n) continue;
+        const a = Math.min(1, 0.25 + Math.log2(1 + n) / 6);
+        ctx.fillStyle = `rgba(53, 214, 255, ${a.toFixed(2)})`;
+        ctx.fillRect(cx * cell, cz * cell, Math.max(1, cell), Math.max(1, cell));
+      }
+    }
+    // estimated room outline + area (shoelace: origin + outline fan)
+    const ceilY = this.histTop(this._st.histY, -0.5, 3.5, 5) || 2.4;
+    const out = this.computeOutline(ceilY);
+    const toPx = (x, z) => [((x + 4) / 8) * W, ((z + 4) / 8) * H];
+    ctx.strokeStyle = "rgba(61, 255, 168, 0.85)";
+    ctx.lineWidth = 1.5;
+    let area = 0, prev = null, started = false;
+    ctx.beginPath();
+    for (let az = 0; az <= 180; az++) {
+      const r = out[az];
+      if (r == null) { prev = null; continue; }
+      const ph = (az * Math.PI) / 180;
+      const x = r * Math.cos(ph), z = -r * Math.sin(ph);
+      const [px, pz] = toPx(x, z);
+      if (!started || prev == null) { ctx.moveTo(px, pz); started = true; }
+      else ctx.lineTo(px, pz);
+      if (prev) area += (prev.x * z - x * prev.z) / 2; // fan triangles from origin
+      prev = { x, z };
+    }
+    ctx.stroke();
+    // scanner marker
+    const [ox, oz] = toPx(0, 0);
+    ctx.fillStyle = "#35d6ff";
+    ctx.beginPath(); ctx.arc(ox, oz, 3, 0, 7); ctx.fill();
+    this.els.planArea.textContent = `EST AREA ${Math.abs(area).toFixed(1)} M\u00b2`;
+  },
+
+  // ── PLY export: binary little-endian, positions + colors ──
+  buildPlyBlob() {
+    const n = this._count;
+    if (!n || !this._ctx) return null;
+    const header =
+      "ply\nformat binary_little_endian 1.0\n" +
+      `element vertex ${n}\n` +
+      "property float x\nproperty float y\nproperty float z\n" +
+      "property uchar red\nproperty uchar green\nproperty uchar blue\n" +
+      "end_header\n";
+    const head = new TextEncoder().encode(header);
+    const body = new ArrayBuffer(n * 15);
+    const dv = new DataView(body);
+    const P = this._ctx.positions, C = this._ctx.colors;
+    for (let i = 0; i < n; i++) {
+      const o = i * 15;
+      dv.setFloat32(o, P[i * 3], true);
+      dv.setFloat32(o + 4, P[i * 3 + 1], true);
+      dv.setFloat32(o + 8, P[i * 3 + 2], true);
+      dv.setUint8(o + 12, Math.round(C[i * 3] * 255));
+      dv.setUint8(o + 13, Math.round(C[i * 3 + 1] * 255));
+      dv.setUint8(o + 14, Math.round(C[i * 3 + 2] * 255));
+    }
+    return new Blob([head, body], { type: "application/octet-stream" });
+  },
+
+  async exportPly(toR3d) {
+    const blob = this.buildPlyBlob();
+    if (!blob) return;
+    const name = `arc_scan_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.ply`;
+    if (toR3d) {
+      // panel-to-panel handoff: open the scan as a model in RENDER_3D
+      const file = new File([blob], name);
+      document.querySelector('.nav-item[data-panel="r3d"]').click();
+      await OmniOS.modules.r3d.loadFiles([file]);
+      return;
+    }
+    if (OmniNative.available) {
+      const b64 = await new Promise((res) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result.split(",")[1]);
+        fr.readAsDataURL(blob);
+      });
+      try {
+        await OmniNative.request("arc.savePly",
+          JSON.stringify({ name, data: b64 }), 120000);
+      } catch (e) {}
+    } else {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+  },
+
   clearCloud() {
     this._count = 0;
     this._writeIdx = 0;
     if (this._ctx) this._ctx.geo.setDrawRange(0, 0);
     this.els.stats.textContent = "0 PTS";
     this.resetStats();
-    if (this._viewMode === "line") this.buildLines();
-    if (this._viewMode === "retouch") this.buildRoom();
+    this.applyLayers();
   },
 
   // ── analytics: keep every sample's statistics even though the point ring
@@ -2564,6 +2708,7 @@ OmniOS.register("arc", {
     };
     this._grid = new Float32Array(7 * 181 * 3);
     this._gridOk = new Uint8Array(7 * 181);
+    this._occ = new Uint16Array(160 * 160); // 8×8 m, 5 cm cells (floor plan)
     this._lastEdge = -1;
   },
 
@@ -2626,21 +2771,27 @@ OmniOS.register("arc", {
     ctx.stroke();
   },
 
-  // ── view modes ──
-  _viewMode: "point",
+  // ── view layers: independently toggleable, any combination ──
+  _layers: { point: true, line: false, retouch: false, plan: false },
 
-  setViewMode(mode) {
-    this._viewMode = mode;
+  toggleLayer(name) {
+    this._layers[name] = !this._layers[name];
     this.els.modes.querySelectorAll("button").forEach((b) =>
-      b.classList.toggle("active", b.dataset.mode === mode));
-    if (!this._ctx) return;
-    const c = this._ctx;
-    c.material.transparent = true;
-    c.material.opacity = mode === "point" ? 1.0 : 0.14;
-    if (this._lineGroup) this._lineGroup.visible = mode === "line";
-    if (this._roomGroup) this._roomGroup.visible = mode === "retouch";
-    if (mode === "line") this.buildLines();
-    if (mode === "retouch") this.buildRoom();
+      b.classList.toggle("active", !!this._layers[b.dataset.mode]));
+    this.applyLayers();
+  },
+
+  applyLayers() {
+    const L = this._layers;
+    if (this._ctx) {
+      this._ctx.cloud.visible = !!L.point;
+      if (L.line) this.buildLines();
+      else if (this._lineGroup) this._lineGroup.visible = false;
+      if (L.retouch) this.buildRoom();
+      else if (this._roomGroup) this._roomGroup.visible = false;
+    }
+    this.els.plan.hidden = !L.plan;
+    if (L.plan) this.renderPlan();
   },
 
   // LINE: per-channel contour — consecutive azimuth samples of the latest
@@ -2687,19 +2838,12 @@ OmniOS.register("arc", {
       seg.geometry.index.needsUpdate = true;
       seg.geometry.setDrawRange(0, ni);
     }
-    this._lineGroup.visible = this._viewMode === "line";
+    this._lineGroup.visible = !!this._layers.line;
   },
 
-  // RETOUCH: estimate the room — per-azimuth median wall radius (points in the
-  // wall height band), median-smoothed, gaps interpolated, extruded into a
-  // translucent floor-to-ceiling shell
-  buildRoom() {
-    const c = this._ctx;
-    if (!c) return;
-    const THREE = this._three.THREE;
-    const ceilY = this.histTop(this._st.histY, -0.5, 3.5, 5) || 2.4;
-
-    // 1) raw per-azimuth wall radius
+  // per-azimuth median wall radius (wall height band), gaps interpolated,
+  // 5-tap median smoothing — shared by RETOUCH shell and the PLAN outline
+  computeOutline(ceilY) {
     const raw = new Array(181).fill(null);
     for (let az = 0; az <= 180; az++) {
       const rs = [];
@@ -2715,7 +2859,6 @@ OmniOS.register("arc", {
         raw[az] = rs[Math.floor(rs.length / 2)];
       }
     }
-    // 2) fill gaps (linear, up to 12°) then 5-tap median smoothing
     const filled = raw.slice();
     let last = -1;
     for (let az = 0; az <= 180; az++) {
@@ -2728,7 +2871,7 @@ OmniOS.register("arc", {
         last = az;
       }
     }
-    const smooth = filled.map((v, az) => {
+    return filled.map((v, az) => {
       if (v == null) return null;
       const win = [];
       for (let k = az - 2; k <= az + 2; k++) {
@@ -2737,6 +2880,15 @@ OmniOS.register("arc", {
       win.sort((p, q) => p - q);
       return win[Math.floor(win.length / 2)];
     });
+  },
+
+  // RETOUCH: extrude the smoothed outline into a translucent room shell
+  buildRoom() {
+    const c = this._ctx;
+    if (!c) return;
+    const THREE = this._three.THREE;
+    const ceilY = this.histTop(this._st.histY, -0.5, 3.5, 5) || 2.4;
+    const smooth = this.computeOutline(ceilY);
 
     // 3) extrude contiguous runs into a wall ribbon
     if (this._roomGroup) {
@@ -2788,7 +2940,7 @@ OmniOS.register("arc", {
       this._roomGroup.add(mkLine(topPts, 0.7));
     }
     c.scene.add(this._roomGroup);
-    this._roomGroup.visible = this._viewMode === "retouch";
+    this._roomGroup.visible = !!this._layers.retouch;
   },
 });
 
