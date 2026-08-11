@@ -2,7 +2,7 @@
 #import <WebKit/WebKit.h>
 #import <signal.h>
 #import "sp1_status.h"
-#import "arc_scan.h"
+#import "arduino_bridge.h"
 
 // SP-1 watcher pause/resume lives in sp1_status.m (SP1PauseWatcher /
 // SP1ResumeWatcher). Resume is also called unconditionally on app exit so
@@ -68,6 +68,7 @@
 @property (strong) WKWebView *webView;
 @property (strong) OmniSchemeHandler *schemeHandler;
 @property (strong) NSURLSessionWebSocketTask *arcTask;
+@property (strong) ArduinoBridge *arduino;
 @end
 
 @implementation AppDelegate
@@ -118,6 +119,7 @@
     [window makeKeyAndOrderFront:nil];
     self.window = window;
     self.webView = webView;
+    self.arduino = [[ArduinoBridge alloc] initWithWebView:webView];
     [NSApp activateIgnoringOtherApps:YES];
 }
 
@@ -153,6 +155,63 @@
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
         completionHandler(result == NSModalResponseOK ? panel.URLs : nil);
     }];
+}
+
+// ---- Arduino IDE panel ----
+
+- (void)handleArduino:(NSString *)cmd arg:(NSString *)arg msgId:(NSNumber *)msgId {
+    NSDictionary *a = nil;
+    if (arg != nil) {
+        NSData *d = [arg dataUsingEncoding:NSUTF8StringEncoding];
+        id parsed = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+    }
+    if ([cmd isEqualToString:@"arduino.env"]) {
+        NSString *cli = [ArduinoBridge cliPath];
+        [self deliverPayload:@{ @"cli" : cli ?: [NSNull null] } forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.run"]) {
+        NSArray *args = [a[@"args"] isKindOfClass:[NSArray class]] ? a[@"args"] : nil;
+        BOOL ok = NO;
+        if (args != nil) {
+            NSMutableArray<NSString *> *clean = [NSMutableArray array];
+            for (id x in args) {
+                if ([x isKindOfClass:[NSString class]]) [clean addObject:x];
+            }
+            ok = [self.arduino runJob:clean];
+        }
+        [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.cancel"]) {
+        [self.arduino cancelJob];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.sketches"]) {
+        [self deliverPayload:@{ @"sketches" : [self.arduino sketches] } forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.pickSketch"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSOpenPanel *panel = [NSOpenPanel openPanel];
+            panel.canChooseFiles = YES;
+            panel.canChooseDirectories = YES;
+            panel.allowsMultipleSelection = NO;
+            panel.message = @"Choose a sketch (.ino) or its folder";
+            [panel beginSheetModalForWindow:self.window
+                          completionHandler:^(NSModalResponse result) {
+                NSString *path = (result == NSModalResponseOK && panel.URLs.count > 0)
+                    ? panel.URLs.firstObject.path : nil;
+                [self deliverPayload:@{ @"path" : path ?: [NSNull null] } forId:msgId];
+            }];
+        });
+    } else if ([cmd isEqualToString:@"arduino.serialOpen"]) {
+        NSString *port = [a[@"port"] isKindOfClass:[NSString class]] ? a[@"port"] : nil;
+        int baud = [a[@"baud"] isKindOfClass:[NSNumber class]] ? [a[@"baud"] intValue] : 115200;
+        NSDictionary *r = port ? [self.arduino serialOpen:port baud:baud]
+                               : @{ @"ok" : @NO, @"error" : @"no port" };
+        [self deliverPayload:r forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.serialClose"]) {
+        [self.arduino serialClose];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.serialSend"]) {
+        NSString *data = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
+        [self deliverPayload:@{ @"ok" : @([self.arduino serialSend:data]) } forId:msgId];
+    }
 }
 
 // ---- ARC-SCAN websocket relay ----
@@ -238,14 +297,12 @@
             [self arcReceiveLoop:self.arcTask];
             [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
         }
-    } else if ([cmd isEqualToString:@"arc.discover"]) {
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            [self deliverPayload:@{ @"devices" : ARCScanDevices() } forId:msgId];
-        });
     } else if ([cmd isEqualToString:@"arc.disconnect"]) {
         [self.arcTask cancel];
         self.arcTask = nil;
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd hasPrefix:@"arduino."]) {
+        [self handleArduino:cmd arg:arg msgId:msgId];
     } else if ([cmd isEqualToString:@"sp1.start"]) {
         // panel START button when the watcher is found offline
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{

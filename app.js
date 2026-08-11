@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.12.1",
+  version: "0.13.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2149,8 +2149,6 @@ OmniOS.register("arc", {
       hint: $("arc-hint"),
       ip: $("arc-ip"),
       connect: $("arc-connect"),
-      find: $("arc-find"),
-      found: $("arc-found"),
       clear: $("arc-clear"),
       size: $("arc-size"),
       navDot: $("arc-nav-dot"),
@@ -2160,7 +2158,6 @@ OmniOS.register("arc", {
     this.els.ip.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.toggle();
     });
-    this.els.find.addEventListener("click", () => this.discover());
     this.els.clear.addEventListener("click", () => this.clearCloud());
     this.els.size.addEventListener("input", () => {
       if (this._ctx) this._ctx.material.size = parseFloat(this.els.size.value) / 100;
@@ -2205,58 +2202,6 @@ OmniOS.register("arc", {
     side.appendChild(az);
     this._azEl = az;
     side.hidden = true;
-  },
-
-  // Scan the local subnet for ARC-Scan devices (port 81 + protocol probe) and
-  // list them as one-click connect targets.
-  async discover() {
-    if (!OmniNative.available) {
-      this.els.found.innerHTML =
-        '<div class="arc-scanning">DEVICE SCAN NEEDS THE OMNI OS MAC APP</div>';
-      return;
-    }
-    if (this._scanning) return;
-    this._scanning = true;
-    this.els.find.disabled = true;
-    this.els.find.textContent = "SCANNING…";
-    this.els.found.innerHTML =
-      '<div class="arc-scanning">SCANNING LOCAL NETWORK…</div>';
-    try {
-      const r = await OmniNative.request("arc.discover", null, 60000);
-      this.renderDevices(r.devices || []);
-    } catch (e) {
-      this.els.found.innerHTML =
-        '<div class="arc-scanning">SCAN FAILED</div>';
-    }
-    this._scanning = false;
-    this.els.find.disabled = false;
-    this.els.find.textContent = "FIND DEVICES";
-  },
-
-  renderDevices(devices) {
-    const box = this.els.found;
-    box.innerHTML = "";
-    if (!devices.length) {
-      box.innerHTML =
-        '<div class="arc-scanning">NO DEVICES FOUND — CHECK POWER / SAME WIFI</div>';
-      return;
-    }
-    for (const d of devices) {
-      const row = document.createElement("div");
-      row.className = "arc-dev";
-      const ip = document.createElement("span");
-      ip.textContent = d.ip;
-      const tag = document.createElement("span");
-      tag.className = `tag ${d.verified ? "ok" : "dim"}`;
-      tag.textContent = d.verified ? "ARC-SCAN ✓" : "PORT 81 OPEN";
-      row.append(ip, tag);
-      row.addEventListener("click", () => {
-        this.els.ip.value = d.ip;
-        box.innerHTML = "";
-        if (!this._enabled) this.toggle();
-      });
-      box.appendChild(row);
-    }
   },
 
   async ensureThree() {
@@ -2433,7 +2378,6 @@ OmniOS.register("arc", {
       this.setStatus("LINKED \u00b7 STREAMING", "ok");
       this.els.navDot.className = "nav-dot ok";
       this.els.hint.hidden = true;
-      this.els.found.innerHTML = "";
       this.els.side.hidden = false;
     }
     const a = typeof msg.a === "number" ? msg.a : 0;
@@ -2512,5 +2456,528 @@ OmniOS.register("arc", {
     this._writeIdx = 0;
     if (this._ctx) this._ctx.geo.setDrawRange(0, 0);
     this.els.stats.textContent = "0 PTS";
+  },
+});
+
+// ---------- module: Arduino IDE (arduino-cli + serial monitor/plotter) ----------
+// Backend is the arduino-cli bundled with Arduino IDE.app, driven through the
+// native bridge: streamed job output, sketchbook listing, a POSIX serial port.
+OmniOS.register("ide", {
+  FQBN_CHIPS: {
+    ESP32: "esp32:esp32:esp32",
+    UNO: "arduino:avr:uno",
+    NANO: "arduino:avr:nano",
+    MEGA: "arduino:avr:mega",
+  },
+  MAX_LOG: 2500,
+
+  _sketch: null,
+  _running: false,
+  _collect: null, // {lines:[], resolve} when capturing structured output
+  _monOpen: false,
+  _serialBuf: "",
+  _series: {},
+  _plotColors: ["#35d6ff", "#ffc857", "#3dffa8", "#ff7ab8", "#8f9dff", "#ffa15e"],
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      panel: $("panel-ino"),
+      cli: $("ino-cli"),
+      job: $("ino-job"),
+      sketches: $("ino-sketches"),
+      sketchNote: $("ino-sketch-note"),
+      open: $("ino-open"),
+      port: $("ino-port"),
+      refresh: $("ino-refresh"),
+      fqbn: $("ino-fqbn"),
+      chips: $("ino-fqbn-chips"),
+      libQ: $("ino-lib-q"),
+      libSearch: $("ino-lib-search"),
+      libResults: $("ino-lib-results"),
+      libInstalled: $("ino-lib-installed"),
+      libCount: $("ino-lib-count"),
+      verify: $("ino-verify"),
+      upload: $("ino-upload"),
+      stop: $("ino-stop"),
+      file: $("ino-file"),
+      tabs: $("ino-tabs"),
+      out: $("ino-out"),
+      mon: $("ino-mon"),
+      monToggle: $("ino-mon-toggle"),
+      baud: $("ino-baud"),
+      send: $("ino-send"),
+      sendBtn: $("ino-send-btn"),
+      plot: $("ino-plot"),
+      legend: $("ino-legend"),
+      views: {
+        out: $("ino-view-out"),
+        mon: $("ino-view-mon"),
+        plot: $("ino-view-plot"),
+      },
+    };
+
+    this.els.fqbn.value = localStorage.getItem("ino-fqbn") || "";
+    this.els.fqbn.addEventListener("change", () =>
+      localStorage.setItem("ino-fqbn", this.els.fqbn.value.trim()));
+    this.els.chips.querySelectorAll(".chip").forEach((c) =>
+      c.addEventListener("click", () => {
+        this.els.fqbn.value = this.FQBN_CHIPS[c.textContent] || "";
+        localStorage.setItem("ino-fqbn", this.els.fqbn.value);
+      }));
+
+    this.els.tabs.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => this.showTab(b.dataset.tab)));
+    this.els.verify.addEventListener("click", () => this.verify());
+    this.els.upload.addEventListener("click", () => this.upload());
+    this.els.stop.addEventListener("click", () =>
+      OmniNative.request("arduino.cancel").catch(() => {}));
+    this.els.open.addEventListener("click", () => this.pickSketch());
+    this.els.refresh.addEventListener("click", () => this.refreshPorts());
+    this.els.libSearch.addEventListener("click", () => this.libSearch());
+    this.els.libQ.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.libSearch();
+    });
+    this.els.monToggle.addEventListener("click", () => this.toggleMonitor());
+    this.els.sendBtn.addEventListener("click", () => this.serialSend());
+    this.els.send.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.serialSend();
+    });
+
+    // native push endpoints
+    window.OmniArduino = {
+      _out: (line, isErr) => this.onJobLine(line, isErr),
+      _done: (code) => this.onJobDone(code),
+      _serial: (b64) => this.onSerialChunk(b64),
+      _serialClosed: () => this.onSerialClosed(),
+    };
+
+    if (!OmniNative.available) {
+      this.els.cli.textContent = "CLI \u2014 APP ONLY";
+      this.log(this.els.out, "ARDUINO TOOLCHAIN REQUIRES THE OMNI OS MAC APP", "sys");
+      return;
+    }
+    this.bootstrap();
+  },
+
+  async bootstrap() {
+    try {
+      const env = await OmniNative.request("arduino.env");
+      if (!env.cli) {
+        this.els.cli.textContent = "CLI MISSING";
+        this.els.cli.className = "ts-item alert";
+        this.log(this.els.out, "arduino-cli not found \u2014 install Arduino IDE or brew install arduino-cli", "err");
+        return;
+      }
+      this.els.cli.textContent = "CLI READY";
+      this.els.cli.className = "ts-item ok";
+      const s = await OmniNative.request("arduino.sketches");
+      this.renderSketches(s.sketches || []);
+      this.refreshPorts();
+      this.libInstalled();
+    } catch (e) {
+      this.els.cli.textContent = "CLI ERROR";
+      this.els.cli.className = "ts-item alert";
+    }
+  },
+
+  // ── logging / tabs ──
+
+  log(el, text, cls) {
+    const line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = text;
+    el.appendChild(line);
+    while (el.childNodes.length > this.MAX_LOG) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+  },
+
+  showTab(name) {
+    this.els.tabs.querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.tab === name));
+    for (const [k, v] of Object.entries(this.els.views)) v.hidden = k !== name;
+    if (name === "plot") this.resizePlot();
+  },
+
+  setJob(text, tone) {
+    this.els.job.textContent = text;
+    this.els.job.className = `ts-item${tone ? " " + tone : ""}`;
+  },
+
+  // ── cli jobs ──
+
+  async runStream(args, label) {
+    if (this._running) return false;
+    this._running = true;
+    this.els.stop.hidden = false;
+    this.setJob(label, "warn");
+    this.log(this.els.out, `$ arduino-cli ${args.join(" ")}`, "sys");
+    try {
+      const r = await OmniNative.request("arduino.run",
+        JSON.stringify({ args }), 15000);
+      if (!r.ok) throw new Error("busy or cli missing");
+      return true;
+    } catch (e) {
+      this._running = false;
+      this.els.stop.hidden = true;
+      this.setJob("IDLE", "");
+      this.log(this.els.out, `failed to start: ${e.message}`, "err");
+      return false;
+    }
+  },
+
+  runCollect(args) {
+    // structured (JSON) output — captured, not printed
+    return new Promise(async (resolve, reject) => {
+      if (this._running) return reject(new Error("busy"));
+      this._running = true;
+      this._collect = { lines: [], resolve, reject };
+      try {
+        const r = await OmniNative.request("arduino.run",
+          JSON.stringify({ args }), 15000);
+        if (!r.ok) throw new Error("cli busy/missing");
+      } catch (e) {
+        this._running = false;
+        this._collect = null;
+        reject(e);
+      }
+    });
+  },
+
+  onJobLine(line, isErr) {
+    if (this._collect) {
+      if (!isErr) this._collect.lines.push(line);
+      return;
+    }
+    this.log(this.els.out, line, isErr ? "err" : "");
+  },
+
+  onJobDone(code) {
+    this._running = false;
+    this.els.stop.hidden = true;
+    if (this._collect) {
+      const c = this._collect;
+      this._collect = null;
+      this.setJob("IDLE", "");
+      try {
+        c.resolve(JSON.parse(c.lines.join("\n") || "null"));
+      } catch (e) {
+        c.reject(new Error("bad json from cli"));
+      }
+      return;
+    }
+    this.setJob(code === 0 ? "DONE" : `EXIT ${code}`, code === 0 ? "ok" : "alert");
+    this.log(this.els.out, code === 0 ? "\u2713 success" : `\u2717 exited with code ${code}`,
+      code === 0 ? "okl" : "err");
+    if (this._reopenAfterJob) {
+      this._reopenAfterJob = false;
+      this.toggleMonitor();
+    }
+  },
+
+  // ── sketch selection ──
+
+  renderSketches(list) {
+    const box = this.els.sketches;
+    box.innerHTML = "";
+    this.els.sketchNote.textContent = `${list.length} IN SKETCHBOOK`;
+    for (const s of list) {
+      const it = document.createElement("div");
+      it.className = "ino-item";
+      it.textContent = s.name;
+      it.title = s.path;
+      it.addEventListener("click", () => this.selectSketch(s.path, s.name, it));
+      box.appendChild(it);
+    }
+  },
+
+  selectSketch(path, name, el) {
+    this._sketch = path;
+    this.els.file.textContent = name.toUpperCase();
+    this.els.sketches.querySelectorAll(".ino-item").forEach((x) =>
+      x.classList.toggle("active", x === el));
+  },
+
+  async pickSketch() {
+    try {
+      const r = await OmniNative.request("arduino.pickSketch", null, 120000);
+      if (!r.path) return;
+      let p = r.path;
+      if (p.endsWith(".ino")) p = p.slice(0, p.lastIndexOf("/"));
+      this.selectSketch(p, p.split("/").pop(), null);
+    } catch (e) {}
+  },
+
+  // ── build / upload ──
+
+  verify() {
+    const fqbn = this.els.fqbn.value.trim();
+    if (!this._sketch) return this.log(this.els.out, "select a sketch first", "err");
+    if (!fqbn) return this.log(this.els.out, "set an FQBN (board) first", "err");
+    this.showTab("out");
+    this.runStream(["compile", "--fqbn", fqbn, this._sketch], "COMPILING\u2026");
+  },
+
+  upload() {
+    const fqbn = this.els.fqbn.value.trim();
+    const port = this.els.port.value;
+    if (!this._sketch) return this.log(this.els.out, "select a sketch first", "err");
+    if (!fqbn) return this.log(this.els.out, "set an FQBN (board) first", "err");
+    if (!port) return this.log(this.els.out, "no port selected \u2014 refresh ports", "err");
+    this.showTab("out");
+    if (this._monOpen) {
+      // the port can't be shared with the uploader
+      this._reopenAfterJob = true;
+      this.toggleMonitor();
+    }
+    this.runStream(["compile", "--fqbn", fqbn, "-p", port, "-u", this._sketch],
+      "UPLOADING\u2026");
+  },
+
+  // ── boards / ports ──
+
+  async refreshPorts() {
+    try {
+      const r = await this.runCollect(["board", "list", "--json"]);
+      const ports = (r && (r.detected_ports || r.ports)) || [];
+      const sel = this.els.port;
+      const prev = localStorage.getItem("ino-port") || sel.value;
+      sel.innerHTML = "";
+      for (const p of ports) {
+        const addr = p.port ? p.port.address : p.address;
+        if (!addr || addr.includes("Bluetooth") || addr.includes("debug-console")) continue;
+        const board = (p.matching_boards && p.matching_boards[0]) || null;
+        const opt = document.createElement("option");
+        opt.value = addr;
+        opt.textContent = board ? `${addr.replace("/dev/cu.", "")} \u00b7 ${board.name}` : addr.replace("/dev/cu.", "");
+        if (board && board.fqbn && !this.els.fqbn.value) this.els.fqbn.value = board.fqbn;
+        sel.appendChild(opt);
+      }
+      if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+      sel.onchange = () => localStorage.setItem("ino-port", sel.value);
+      if (!sel.options.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "no boards found";
+        sel.appendChild(opt);
+      }
+    } catch (e) {
+      this.log(this.els.out, `port scan failed: ${e.message}`, "err");
+    }
+  },
+
+  // ── libraries ──
+
+  async libSearch() {
+    const q = this.els.libQ.value.trim();
+    if (!q) return;
+    this.els.libResults.innerHTML = '<div class="ino-item">searching\u2026</div>';
+    try {
+      const r = await this.runCollect(["lib", "search", q, "--json"]);
+      const libs = (r && r.libraries) || [];
+      const box = this.els.libResults;
+      box.innerHTML = "";
+      if (!libs.length) box.innerHTML = '<div class="ino-item">no results</div>';
+      for (const lib of libs.slice(0, 12)) {
+        const it = document.createElement("div");
+        it.className = "ino-item";
+        it.title = lib.sentence || "";
+        const name = document.createElement("span");
+        name.textContent = lib.name;
+        const ver = document.createElement("span");
+        ver.className = "sub";
+        ver.textContent = (lib.latest && lib.latest.version) || "";
+        it.append(name, ver);
+        it.addEventListener("click", () => this.libInstall(lib.name));
+        box.appendChild(it);
+      }
+    } catch (e) {
+      this.els.libResults.innerHTML = '<div class="ino-item">search failed</div>';
+    }
+  },
+
+  libInstall(name) {
+    this.showTab("out");
+    this.runStream(["lib", "install", name], "INSTALLING LIB\u2026").then((ok) => {
+      if (ok) {
+        const iv = setInterval(() => {
+          if (!this._running) {
+            clearInterval(iv);
+            this.libInstalled();
+          }
+        }, 500);
+      }
+    });
+  },
+
+  async libInstalled() {
+    try {
+      const r = await this.runCollect(["lib", "list", "--json"]);
+      const libs = (r && (r.installed_libraries || r.libraries)) || [];
+      const box = this.els.libInstalled;
+      box.innerHTML = "";
+      this.els.libCount.textContent = String(libs.length);
+      for (const entry of libs.slice(0, 40)) {
+        const lib = entry.library || entry;
+        const it = document.createElement("div");
+        it.className = "ino-item";
+        const name = document.createElement("span");
+        name.textContent = lib.name || "?";
+        const ver = document.createElement("span");
+        ver.className = "sub";
+        ver.textContent = lib.version || "";
+        it.append(name, ver);
+        box.appendChild(it);
+      }
+    } catch (e) {}
+  },
+
+  // ── serial monitor / plotter ──
+
+  async toggleMonitor() {
+    if (this._monOpen) {
+      OmniNative.request("arduino.serialClose").catch(() => {});
+      this.onSerialClosed();
+      return;
+    }
+    const port = this.els.port.value;
+    if (!port) return this.log(this.els.mon, "no port selected", "err");
+    const baud = parseInt(this.els.baud.value, 10) || 115200;
+    try {
+      const r = await OmniNative.request("arduino.serialOpen",
+        JSON.stringify({ port, baud }));
+      if (!r.ok) throw new Error(r.error || "open failed");
+      this._monOpen = true;
+      this._serialBuf = "";
+      this._series = {};
+      this.els.monToggle.textContent = "CLOSE";
+      this.els.monToggle.classList.add("active");
+      this.log(this.els.mon, `\u25cf ${port} @ ${baud}`, "okl");
+    } catch (e) {
+      this.log(this.els.mon, `open failed: ${e.message}`, "err");
+    }
+  },
+
+  onSerialClosed() {
+    if (!this._monOpen) return;
+    this._monOpen = false;
+    this.els.monToggle.textContent = "OPEN";
+    this.els.monToggle.classList.remove("active");
+    this.log(this.els.mon, "\u25cb port closed", "sys");
+  },
+
+  serialSend() {
+    if (!this._monOpen) return;
+    const text = this.els.send.value;
+    this.els.send.value = "";
+    OmniNative.request("arduino.serialSend",
+      JSON.stringify({ data: text + "\n" })).catch(() => {});
+    this.log(this.els.mon, `> ${text}`, "sys");
+  },
+
+  onSerialChunk(b64) {
+    let text = "";
+    try {
+      text = decodeURIComponent(escape(atob(b64)));
+    } catch (e) {
+      try { text = atob(b64); } catch (_) { return; }
+    }
+    this._serialBuf += text;
+    let idx;
+    while ((idx = this._serialBuf.indexOf("\n")) >= 0) {
+      const line = this._serialBuf.slice(0, idx).replace(/\r$/, "");
+      this._serialBuf = this._serialBuf.slice(idx + 1);
+      if (line.length) {
+        this.log(this.els.mon, line, "");
+        this.plotLine(line);
+      }
+    }
+    if (this._serialBuf.length > 4096) this._serialBuf = ""; // runaway guard
+  },
+
+  // Arduino serial-plotter protocol: "a:1 b:2" or "1,2,3" or "1 2 3"
+  plotLine(line) {
+    const parts = line.trim().split(/[\s,\t]+/).filter(Boolean);
+    if (!parts.length || parts.length > 6) return;
+    const vals = [];
+    for (let i = 0; i < parts.length; i++) {
+      let label = `V${i + 1}`;
+      let vs = parts[i];
+      const ci = vs.indexOf(":");
+      if (ci > 0) {
+        label = vs.slice(0, ci);
+        vs = vs.slice(ci + 1);
+      }
+      const v = parseFloat(vs);
+      if (!isFinite(v)) return; // non-numeric line — not plotter data
+      vals.push([label, v]);
+    }
+    for (const [label, v] of vals) {
+      let s = this._series[label];
+      if (!s) {
+        if (Object.keys(this._series).length >= 6) continue;
+        s = this._series[label] = { data: [], color: this._plotColors[Object.keys(this._series).length] };
+      }
+      s.data.push(v);
+      if (s.data.length > 600) s.data.shift();
+    }
+    if (!this.els.views.plot.hidden) this.drawPlot();
+  },
+
+  resizePlot() {
+    const c = this.els.plot;
+    const r = c.getBoundingClientRect();
+    if (r.width && r.height) {
+      c.width = r.width * (window.devicePixelRatio || 1);
+      c.height = r.height * (window.devicePixelRatio || 1);
+    }
+    this.drawPlot();
+  },
+
+  drawPlot() {
+    const c = this.els.plot;
+    const ctx = c.getContext("2d");
+    const w = c.width;
+    const h = c.height;
+    ctx.clearRect(0, 0, w, h);
+    const names = Object.keys(this._series);
+    if (!names.length) return;
+    let min = Infinity, max = -Infinity;
+    for (const n of names) {
+      for (const v of this._series[n].data) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+    if (!isFinite(min)) return;
+    if (max - min < 1e-9) { max += 1; min -= 1; }
+    const pad = (max - min) * 0.1;
+    min -= pad; max += pad;
+
+    // grid
+    ctx.strokeStyle = "rgba(53, 214, 255, 0.12)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 5; i++) {
+      const y = (h * i) / 5;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+
+    for (const n of names) {
+      const s = this._series[n];
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = Math.max(1.2, (window.devicePixelRatio || 1));
+      ctx.beginPath();
+      s.data.forEach((v, i) => {
+        const x = (i / 599) * w;
+        const y = h - ((v - min) / (max - min)) * h;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+    // legend
+    this.els.legend.innerHTML = names.map((n) => {
+      const last = this._series[n].data[this._series[n].data.length - 1];
+      return `<span style="color:${this._series[n].color}">\u25a0 ${n} ${last !== undefined ? last.toFixed(2) : ""}</span>`;
+    }).join("");
   },
 });

@@ -19,7 +19,7 @@ cp -R "$ROOT/vendor" "$APP/Contents/Resources/web/vendor"
 cp "$ROOT/macos/Info.plist" "$APP/Contents/"
 
 # 3. 컴파일
-clang -fobjc-arc -O2 "$ROOT/macos/main.m" "$ROOT/macos/sp1_status.m" "$ROOT/macos/arc_scan.m" \
+clang -fobjc-arc -O2 "$ROOT/macos/main.m" "$ROOT/macos/sp1_status.m" "$ROOT/macos/arduino_bridge.m" \
   -o "$APP/Contents/MacOS/OmniOS" \
   -framework Cocoa -framework WebKit -framework ImageIO -framework CoreGraphics
 

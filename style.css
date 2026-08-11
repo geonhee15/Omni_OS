@@ -1474,52 +1474,143 @@ body {
   color: var(--cyan);
 }
 
-/* discovered device list */
-.arc-found {
-  pointer-events: auto;
-  display: flex;
+
+/* ---------- panel: Arduino IDE ---------- */
+.panel-ino {
   flex-direction: column;
-  gap: 5px;
-  margin-top: 6px;
-  min-width: 260px;
+  gap: 8px;
+  padding: 14px 16px 6px;
 }
 
-.arc-found:empty {
+.ino-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: 8px;
+}
+
+.ino-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ino-term {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
+
+.ino-term[hidden] {
   display: none;
 }
 
-.arc-dev {
+.ino-log {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 10px;
+  line-height: 1.55;
+  letter-spacing: 0.4px;
+  color: #bfe9f7;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.ino-log::-webkit-scrollbar { width: 6px; }
+.ino-log::-webkit-scrollbar-thumb { background: rgba(53, 214, 255, 0.2); }
+
+.ino-log .err { color: var(--alert); }
+.ino-log .okl { color: var(--ok); }
+.ino-log .sys { color: rgba(111, 168, 201, 0.8); }
+
+.ino-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 150px;
+  overflow-y: auto;
+  margin-bottom: 6px;
+}
+
+.ino-list::-webkit-scrollbar { width: 5px; }
+.ino-list::-webkit-scrollbar-thumb { background: rgba(53, 214, 255, 0.2); }
+
+.ino-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  border: 1px solid rgba(53, 214, 255, 0.28);
-  background: rgba(5, 18, 36, 0.72);
-  padding: 7px 12px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 1.6px;
+  gap: 8px;
+  padding: 4.5px 8px;
+  border: 1px solid rgba(53, 214, 255, 0.14);
+  font-size: 9px;
+  letter-spacing: 1px;
   color: #bfe9f7;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.arc-dev:hover {
+.ino-item:hover { border-color: var(--cyan); background: rgba(53, 214, 255, 0.07); }
+.ino-item.active {
   border-color: var(--cyan);
-  background: rgba(53, 214, 255, 0.12);
+  background: rgba(53, 214, 255, 0.1);
+  color: var(--cyan);
 }
 
-.arc-dev .tag {
+.ino-item .sub {
   margin-left: auto;
   font-size: 8px;
-  letter-spacing: 1.4px;
+  color: rgba(111, 168, 201, 0.7);
+  flex-shrink: 0;
 }
 
-.arc-dev .tag.ok { color: var(--ok); }
-.arc-dev .tag.dim { color: rgba(111, 168, 201, 0.7); }
+.ino-input, .ino-select {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 1px;
+  color: #bfe9f7;
+  background: rgba(3, 12, 24, 0.7);
+  border: 1px solid rgba(53, 214, 255, 0.3);
+  padding: 5px 8px;
+  outline: none;
+  width: 100%;
+}
 
-.arc-scanning {
-  font-size: 9px;
-  letter-spacing: 2px;
-  color: var(--text-dim);
-  animation: pulse 1.4s ease-in-out infinite;
+.ino-input:focus { border-color: var(--cyan); }
+
+.ino-select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.ino-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ino-wide { width: 100%; text-align: center; margin-top: 2px; }
+
+.ino-monbar { margin-top: 6px; flex-shrink: 0; }
+.ino-baud { width: 86px; }
+.ino-send { flex: 1; }
+
+.ino-plot {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.ino-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 4px 2px 0;
+  font-size: 8.5px;
+  letter-spacing: 1.2px;
 }
