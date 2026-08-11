@@ -1621,3 +1621,88 @@ body {
 
 .ino-fqbn-list { max-height: 132px; margin-top: 4px; margin-bottom: 0; }
 .ino-fqbn-list:empty { display: none; }
+
+/* code editor (CodeMirror, HUD dark skin) */
+.ino-filetabs {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  margin-bottom: 6px;
+}
+
+.ino-filetabs:empty { display: none; }
+
+.ino-ftab {
+  font-size: 8.5px;
+  letter-spacing: 1.2px;
+  color: var(--text-dim);
+  border: 1px solid rgba(53, 214, 255, 0.18);
+  padding: 3.5px 9px;
+  cursor: pointer;
+}
+
+.ino-ftab:hover { color: var(--cyan); }
+.ino-ftab.active {
+  color: var(--cyan);
+  border-color: var(--cyan);
+  background: rgba(53, 214, 255, 0.08);
+}
+
+.ino-ftab .dirty { color: var(--warn); margin-left: 4px; }
+
+.ino-editor {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  border: 1px solid rgba(53, 214, 255, 0.14);
+}
+
+.ino-editor-empty[hidden] {
+  display: none;
+}
+
+.ino-editor-empty {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: rgba(111, 168, 201, 0.55);
+}
+
+.ino-editor .CodeMirror {
+  position: absolute;
+  inset: 0;
+  height: 100% !important;
+  z-index: 2;
+  background: rgba(2, 8, 19, 0.8);
+  color: #bfe9f7;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.ino-editor .CodeMirror-gutters {
+  background: rgba(5, 18, 36, 0.9);
+  border-right: 1px solid rgba(53, 214, 255, 0.15);
+}
+
+.ino-editor .CodeMirror-linenumber { color: rgba(111, 168, 201, 0.45); }
+.ino-editor .CodeMirror-cursor { border-left: 2px solid var(--cyan); }
+.ino-editor .CodeMirror-selected { background: rgba(53, 214, 255, 0.15); }
+.ino-editor .CodeMirror-focused .CodeMirror-selected { background: rgba(53, 214, 255, 0.22); }
+.ino-editor .CodeMirror-activeline-background { background: rgba(53, 214, 255, 0.05); }
+
+.ino-editor .cm-keyword { color: #6fb7ff; }
+.ino-editor .cm-type, .ino-editor .cm-builtin { color: #35d6ff; }
+.ino-editor .cm-def { color: #eafcff; }
+.ino-editor .cm-variable { color: #bfe9f7; }
+.ino-editor .cm-number { color: #ffc857; }
+.ino-editor .cm-string { color: #3dffa8; }
+.ino-editor .cm-comment { color: rgba(111, 168, 201, 0.65); font-style: italic; }
+.ino-editor .cm-meta { color: #ff7ab8; }
+.ino-editor .cm-operator { color: #8f9dff; }

@@ -32,6 +32,12 @@
 // Sketchbook (~/Documents/Arduino) folders that contain a .ino.
 - (NSArray<NSDictionary *> *)sketches;
 
+// Source files of a sketch folder (.ino/.h/.hpp/.c/.cpp, ≤2 MB each).
+// Remembers the folder as the only place writeFile may write into.
+- (NSDictionary *)readSketch:(NSString *)dir;
+// Writes content to `name` inside the last read sketch folder.
+- (NSDictionary *)writeFile:(NSString *)name content:(NSString *)content;
+
 // Serial monitor session (single).
 - (NSDictionary *)serialOpen:(NSString *)port baud:(int)baud;
 - (void)serialClose;

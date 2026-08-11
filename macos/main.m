@@ -202,6 +202,16 @@
         });
     } else if ([cmd isEqualToString:@"arduino.sketches"]) {
         [self deliverPayload:@{ @"sketches" : [self.arduino sketches] } forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.readSketch"]) {
+        NSString *dir = [a[@"dir"] isKindOfClass:[NSString class]] ? a[@"dir"] : nil;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:(dir ? [self.arduino readSketch:dir]
+                                      : @{ @"ok" : @NO }) forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"arduino.writeFile"]) {
+        NSString *name = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : nil;
+        NSString *content = [a[@"content"] isKindOfClass:[NSString class]] ? a[@"content"] : nil;
+        [self deliverPayload:[self.arduino writeFile:name content:content] forId:msgId];
     } else if ([cmd isEqualToString:@"arduino.pickSketch"]) {
         dispatch_async(dispatch_get_main_queue(), ^{
             NSOpenPanel *panel = [NSOpenPanel openPanel];

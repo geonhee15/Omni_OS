@@ -50,6 +50,8 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
 - **ARDUINO IDE** — Arduino IDE.app에 번들된 arduino-cli를 백엔드로 쓰는 임베디드 툴체인 패널.
   스케치북(~/Documents/Arduino) 목록·임의 .ino 선택, 보드 포트 스캔(FQBN 자동 감지 + ESP32/UNO/NANO/MEGA 칩),
   VERIFY(컴파일)/UPLOAD(컴파일+플래시) 스트리밍 출력 터미널, 라이브러리 검색·설치·설치 목록,
+  **CODE 에디터**(CodeMirror, C++ 구문 강조 HUD 테마 — 스케치 선택 시 .ino/.h/.cpp 파일 탭으로 열림,
+  Cmd+S 저장, VERIFY/UPLOAD 전 수정 파일 자동 저장, 쓰기는 열린 스케치 폴더로 제한),
   시리얼 모니터(보드레이트 선택·송신), 시리얼 플로터("L:V" 또는 "V1 V2" 라인 자동 파싱, 6시리즈 오토스케일).
   네이티브 브리지: NSTask 스트리밍 잡 + POSIX termios 시리얼 세션. 업로드 시 모니터 자동 닫고 복구
 - **SECURITY-PROTOCOL-1** — [Security-Protocol-1](https://github.com/geonhee15/Security-Protocol-1) 실시간 상태 대시보드

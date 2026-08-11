@@ -10,6 +10,7 @@
     href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap"
     rel="stylesheet"
   />
+  <link rel="stylesheet" href="vendor/codemirror/codemirror.css" />
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
     {
@@ -329,13 +330,25 @@
             <button class="ig-tab" id="ino-stop" hidden>&#9632; STOP</button>
             <span class="r3d-file" id="ino-file">NO SKETCH SELECTED</span>
             <div class="r3d-modes" id="ino-tabs">
-              <button class="ig-tab active" data-tab="out">OUTPUT</button>
+              <button class="ig-tab active" data-tab="code">CODE</button>
+              <button class="ig-tab" data-tab="out">OUTPUT</button>
               <button class="ig-tab" data-tab="mon">SERIAL MONITOR</button>
               <button class="ig-tab" data-tab="plot">PLOTTER</button>
             </div>
           </div>
 
-          <div class="ino-term mod" id="ino-view-out">
+          <div class="ino-term mod" id="ino-view-code">
+            <div class="ino-filetabs" id="ino-filetabs"></div>
+            <div class="ino-editor" id="ino-editor">
+              <div class="ino-editor-empty" id="ino-editor-empty">SELECT A SKETCH TO VIEW ITS CODE</div>
+            </div>
+            <div class="ino-row ino-monbar">
+              <button class="ig-tab" id="ino-save">&#128190; SAVE</button>
+              <span class="r3l-label" id="ino-save-note">CMD+S SAVES &middot; VERIFY/UPLOAD AUTO-SAVES ALL</span>
+            </div>
+          </div>
+
+          <div class="ino-term mod" id="ino-view-out" hidden>
             <div class="ino-log" id="ino-out"></div>
           </div>
 
@@ -399,7 +412,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
       <span class="divider">|</span>
-      <span>v0.13.2</span>
+      <span>v0.14.0</span>
     </footer>
   </div>
 
@@ -415,6 +428,8 @@
     </div>
   </div>
 
+  <script src="vendor/codemirror/codemirror.min.js"></script>
+  <script src="vendor/codemirror/clike.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

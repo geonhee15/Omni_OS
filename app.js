@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.13.2",
+  version: "0.14.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2510,6 +2510,11 @@ OmniOS.register("ide", {
       libResults: $("ino-lib-results"),
       libInstalled: $("ino-lib-installed"),
       libCount: $("ino-lib-count"),
+      fileTabs: $("ino-filetabs"),
+      editor: $("ino-editor"),
+      editorEmpty: $("ino-editor-empty"),
+      save: $("ino-save"),
+      saveNote: $("ino-save-note"),
       verify: $("ino-verify"),
       upload: $("ino-upload"),
       stop: $("ino-stop"),
@@ -2524,6 +2529,7 @@ OmniOS.register("ide", {
       plot: $("ino-plot"),
       legend: $("ino-legend"),
       views: {
+        code: $("ino-view-code"),
         out: $("ino-view-out"),
         mon: $("ino-view-mon"),
         plot: $("ino-view-plot"),
@@ -2556,6 +2562,7 @@ OmniOS.register("ide", {
     this.els.libQ.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.libSearch();
     });
+    this.els.save.addEventListener("click", () => this.saveCurrent());
     this.els.monToggle.addEventListener("click", () => this.toggleMonitor());
     this.els.sendBtn.addEventListener("click", () => this.serialSend());
     this.els.send.addEventListener("keydown", (e) => {
@@ -2623,6 +2630,7 @@ OmniOS.register("ide", {
       b.classList.toggle("active", b.dataset.tab === name));
     for (const [k, v] of Object.entries(this.els.views)) v.hidden = k !== name;
     if (name === "plot") this.resizePlot();
+    if (name === "code" && this._cm) this._cm.refresh();
   },
 
   setJob(text, tone) {
@@ -2689,6 +2697,7 @@ OmniOS.register("ide", {
     this.els.file.textContent = name.toUpperCase();
     this.els.sketches.querySelectorAll(".ino-item").forEach((x) =>
       x.classList.toggle("active", x === el));
+    this.openCode(path);
   },
 
   async pickSketch() {
@@ -2701,22 +2710,137 @@ OmniOS.register("ide", {
     } catch (e) {}
   },
 
+  // ── code editor ──
+  _cm: null,
+  _files: [],       // [{name, doc, dirty}]
+  _fileIdx: -1,
+
+  ensureEditor() {
+    if (this._cm) return this._cm;
+    if (typeof window.CodeMirror === "undefined") return null; // scripts still loading
+    this._cm = window.CodeMirror(this.els.editor, {
+      mode: "text/x-c++src",
+      lineNumbers: true,
+      indentUnit: 2,
+      tabSize: 2,
+      styleActiveLine: false,
+      extraKeys: {
+        "Cmd-S": () => this.saveCurrent(),
+        "Ctrl-S": () => this.saveCurrent(),
+      },
+    });
+    this._cm.on("change", () => {
+      const f = this._files[this._fileIdx];
+      if (f && !f.dirty) {
+        f.dirty = true;
+        this.renderFileTabs();
+      }
+    });
+    return this._cm;
+  },
+
+  async openCode(path) {
+    if (!OmniNative.available) return;
+    this.showTab("code");
+    try {
+      const r = await OmniNative.request("arduino.readSketch",
+        JSON.stringify({ dir: path }), 15000);
+      if (!r.ok) throw new Error(r.error || "read failed");
+      const cm = this.ensureEditor();
+      if (!cm) return;
+      this.els.editorEmpty.hidden = true;
+      this._files = (r.files || []).map((f) => ({
+        name: f.name,
+        doc: window.CodeMirror.Doc(f.content, "text/x-c++src"),
+        dirty: false,
+      }));
+      this._fileIdx = -1;
+      this.renderFileTabs();
+      if (this._files.length) this.showFile(0);
+      else this.els.editorEmpty.hidden = false;
+    } catch (e) {
+      this.log(this.els.out, `open failed: ${e.message}`, "err");
+    }
+  },
+
+  showFile(i) {
+    const cm = this.ensureEditor();
+    const f = this._files[i];
+    if (!cm || !f) return;
+    this._fileIdx = i;
+    cm.swapDoc(f.doc);
+    cm.refresh();
+    cm.focus();
+    this.renderFileTabs();
+  },
+
+  renderFileTabs() {
+    const bar = this.els.fileTabs;
+    bar.innerHTML = "";
+    this._files.forEach((f, i) => {
+      const t = document.createElement("div");
+      t.className = `ino-ftab${i === this._fileIdx ? " active" : ""}`;
+      t.textContent = f.name;
+      if (f.dirty) {
+        const d = document.createElement("span");
+        d.className = "dirty";
+        d.textContent = "\u25cf";
+        t.appendChild(d);
+      }
+      t.addEventListener("click", () => this.showFile(i));
+      bar.appendChild(t);
+    });
+  },
+
+  async saveFile(i) {
+    const f = this._files[i];
+    if (!f || !f.dirty) return true;
+    try {
+      const r = await OmniNative.request("arduino.writeFile",
+        JSON.stringify({ name: f.name, content: f.doc.getValue() }), 15000);
+      if (!r.ok) throw new Error(r.error || "write failed");
+      f.dirty = false;
+      this.renderFileTabs();
+      return true;
+    } catch (e) {
+      this.log(this.els.out, `save ${f.name} failed: ${e.message}`, "err");
+      this.els.saveNote.textContent = `SAVE FAILED \u2014 ${e.message}`.toUpperCase();
+      return false;
+    }
+  },
+
+  async saveCurrent() {
+    if (this._fileIdx >= 0 && await this.saveFile(this._fileIdx)) {
+      this.els.saveNote.textContent =
+        `SAVED ${this._files[this._fileIdx].name.toUpperCase()}`;
+    }
+  },
+
+  async saveAllDirty() {
+    for (let i = 0; i < this._files.length; i++) {
+      if (this._files[i].dirty && !(await this.saveFile(i))) return false;
+    }
+    return true;
+  },
+
   // ── build / upload ──
 
-  verify() {
+  async verify() {
     const fqbn = this.els.fqbn.value.trim();
     if (!this._sketch) return this.log(this.els.out, "select a sketch first", "err");
     if (!fqbn) return this.log(this.els.out, "set an FQBN (board) first", "err");
+    if (!(await this.saveAllDirty())) return;
     this.showTab("out");
     this.runStream(["compile", "--fqbn", fqbn, this._sketch], "COMPILING\u2026");
   },
 
-  upload() {
+  async upload() {
     const fqbn = this.els.fqbn.value.trim();
     const port = this.els.port.value;
     if (!this._sketch) return this.log(this.els.out, "select a sketch first", "err");
     if (!fqbn) return this.log(this.els.out, "set an FQBN (board) first", "err");
     if (!port) return this.log(this.els.out, "no port selected \u2014 refresh ports", "err");
+    if (!(await this.saveAllDirty())) return;
     this.showTab("out");
     if (this._monOpen) {
       // the port can't be shared with the uploader

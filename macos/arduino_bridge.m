@@ -12,6 +12,7 @@
     NSMutableData *_errBuf;
     int _serialFd;
     dispatch_source_t _serialSrc;
+    NSString *_editRoot; // sketch folder opened in the editor — write boundary
 }
 
 - (instancetype)initWithWebView:(WKWebView *)webView {
@@ -269,6 +270,65 @@ static NSString *strOr(id v, NSString *fallback) {
         [out addObject:@{ @"name" : dir, @"path" : path }];
     }
     return out;
+}
+
+// ── sketch editor ──
+
+static BOOL isSourceFile(NSString *name) {
+    static NSSet *exts;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        exts = [NSSet setWithArray:@[ @"ino", @"h", @"hpp", @"c", @"cpp", @"txt", @"md" ]];
+    });
+    return [exts containsObject:name.pathExtension.lowercaseString];
+}
+
+- (NSDictionary *)readSketch:(NSString *)dir {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    BOOL isDir = NO;
+    NSString *std = dir.stringByStandardizingPath;
+    if (![fm fileExistsAtPath:std isDirectory:&isDir] || !isDir) {
+        return @{ @"ok" : @NO, @"error" : @"not a folder" };
+    }
+    NSMutableArray *files = [NSMutableArray array];
+    for (NSString *f in [[fm contentsOfDirectoryAtPath:std error:nil]
+             sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)]) {
+        if ([f hasPrefix:@"."] || !isSourceFile(f)) continue;
+        NSString *p = [std stringByAppendingPathComponent:f];
+        NSNumber *size = [fm attributesOfItemAtPath:p error:nil][NSFileSize];
+        if (size.longLongValue > 2 * 1024 * 1024) continue;
+        NSString *content = [NSString stringWithContentsOfFile:p
+                                                      encoding:NSUTF8StringEncoding
+                                                         error:nil];
+        if (content == nil) continue;
+        [files addObject:@{ @"name" : f, @"content" : content }];
+    }
+    // .ino files first, main sketch file at the very front
+    NSString *main = [std.lastPathComponent stringByAppendingPathExtension:@"ino"];
+    [files sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        int ra = [a[@"name"] isEqualToString:main] ? 0
+            : [[a[@"name"] pathExtension] isEqualToString:@"ino"] ? 1 : 2;
+        int rb = [b[@"name"] isEqualToString:main] ? 0
+            : [[b[@"name"] pathExtension] isEqualToString:@"ino"] ? 1 : 2;
+        if (ra != rb) return ra < rb ? NSOrderedAscending : NSOrderedDescending;
+        return [a[@"name"] compare:b[@"name"]];
+    }];
+    _editRoot = std;
+    return @{ @"ok" : @YES, @"files" : files };
+}
+
+- (NSDictionary *)writeFile:(NSString *)name content:(NSString *)content {
+    if (_editRoot == nil) return @{ @"ok" : @NO, @"error" : @"no sketch open" };
+    if (name == nil || content == nil || [name containsString:@"/"] ||
+        [name containsString:@".."] || !isSourceFile(name)) {
+        return @{ @"ok" : @NO, @"error" : @"bad name" };
+    }
+    NSString *p = [_editRoot stringByAppendingPathComponent:name];
+    NSError *err = nil;
+    if (![content writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:&err]) {
+        return @{ @"ok" : @NO, @"error" : err.localizedDescription ?: @"write failed" };
+    }
+    return @{ @"ok" : @YES };
 }
 
 // ── serial ──
