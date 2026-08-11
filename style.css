@@ -1494,11 +1494,22 @@ body {
   gap: 8px;
 }
 
+.ino-grid > .sp1-col {
+  min-height: 0;
+  overflow-y: auto; /* left column scrolls on its own instead of growing the panel */
+  scrollbar-width: none;
+}
+
+.ino-grid > .sp1-col::-webkit-scrollbar {
+  display: none;
+}
+
 .ino-main {
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  min-height: 0; /* grid item — without this it grows past the panel and kills scrolling */
 }
 
 .ino-term {
@@ -1515,6 +1526,7 @@ body {
 
 .ino-log {
   flex: 1;
+  min-height: 0; /* flex child must be shrinkable for overflow scrolling to engage */
   overflow-y: auto;
   font-size: 10px;
   line-height: 1.55;
