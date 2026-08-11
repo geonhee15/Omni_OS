@@ -66,6 +66,7 @@
 @property (strong) NSWindow *window;
 @property (strong) WKWebView *webView;
 @property (strong) OmniSchemeHandler *schemeHandler;
+@property (strong) NSURLSessionWebSocketTask *arcTask;
 @end
 
 @implementation AppDelegate
@@ -153,6 +154,41 @@
     }];
 }
 
+// ---- ARC-SCAN websocket relay ----
+
+- (void)arcEvalJS:(NSString *)js {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.webView evaluateJavaScript:js completionHandler:nil];
+    });
+}
+
+- (void)arcReceiveLoop:(NSURLSessionWebSocketTask *)task {
+    __weak typeof(self) weakSelf = self;
+    [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *msg, NSError *error) {
+        typeof(self) strongSelf = weakSelf;
+        if (strongSelf == nil || task != strongSelf.arcTask) return; // superseded
+        if (error != nil) {
+            [strongSelf arcEvalJS:@"window.OmniArc && window.OmniArc._state(\"closed\")"];
+            return;
+        }
+        if (msg.type == NSURLSessionWebSocketMessageTypeString && msg.string != nil) {
+            // re-serialize through NSJSONSerialization so device data can never
+            // inject script into the evaluateJavaScript call
+            NSData *raw = [msg.string dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) {
+                NSData *safe = [NSJSONSerialization dataWithJSONObject:parsed options:0 error:nil];
+                NSString *s = [[NSString alloc] initWithData:safe encoding:NSUTF8StringEncoding];
+                if (s != nil) {
+                    [strongSelf arcEvalJS:
+                        [NSString stringWithFormat:@"window.OmniArc && window.OmniArc._msg(%@)", s]];
+                }
+            }
+        }
+        [strongSelf arcReceiveLoop:task];
+    }];
+}
+
 // ---- native bridge ----
 
 - (void)userContentController:(WKUserContentController *)userContentController
@@ -188,6 +224,23 @@
             SP1ResumeWatcher();
             [self deliverPayload:@{ @"resumed" : @YES } forId:msgId];
         });
+    } else if ([cmd isEqualToString:@"arc.connect"]) {
+        // ARC-SCAN: native WebSocket to the ESP32 (plain ws:// would be
+        // blocked as mixed content from the app's secure custom scheme)
+        NSURL *u = arg ? [NSURL URLWithString:arg] : nil;
+        if (u == nil || !([u.scheme isEqualToString:@"ws"] || [u.scheme isEqualToString:@"wss"])) {
+            [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
+        } else {
+            [self.arcTask cancel];
+            self.arcTask = [[NSURLSession sharedSession] webSocketTaskWithURL:u];
+            [self.arcTask resume];
+            [self arcReceiveLoop:self.arcTask];
+            [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+        }
+    } else if ([cmd isEqualToString:@"arc.disconnect"]) {
+        [self.arcTask cancel];
+        self.arcTask = nil;
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
     } else if ([cmd isEqualToString:@"sp1.start"]) {
         // panel START button when the watcher is found offline
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{

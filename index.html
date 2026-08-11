@@ -43,6 +43,11 @@
         <span class="nav-icon">&#9672;</span>
         <span class="nav-label">RENDER_3D</span>
       </button>
+      <button class="nav-item" data-panel="arc">
+        <span class="nav-icon">&#9678;</span>
+        <span class="nav-label">ARC-SCAN</span>
+        <span class="nav-dot" id="arc-nav-dot"></span>
+      </button>
     </nav>
     <div class="sidebar-foot">
       <span class="dot"></span>
@@ -267,13 +272,42 @@
         accept=".stl,.obj,.mtl,.gltf,.glb,.fbx,.ply,.3mf,.dae,.step,.stp,.iges,.igs,.brep,.png,.jpg,.jpeg,.tga,.bmp,.webp,.bin" />
     </section>
 
+    <!-- panel 4: ARC-SCAN (room lidar point cloud) -->
+    <section class="panel panel-arc" id="panel-arc">
+      <div class="sp1-topstrip">
+        <span class="sp1-title">ARC-SCAN</span>
+        <span class="ts-item">AMBIENT ROOM CARTOGRAPHER</span>
+        <span class="ts-spacer"></span>
+        <span class="ts-item" id="arc-status">DISCONNECTED</span>
+        <span class="ts-item" id="arc-stats">0 PTS</span>
+      </div>
+
+      <div class="r3d-viewport" id="arc-viewport">
+        <div class="arc-side" id="arc-side"></div>
+        <div class="arc-hint" id="arc-hint">
+          <div class="r3d-drop-title">ROOM LIDAR OFFLINE</div>
+          <div class="r3d-drop-sub">ENTER THE ESP32 ADDRESS AND CONNECT &mdash; WS PORT 81</div>
+        </div>
+      </div>
+
+      <div class="r3d-toolbar">
+        <span class="r3l-label">ESP32</span>
+        <input class="arc-ip" id="arc-ip" placeholder="192.168.0.xx" spellcheck="false" />
+        <button class="ig-tab" id="arc-connect">CONNECT</button>
+        <button class="ig-tab" id="arc-clear">CLEAR</button>
+        <span class="r3d-file" id="arc-note">POINTS COLORED BY HEIGHT &middot; 7 CH &times; 180&deg; SWEEP</span>
+        <span class="r3l-label">PT SIZE</span>
+        <input type="range" class="r3l-slider arc-size" id="arc-size" min="1" max="7" step="0.5" value="2.5" />
+      </div>
+    </section>
+
     <!-- bottom bar -->
     <footer class="bottombar">
       <span id="uptime">UPTIME 00:00:00</span>
       <span class="divider">|</span>
-      <span>MODULES: CLOCK &middot; SP-1 &middot; R3D</span>
+      <span>MODULES: CLOCK &middot; SP-1 &middot; R3D &middot; ARC</span>
       <span class="divider">|</span>
-      <span>v0.11.1</span>
+      <span>v0.12.0</span>
     </footer>
   </div>
 

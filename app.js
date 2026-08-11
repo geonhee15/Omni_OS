@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.11.1",
+  version: "0.12.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2112,5 +2112,348 @@ OmniOS.register("r3d", {
         ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
       }
     }
+  },
+});
+
+// ---------- module: ARC-SCAN (rotating ToF lidar point cloud) ----------
+// ESP32 streams {"a": servoAngle 0-180, "d": [7 distances mm]} over ws://ip:81.
+// Sensor channels 0(top)..6(bottom) are tilted +30..-30 deg on the mast.
+// In the app the socket is relayed natively (plain ws:// is mixed content for
+// the omni:// secure origin); in a browser it falls back to a JS WebSocket.
+OmniOS.register("arc", {
+  TILTS: [30, 20, 10, 0, -10, -20, -30],
+  CH_HEIGHTS: [0.19, 0.16, 0.14, 0.11, 0.09, 0.06, 0.03], // sensor z on mast (m)
+  MAX_POINTS: 300000,
+  MIN_MM: 40,
+  MAX_MM: 4000,
+
+  _enabled: false,
+  _linked: false,
+  _ws: null,
+  _three: null,
+  _ctx: null,
+  _count: 0,
+  _writeIdx: 0,
+  _msgCount: 0,
+  _lastRateAt: 0,
+  _rate: 0,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      panel: $("panel-arc"),
+      viewport: $("arc-viewport"),
+      status: $("arc-status"),
+      stats: $("arc-stats"),
+      side: $("arc-side"),
+      hint: $("arc-hint"),
+      ip: $("arc-ip"),
+      connect: $("arc-connect"),
+      clear: $("arc-clear"),
+      size: $("arc-size"),
+      navDot: $("arc-nav-dot"),
+    };
+    this.els.ip.value = localStorage.getItem("arc-ip") || "";
+    this.els.connect.addEventListener("click", () => this.toggle());
+    this.els.ip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.toggle();
+    });
+    this.els.clear.addEventListener("click", () => this.clearCloud());
+    this.els.size.addEventListener("input", () => {
+      if (this._ctx) this._ctx.material.size = parseFloat(this.els.size.value) / 100;
+    });
+    this.buildSide();
+
+    // native relay pushes messages/states here
+    window.OmniArc = {
+      _msg: (m) => this.onMessage(m),
+      _state: (s) => {
+        if (s === "closed") this.onClosed();
+      },
+    };
+  },
+
+  buildSide() {
+    const side = this.els.side;
+    side.innerHTML = "";
+    this._chEls = [];
+    for (let i = 0; i < 7; i++) {
+      const row = document.createElement("div");
+      row.className = "arc-ch";
+      const name = document.createElement("span");
+      name.textContent = `CH${i}`;
+      const tilt = document.createElement("span");
+      tilt.textContent = `${this.TILTS[i] > 0 ? "+" : ""}${this.TILTS[i]}\u00b0`;
+      const bar = document.createElement("div");
+      bar.className = "arc-bar";
+      const fill = document.createElement("i");
+      fill.style.width = "0%";
+      bar.appendChild(fill);
+      const val = document.createElement("span");
+      val.className = "val";
+      val.textContent = "\u2014";
+      row.append(name, tilt, bar, val);
+      side.appendChild(row);
+      this._chEls.push({ fill, val });
+    }
+    const az = document.createElement("div");
+    az.className = "arc-az";
+    az.textContent = "AZIMUTH \u2014";
+    side.appendChild(az);
+    this._azEl = az;
+    side.hidden = true;
+  },
+
+  async ensureThree() {
+    if (this._three) return this._three;
+    const THREE = await import("three");
+    const { OrbitControls } = await import("./vendor/three/examples/jsm/controls/OrbitControls.js");
+    this._three = { THREE, OrbitControls };
+    return this._three;
+  },
+
+  async initViewport() {
+    if (this._ctx) return;
+    const { THREE, OrbitControls } = await this.ensureThree();
+    const vp = this.els.viewport;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(vp.clientWidth || 640, vp.clientHeight || 480);
+    vp.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(
+      55, (vp.clientWidth || 640) / (vp.clientHeight || 480), 0.01, 200);
+    camera.position.set(-3.4, 2.6, 3.8);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.target.set(0, 0.8, 0);
+
+    const grid = new THREE.GridHelper(8, 16, 0x35d6ff, 0x123048);
+    grid.material.transparent = true;
+    grid.material.opacity = 0.3;
+    scene.add(grid);
+
+    // scanner mast marker at the origin
+    const mast = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03, 0.05, 0.24, 12),
+      new THREE.MeshBasicMaterial({ color: 0x35d6ff })
+    );
+    mast.position.y = 0.12;
+    scene.add(mast);
+
+    // live azimuth sweep indicator
+    const azGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0.02, 0),
+      new THREE.Vector3(4, 0.02, 0),
+    ]);
+    const azLine = new THREE.Line(azGeo,
+      new THREE.LineBasicMaterial({ color: 0x35d6ff, transparent: true, opacity: 0.4 }));
+    scene.add(azLine);
+
+    // point cloud (preallocated ring buffer)
+    const positions = new Float32Array(this.MAX_POINTS * 3);
+    const colors = new Float32Array(this.MAX_POINTS * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geo.setDrawRange(0, 0);
+    const material = new THREE.PointsMaterial({
+      size: parseFloat(this.els.size.value) / 100,
+      vertexColors: true,
+      sizeAttenuation: true,
+    });
+    const cloud = new THREE.Points(geo, material);
+    cloud.frustumCulled = false;
+    scene.add(cloud);
+
+    this._ctx = { renderer, scene, camera, controls, geo, positions, colors, material, azLine };
+    new ResizeObserver(() => this.resize()).observe(vp);
+
+    const loop = () => {
+      requestAnimationFrame(loop);
+      if (!this.els.panel.classList.contains("active")) return;
+      controls.update();
+      renderer.render(scene, camera);
+    };
+    loop();
+  },
+
+  resize() {
+    if (!this._ctx) return;
+    const vp = this.els.viewport;
+    const w = vp.clientWidth;
+    const h = vp.clientHeight;
+    if (!w || !h) return;
+    this._ctx.camera.aspect = w / h;
+    this._ctx.camera.updateProjectionMatrix();
+    this._ctx.renderer.setSize(w, h);
+  },
+
+  wsUrl() {
+    let addr = this.els.ip.value.trim();
+    if (!addr) return null;
+    if (!addr.includes(":")) addr += ":81";
+    return `ws://${addr}`;
+  },
+
+  async toggle() {
+    if (this._enabled) {
+      this.disconnect("DISCONNECTED");
+      return;
+    }
+    const url = this.wsUrl();
+    if (!url) return;
+    localStorage.setItem("arc-ip", this.els.ip.value.trim());
+    await this.initViewport();
+    this._enabled = true;
+    this.els.connect.textContent = "DISCONNECT";
+    this.openSocket(url);
+  },
+
+  async openSocket(url) {
+    this.setStatus("CONNECTING\u2026", "");
+    if (OmniNative.available) {
+      try {
+        await OmniNative.request("arc.connect", url);
+      } catch (e) {
+        this.onClosed();
+      }
+      return; // link confirmed by the first pushed message
+    }
+    // browser fallback: plain JS WebSocket
+    try {
+      this._ws = new WebSocket(url);
+      this._ws.onmessage = (e) => {
+        try {
+          this.onMessage(JSON.parse(e.data));
+        } catch (_) {}
+      };
+      this._ws.onclose = () => this.onClosed();
+      this._ws.onerror = () => {};
+    } catch (e) {
+      this.onClosed();
+    }
+  },
+
+  disconnect(label) {
+    this._enabled = false;
+    this._linked = false;
+    if (this._retry) clearTimeout(this._retry);
+    if (OmniNative.available) OmniNative.request("arc.disconnect").catch(() => {});
+    if (this._ws) {
+      try { this._ws.close(); } catch (_) {}
+      this._ws = null;
+    }
+    this.els.connect.textContent = "CONNECT";
+    this.setStatus(label || "DISCONNECTED", "");
+    this.els.navDot.className = "nav-dot off";
+    this.els.side.hidden = true;
+  },
+
+  onClosed() {
+    if (!this._enabled) return;
+    this._linked = false;
+    this.setStatus("LINK LOST \u2014 RETRYING\u2026", "alert");
+    this.els.navDot.className = "nav-dot alert";
+    if (this._retry) clearTimeout(this._retry);
+    this._retry = setTimeout(() => {
+      if (this._enabled) this.openSocket(this.wsUrl());
+    }, 3000);
+  },
+
+  setStatus(text, tone) {
+    this.els.status.textContent = text;
+    this.els.status.className = `ts-item${tone ? " " + tone : ""}`;
+  },
+
+  onMessage(msg) {
+    if (!this._enabled || !msg || !Array.isArray(msg.d)) return;
+    if (!this._linked) {
+      this._linked = true;
+      this.setStatus("LINKED \u00b7 STREAMING", "ok");
+      this.els.navDot.className = "nav-dot ok";
+      this.els.hint.hidden = true;
+      this.els.side.hidden = false;
+    }
+    const a = typeof msg.a === "number" ? msg.a : 0;
+    for (let ch = 0; ch < Math.min(7, msg.d.length); ch++) {
+      const mm = msg.d[ch];
+      this.updateChannel(ch, mm);
+      if (typeof mm === "number" && mm >= this.MIN_MM && mm <= this.MAX_MM) {
+        this.addPoint(a, ch, mm);
+      }
+    }
+    if (this._azEl) this._azEl.textContent = `AZIMUTH ${a}\u00b0`;
+    if (this._ctx) this._ctx.azLine.rotation.y = (a * Math.PI) / 180;
+
+    this._msgCount++;
+    const now = performance.now();
+    if (now - this._lastRateAt > 1000) {
+      this._rate = this._msgCount;
+      this._msgCount = 0;
+      this._lastRateAt = now;
+    }
+    this.els.stats.textContent =
+      `${this._count.toLocaleString()} PTS \u00b7 ${this._rate}/S`;
+  },
+
+  updateChannel(ch, mm) {
+    const el = this._chEls && this._chEls[ch];
+    if (!el) return;
+    const valid = typeof mm === "number" && mm >= this.MIN_MM && mm <= this.MAX_MM;
+    el.val.textContent = valid ? `${mm}` : "\u2014";
+    el.fill.style.width = valid ? `${Math.min(100, (mm / this.MAX_MM) * 100)}%` : "0%";
+  },
+
+  addPoint(aDeg, ch, mm) {
+    const c = this._ctx;
+    if (!c) return;
+    const th = (this.TILTS[ch] * Math.PI) / 180;   // elevation
+    const ph = (aDeg * Math.PI) / 180;             // azimuth
+    const r = mm / 1000;
+    const horiz = r * Math.cos(th);
+    const x = horiz * Math.cos(ph);
+    const z = -horiz * Math.sin(ph);
+    const y = r * Math.sin(th) + this.CH_HEIGHTS[ch];
+
+    const i = this._writeIdx;
+    c.positions[i * 3] = x;
+    c.positions[i * 3 + 1] = y;
+    c.positions[i * 3 + 2] = z;
+
+    // color by height: deep blue (floor) -> cyan -> near-white (ceiling)
+    const t = Math.max(0, Math.min(1, y / 2.4));
+    let cr, cg, cb;
+    if (t < 0.5) {
+      const k = t / 0.5;
+      cr = 0.04 + (0.21 - 0.04) * k;
+      cg = 0.29 + (0.84 - 0.29) * k;
+      cb = 0.43 + (1.0 - 0.43) * k;
+    } else {
+      const k = (t - 0.5) / 0.5;
+      cr = 0.21 + (0.92 - 0.21) * k;
+      cg = 0.84 + (0.99 - 0.84) * k;
+      cb = 1.0;
+    }
+    c.colors[i * 3] = cr;
+    c.colors[i * 3 + 1] = cg;
+    c.colors[i * 3 + 2] = cb;
+
+    this._writeIdx = (this._writeIdx + 1) % this.MAX_POINTS;
+    this._count = Math.min(this._count + 1, this.MAX_POINTS);
+    c.geo.attributes.position.needsUpdate = true;
+    c.geo.attributes.color.needsUpdate = true;
+    c.geo.setDrawRange(0, this._count);
+  },
+
+  clearCloud() {
+    this._count = 0;
+    this._writeIdx = 0;
+    if (this._ctx) this._ctx.geo.setDrawRange(0, 0);
+    this.els.stats.textContent = "0 PTS";
   },
 });
