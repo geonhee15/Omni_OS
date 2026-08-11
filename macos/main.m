@@ -2,6 +2,7 @@
 #import <WebKit/WebKit.h>
 #import <signal.h>
 #import "sp1_status.h"
+#import "arc_scan.h"
 
 // SP-1 watcher pause/resume lives in sp1_status.m (SP1PauseWatcher /
 // SP1ResumeWatcher). Resume is also called unconditionally on app exit so
@@ -237,6 +238,10 @@
             [self arcReceiveLoop:self.arcTask];
             [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
         }
+    } else if ([cmd isEqualToString:@"arc.discover"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [self deliverPayload:@{ @"devices" : ARCScanDevices() } forId:msgId];
+        });
     } else if ([cmd isEqualToString:@"arc.disconnect"]) {
         [self.arcTask cancel];
         self.arcTask = nil;

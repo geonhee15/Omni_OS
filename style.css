@@ -1473,3 +1473,53 @@ body {
   letter-spacing: 1.6px;
   color: var(--cyan);
 }
+
+/* discovered device list */
+.arc-found {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 6px;
+  min-width: 260px;
+}
+
+.arc-found:empty {
+  display: none;
+}
+
+.arc-dev {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(53, 214, 255, 0.28);
+  background: rgba(5, 18, 36, 0.72);
+  padding: 7px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1.6px;
+  color: #bfe9f7;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.arc-dev:hover {
+  border-color: var(--cyan);
+  background: rgba(53, 214, 255, 0.12);
+}
+
+.arc-dev .tag {
+  margin-left: auto;
+  font-size: 8px;
+  letter-spacing: 1.4px;
+}
+
+.arc-dev .tag.ok { color: var(--ok); }
+.arc-dev .tag.dim { color: rgba(111, 168, 201, 0.7); }
+
+.arc-scanning {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  animation: pulse 1.4s ease-in-out infinite;
+}

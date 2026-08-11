@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.12.0",
+  version: "0.12.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -2149,6 +2149,8 @@ OmniOS.register("arc", {
       hint: $("arc-hint"),
       ip: $("arc-ip"),
       connect: $("arc-connect"),
+      find: $("arc-find"),
+      found: $("arc-found"),
       clear: $("arc-clear"),
       size: $("arc-size"),
       navDot: $("arc-nav-dot"),
@@ -2158,6 +2160,7 @@ OmniOS.register("arc", {
     this.els.ip.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.toggle();
     });
+    this.els.find.addEventListener("click", () => this.discover());
     this.els.clear.addEventListener("click", () => this.clearCloud());
     this.els.size.addEventListener("input", () => {
       if (this._ctx) this._ctx.material.size = parseFloat(this.els.size.value) / 100;
@@ -2202,6 +2205,58 @@ OmniOS.register("arc", {
     side.appendChild(az);
     this._azEl = az;
     side.hidden = true;
+  },
+
+  // Scan the local subnet for ARC-Scan devices (port 81 + protocol probe) and
+  // list them as one-click connect targets.
+  async discover() {
+    if (!OmniNative.available) {
+      this.els.found.innerHTML =
+        '<div class="arc-scanning">DEVICE SCAN NEEDS THE OMNI OS MAC APP</div>';
+      return;
+    }
+    if (this._scanning) return;
+    this._scanning = true;
+    this.els.find.disabled = true;
+    this.els.find.textContent = "SCANNING…";
+    this.els.found.innerHTML =
+      '<div class="arc-scanning">SCANNING LOCAL NETWORK…</div>';
+    try {
+      const r = await OmniNative.request("arc.discover", null, 60000);
+      this.renderDevices(r.devices || []);
+    } catch (e) {
+      this.els.found.innerHTML =
+        '<div class="arc-scanning">SCAN FAILED</div>';
+    }
+    this._scanning = false;
+    this.els.find.disabled = false;
+    this.els.find.textContent = "FIND DEVICES";
+  },
+
+  renderDevices(devices) {
+    const box = this.els.found;
+    box.innerHTML = "";
+    if (!devices.length) {
+      box.innerHTML =
+        '<div class="arc-scanning">NO DEVICES FOUND — CHECK POWER / SAME WIFI</div>';
+      return;
+    }
+    for (const d of devices) {
+      const row = document.createElement("div");
+      row.className = "arc-dev";
+      const ip = document.createElement("span");
+      ip.textContent = d.ip;
+      const tag = document.createElement("span");
+      tag.className = `tag ${d.verified ? "ok" : "dim"}`;
+      tag.textContent = d.verified ? "ARC-SCAN ✓" : "PORT 81 OPEN";
+      row.append(ip, tag);
+      row.addEventListener("click", () => {
+        this.els.ip.value = d.ip;
+        box.innerHTML = "";
+        if (!this._enabled) this.toggle();
+      });
+      box.appendChild(row);
+    }
   },
 
   async ensureThree() {
@@ -2352,6 +2407,7 @@ OmniOS.register("arc", {
     this.setStatus(label || "DISCONNECTED", "");
     this.els.navDot.className = "nav-dot off";
     this.els.side.hidden = true;
+    this.els.hint.hidden = false;
   },
 
   onClosed() {
@@ -2377,6 +2433,7 @@ OmniOS.register("arc", {
       this.setStatus("LINKED \u00b7 STREAMING", "ok");
       this.els.navDot.className = "nav-dot ok";
       this.els.hint.hidden = true;
+      this.els.found.innerHTML = "";
       this.els.side.hidden = false;
     }
     const a = typeof msg.a === "number" ? msg.a : 0;
