@@ -1720,3 +1720,11 @@ body {
 .ino-editor .cm-operator { color: #8f9dff; }
 
 .ino-mon-port { width: 190px; }
+
+.ino-ip-chip {
+  color: var(--ok) !important;
+  border-color: rgba(61, 255, 168, 0.45) !important;
+  white-space: nowrap;
+}
+
+.ino-ip-chip[hidden] { display: none; }

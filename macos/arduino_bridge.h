@@ -42,5 +42,8 @@
 - (NSDictionary *)serialOpen:(NSString *)port baud:(int)baud;
 - (void)serialClose;
 - (BOOL)serialSend:(NSString *)text;
+// ESP32 classic auto-reset: DTR low + RTS(EN) pulse — reboots the board so
+// boot-time output (WiFi IP etc.) replays into the monitor.
+- (BOOL)serialReset;
 
 @end

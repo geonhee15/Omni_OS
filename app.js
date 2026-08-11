@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.14.2",
+  version: "0.15.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2524,6 +2524,8 @@ OmniOS.register("ide", {
       mon: $("ino-mon"),
       monToggle: $("ino-mon-toggle"),
       monPort: $("ino-mon-port"),
+      reset: $("ino-reset"),
+      ipChip: $("ino-ip-chip"),
       baud: $("ino-baud"),
       send: $("ino-send"),
       sendBtn: $("ino-send-btn"),
@@ -2565,6 +2567,8 @@ OmniOS.register("ide", {
     });
     this.els.save.addEventListener("click", () => this.saveCurrent());
     this.els.monToggle.addEventListener("click", () => this.toggleMonitor());
+    this.els.reset.addEventListener("click", () => this.resetBoard());
+    this.els.ipChip.addEventListener("click", () => this.sendIpToArc());
     this.els.sendBtn.addEventListener("click", () => this.serialSend());
     this.els.send.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.serialSend();
@@ -3039,9 +3043,29 @@ OmniOS.register("ide", {
       this.els.monToggle.textContent = "CLOSE";
       this.els.monToggle.classList.add("active");
       this.log(this.els.mon, `\u25cf ${port} @ ${baud}`, "okl");
+      // pulse reset so boot-time prints (like the ARC-Scan WiFi IP) replay
+      setTimeout(() => this.resetBoard(), 200);
     } catch (e) {
       this.log(this.els.mon, `open failed: ${e.message}`, "err");
     }
+  },
+
+  async resetBoard() {
+    if (!this._monOpen) return;
+    try {
+      const r = await OmniNative.request("arduino.serialReset");
+      if (r.ok) this.log(this.els.mon, "\u21bb reset pulse \u2014 board rebooting\u2026", "sys");
+    } catch (e) {}
+  },
+
+  sendIpToArc() {
+    const ip = this._lastIp;
+    if (!ip) return;
+    const arc = OmniOS.modules.arc;
+    arc.els.ip.value = ip;
+    localStorage.setItem("arc-ip", ip);
+    document.querySelector('.nav-item[data-panel="arc"]').click();
+    if (!arc._enabled) arc.toggle();
   },
 
   onSerialClosed() {
@@ -3074,7 +3098,17 @@ OmniOS.register("ide", {
       const line = this._serialBuf.slice(0, idx).replace(/\r$/, "");
       this._serialBuf = this._serialBuf.slice(idx + 1);
       if (line.length) {
-        this.log(this.els.mon, line, "");
+        // surface any IPv4 the sketch prints (ARC-Scan boot log) as a
+        // one-click handoff to the ARC-SCAN panel
+        const ipm = line.match(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
+        const valid = ipm && ipm[1].split(".").every((o) => +o <= 255) &&
+          ipm[1] !== "0.0.0.0" && ipm[1] !== "255.255.255.255";
+        if (valid) {
+          this._lastIp = ipm[1];
+          this.els.ipChip.textContent = `\u2192 ARC-SCAN ${ipm[1]}`;
+          this.els.ipChip.hidden = false;
+        }
+        this.log(this.els.mon, line, valid ? "okl" : "");
         this.plotLine(line);
       }
     }

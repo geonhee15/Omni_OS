@@ -235,6 +235,8 @@
     } else if ([cmd isEqualToString:@"arduino.serialClose"]) {
         [self.arduino serialClose];
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd isEqualToString:@"arduino.serialReset"]) {
+        [self deliverPayload:@{ @"ok" : @([self.arduino serialReset]) } forId:msgId];
     } else if ([cmd isEqualToString:@"arduino.serialSend"]) {
         NSString *data = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
         [self deliverPayload:@{ @"ok" : @([self.arduino serialSend:data]) } forId:msgId];

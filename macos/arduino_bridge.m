@@ -407,6 +407,17 @@ static speed_t baudConstant(int baud) {
     }
 }
 
+- (BOOL)serialReset {
+    if (_serialFd < 0) return NO;
+    int dtr = TIOCM_DTR;
+    int rts = TIOCM_RTS;
+    ioctl(_serialFd, TIOCMBIC, &dtr);   // DTR low (keep IO0 high — normal boot)
+    ioctl(_serialFd, TIOCMBIS, &rts);   // RTS asserted -> EN low
+    usleep(100000);
+    ioctl(_serialFd, TIOCMBIC, &rts);   // release EN -> board boots
+    return YES;
+}
+
 - (BOOL)serialSend:(NSString *)text {
     if (_serialFd < 0 || text == nil) return NO;
     NSData *d = [text dataUsingEncoding:NSUTF8StringEncoding];
