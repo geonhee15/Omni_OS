@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.15.1",
+  version: "0.15.2",
   bootTime: Date.now(),
   modules: {},
 
@@ -2162,6 +2162,9 @@ OmniOS.register("arc", {
       hint: $("arc-hint"),
       ip: $("arc-ip"),
       connect: $("arc-connect"),
+      start: $("arc-start"),
+      stop: $("arc-stop"),
+      center: $("arc-center"),
       clear: $("arc-clear"),
       size: $("arc-size"),
       navDot: $("arc-nav-dot"),
@@ -2172,6 +2175,9 @@ OmniOS.register("arc", {
       if (e.key === "Enter") this.toggle();
     });
     this.els.clear.addEventListener("click", () => this.clearCloud());
+    this.els.start.addEventListener("click", () => this.sendCmd("start"));
+    this.els.stop.addEventListener("click", () => this.sendCmd("stop"));
+    this.els.center.addEventListener("click", () => this.sendCmd("center"));
     this.els.size.addEventListener("input", () => {
       if (this._ctx) this._ctx.material.size = parseFloat(this.els.size.value) / 100;
     });
@@ -2181,6 +2187,7 @@ OmniOS.register("arc", {
     window.OmniArc = {
       _msg: (m) => this.onMessage(m),
       _state: (s) => {
+        if (s === "open") this.onOpen();
         if (s === "closed") this.onClosed();
       },
     };
@@ -2340,6 +2347,7 @@ OmniOS.register("arc", {
     // browser fallback: plain JS WebSocket
     try {
       this._ws = new WebSocket(url);
+      this._ws.onopen = () => this.onOpen();
       this._ws.onmessage = (e) => {
         try {
           this.onMessage(JSON.parse(e.data));
@@ -2355,6 +2363,7 @@ OmniOS.register("arc", {
   disconnect(label) {
     this._enabled = false;
     this._linked = false;
+    this._streaming = false;
     if (this._retry) clearTimeout(this._retry);
     if (OmniNative.available) OmniNative.request("arc.disconnect").catch(() => {});
     if (this._ws) {
@@ -2366,6 +2375,28 @@ OmniOS.register("arc", {
     this.els.navDot.className = "nav-dot off";
     this.els.side.hidden = true;
     this.els.hint.hidden = false;
+  },
+
+  onOpen() {
+    if (!this._enabled) return;
+    this._linked = true;
+    this._streaming = false;
+    this.setStatus("LINKED \u00b7 PRESS START SCAN", "ok");
+    this.els.navDot.className = "nav-dot ok";
+    this.els.hint.hidden = true;
+    this.els.side.hidden = false;
+  },
+
+  sendCmd(cmd) {
+    if (!this._linked) return;
+    if (OmniNative.available) {
+      OmniNative.request("arc.send", cmd).catch(() => {});
+    } else if (this._ws && this._ws.readyState === 1) {
+      this._ws.send(cmd);
+    }
+    if (cmd === "start") this.setStatus("LINKED \u00b7 SCANNING\u2026", "ok");
+    if (cmd === "stop") this.setStatus("LINKED \u00b7 PAUSED", "ok");
+    if (cmd === "center") this.setStatus("LINKED \u00b7 SERVO CENTERED", "ok");
   },
 
   onClosed() {
@@ -2386,8 +2417,9 @@ OmniOS.register("arc", {
 
   onMessage(msg) {
     if (!this._enabled || !msg || !Array.isArray(msg.d)) return;
-    if (!this._linked) {
+    if (!this._linked || !this._streaming) {
       this._linked = true;
+      this._streaming = true;
       this.setStatus("LINKED \u00b7 STREAMING", "ok");
       this.els.navDot.className = "nav-dot ok";
       this.els.hint.hidden = true;

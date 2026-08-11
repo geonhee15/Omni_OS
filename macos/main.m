@@ -324,7 +324,27 @@
             self.arcTask = [[NSURLSession sharedSession] webSocketTaskWithURL:u];
             [self.arcTask resume];
             [self arcReceiveLoop:self.arcTask];
+            // handshake probe: a pong means the socket is actually open — the
+            // ESP32 stays silent until it gets a "start" command, so we can't
+            // rely on the first data message to signal the link
+            NSURLSessionWebSocketTask *probe = self.arcTask;
+            [probe sendPingWithPongReceiveHandler:^(NSError *e) {
+                if (probe != self.arcTask) return;
+                [self arcEvalJS:(e == nil
+                    ? @"window.OmniArc && window.OmniArc._state(\"open\")"
+                    : @"window.OmniArc && window.OmniArc._state(\"closed\")")];
+            }];
             [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+        }
+    } else if ([cmd isEqualToString:@"arc.send"]) {
+        // scan control commands ("start"/"stop"/"center") to the ESP32
+        if (self.arcTask != nil && arg != nil) {
+            NSURLSessionWebSocketMessage *m =
+                [[NSURLSessionWebSocketMessage alloc] initWithString:arg];
+            [self.arcTask sendMessage:m completionHandler:^(NSError *e) {}];
+            [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+        } else {
+            [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
         }
     } else if ([cmd isEqualToString:@"arc.disconnect"]) {
         [self.arcTask cancel];
