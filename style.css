@@ -1739,3 +1739,37 @@ body {
   animation: pulse 1s ease-in-out infinite;
   margin-left: 1px;
 }
+
+/* ARC-SCAN analytics overlay */
+.arc-analytics {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(53, 214, 255, 0.25);
+  background: rgba(3, 12, 24, 0.82);
+  padding: 8px 12px;
+  pointer-events: none;
+  width: 236px;
+}
+
+.arc-analytics[hidden] { display: none; }
+
+.arc-an-title {
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}
+
+.arc-an-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 7px;
+  letter-spacing: 1.4px;
+  color: rgba(111, 168, 201, 0.6);
+  margin-bottom: 4px;
+}

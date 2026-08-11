@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.15.2",
+  version: "0.16.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2158,6 +2158,15 @@ OmniOS.register("arc", {
       viewport: $("arc-viewport"),
       status: $("arc-status"),
       stats: $("arc-stats"),
+      analytics: $("arc-analytics"),
+      hist: $("arc-hist"),
+      asMean: $("as-mean"),
+      asMed: $("as-med"),
+      asStd: $("as-std"),
+      asValid: $("as-valid"),
+      asSweeps: $("as-sweeps"),
+      asRoom: $("as-room"),
+      modes: $("arc-modes"),
       side: $("arc-side"),
       hint: $("arc-hint"),
       ip: $("arc-ip"),
@@ -2176,6 +2185,9 @@ OmniOS.register("arc", {
     });
     this.els.clear.addEventListener("click", () => this.clearCloud());
     this.els.start.addEventListener("click", () => this.sendCmd("start"));
+    this.els.modes.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => this.setViewMode(b.dataset.mode)));
+    this.resetStats();
     this.els.stop.addEventListener("click", () => this.sendCmd("stop"));
     this.els.center.addEventListener("click", () => this.sendCmd("center"));
     this.els.size.addEventListener("input", () => {
@@ -2385,6 +2397,7 @@ OmniOS.register("arc", {
     this.els.navDot.className = "nav-dot ok";
     this.els.hint.hidden = true;
     this.els.side.hidden = false;
+    this.els.analytics.hidden = false;
   },
 
   sendCmd(cmd) {
@@ -2426,12 +2439,44 @@ OmniOS.register("arc", {
       this.els.side.hidden = false;
     }
     const a = typeof msg.a === "number" ? msg.a : 0;
+    const az = Math.max(0, Math.min(180, Math.round(a)));
     for (let ch = 0; ch < Math.min(7, msg.d.length); ch++) {
       const mm = msg.d[ch];
       this.updateChannel(ch, mm);
-      if (typeof mm === "number" && mm >= this.MIN_MM && mm <= this.MAX_MM) {
-        this.addPoint(a, ch, mm);
+      const valid = typeof mm === "number" && mm >= this.MIN_MM && mm <= this.MAX_MM;
+      const S = this._st;
+      S.total++;
+      if (valid) {
+        const p = this.addPoint(a, ch, mm);
+        // latest-sweep grid (LINE/RETOUCH modes rebuild from this)
+        const gi = ch * 181 + az;
+        this._grid[gi * 3] = p.x;
+        this._grid[gi * 3 + 1] = p.y;
+        this._grid[gi * 3 + 2] = p.z;
+        this._gridOk[gi] = 1;
+        // running stats + histograms
+        S.n++;
+        S.sum += mm;
+        S.sumsq += mm * mm;
+        S.histD[Math.min(24, Math.floor(mm / 160))]++;
+        S.histY[Math.max(0, Math.min(79, Math.floor((p.y + 0.5) / 4 * 80)))]++;
+        S.histX[Math.max(0, Math.min(79, Math.floor((p.x + 4) / 8 * 80)))]++;
+        S.histZ[Math.max(0, Math.min(79, Math.floor((p.z + 4) / 8 * 80)))]++;
+      } else {
+        this._gridOk[ch * 181 + az] = 0;
       }
+    }
+    // sweep counter: count each time the servo reaches an end stop
+    if ((az === 0 || az === 180) && this._lastEdge !== az) {
+      this._lastEdge = az;
+      this._st.edges++;
+    }
+    const nowMs = performance.now();
+    if (nowMs - (this._anAt || 0) > 500) {
+      this._anAt = nowMs;
+      this.renderAnalytics();
+      if (this._viewMode === "line") this.buildLines();
+      if (this._viewMode === "retouch") this.buildRoom();
     }
     if (this._azEl) this._azEl.textContent = `AZIMUTH ${a}\u00b0`;
     if (this._ctx) this._ctx.azLine.rotation.y = (a * Math.PI) / 180;
@@ -2494,6 +2539,7 @@ OmniOS.register("arc", {
     c.geo.attributes.position.needsUpdate = true;
     c.geo.attributes.color.needsUpdate = true;
     c.geo.setDrawRange(0, this._count);
+    return { x, y, z };
   },
 
   clearCloud() {
@@ -2501,6 +2547,248 @@ OmniOS.register("arc", {
     this._writeIdx = 0;
     if (this._ctx) this._ctx.geo.setDrawRange(0, 0);
     this.els.stats.textContent = "0 PTS";
+    this.resetStats();
+    if (this._viewMode === "line") this.buildLines();
+    if (this._viewMode === "retouch") this.buildRoom();
+  },
+
+  // ── analytics: keep every sample's statistics even though the point ring
+  // buffer eventually overwrites old points ──
+  resetStats() {
+    this._st = {
+      n: 0, total: 0, sum: 0, sumsq: 0, edges: 0,
+      histD: new Uint32Array(25),
+      histX: new Uint32Array(80),
+      histY: new Uint32Array(80),
+      histZ: new Uint32Array(80),
+    };
+    this._grid = new Float32Array(7 * 181 * 3);
+    this._gridOk = new Uint8Array(7 * 181);
+    this._lastEdge = -1;
+  },
+
+  // highest bin with a meaningful count — robust "max" that ignores stray noise
+  histTop(hist, lo, hi, minCount) {
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (hist[i] >= (minCount || 5)) return lo + ((i + 0.5) / hist.length) * (hi - lo);
+    }
+    return null;
+  },
+
+  percentile(hist, q, lo, hi) {
+    let total = 0;
+    for (const v of hist) total += v;
+    if (!total) return null;
+    const target = total * q;
+    let acc = 0;
+    for (let i = 0; i < hist.length; i++) {
+      acc += hist[i];
+      if (acc >= target) return lo + ((i + 0.5) / hist.length) * (hi - lo);
+    }
+    return hi;
+  },
+
+  renderAnalytics() {
+    const S = this._st;
+    if (!S.n) return;
+    const mean = S.sum / S.n;
+    const std = Math.sqrt(Math.max(0, S.sumsq / S.n - mean * mean));
+    const med = this.percentile(S.histD, 0.5, 0, 4000);
+    this.els.asMean.textContent = `${(mean / 1000).toFixed(2)} M`;
+    this.els.asMed.textContent = med ? `${(med / 1000).toFixed(2)} M` : "\u2014";
+    this.els.asStd.textContent = `${Math.round(std)} MM`;
+    this.els.asValid.textContent = `${Math.round((S.n / S.total) * 100)}%`;
+    this.els.asSweeps.textContent = `${Math.max(0, S.edges - 1)}`;
+    const w = (this.percentile(S.histX, 0.98, -4, 4) ?? 0) - (this.percentile(S.histX, 0.02, -4, 4) ?? 0);
+    const d = (this.percentile(S.histZ, 0.98, -4, 4) ?? 0) - (this.percentile(S.histZ, 0.02, -4, 4) ?? 0);
+    const h = this.histTop(S.histY, -0.5, 3.5, 5) ?? 0;
+    this.els.asRoom.textContent =
+      `EST ROOM ${w.toFixed(1)} \u00d7 ${d.toFixed(1)} \u00d7 ${h.toFixed(1)} M`;
+
+    // distance histogram with mean marker
+    const cv = this.els.hist;
+    const ctx = cv.getContext("2d");
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    let max = 1;
+    for (const v of S.histD) max = Math.max(max, v);
+    const bw = W / 25;
+    for (let i = 0; i < 25; i++) {
+      const bh = (S.histD[i] / max) * (H - 4);
+      ctx.fillStyle = "rgba(53, 214, 255, 0.75)";
+      ctx.fillRect(i * bw + 1, H - bh, bw - 2, bh);
+    }
+    const mx = (mean / 4000) * W;
+    ctx.strokeStyle = "#ffc857";
+    ctx.beginPath();
+    ctx.moveTo(mx, 0);
+    ctx.lineTo(mx, H);
+    ctx.stroke();
+  },
+
+  // ── view modes ──
+  _viewMode: "point",
+
+  setViewMode(mode) {
+    this._viewMode = mode;
+    this.els.modes.querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.mode === mode));
+    if (!this._ctx) return;
+    const c = this._ctx;
+    c.material.transparent = true;
+    c.material.opacity = mode === "point" ? 1.0 : 0.14;
+    if (this._lineGroup) this._lineGroup.visible = mode === "line";
+    if (this._roomGroup) this._roomGroup.visible = mode === "retouch";
+    if (mode === "line") this.buildLines();
+    if (mode === "retouch") this.buildRoom();
+  },
+
+  // LINE: per-channel contour — consecutive azimuth samples of the latest
+  // sweep joined into segments (gaps where the sensor had no return)
+  buildLines() {
+    const c = this._ctx;
+    if (!c) return;
+    const THREE = this._three.THREE;
+    if (!(this._lineGroup instanceof THREE.Group)) {
+      this._lineGroup = new THREE.Group();
+      this._lineSegs = [];
+      const shades = [0xeafcff, 0xbfeaff, 0x8fdcff, 0x35d6ff, 0x2fa8d8, 0x2b86b8, 0x275f8e];
+      for (let ch = 0; ch < 7; ch++) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(181 * 3), 3));
+        geo.setIndex(new THREE.BufferAttribute(new Uint16Array(180 * 2), 1));
+        geo.setDrawRange(0, 0);
+        const mat = new THREE.LineBasicMaterial({
+          color: shades[ch], transparent: true, opacity: 0.9,
+        });
+        const seg = new THREE.LineSegments(geo, mat);
+        seg.frustumCulled = false;
+        this._lineGroup.add(seg);
+        this._lineSegs.push(seg);
+      }
+      c.scene.add(this._lineGroup);
+    }
+    for (let ch = 0; ch < 7; ch++) {
+      const seg = this._lineSegs[ch];
+      const pos = seg.geometry.attributes.position.array;
+      const idx = seg.geometry.index.array;
+      let ni = 0;
+      for (let az = 0; az <= 180; az++) {
+        const gi = ch * 181 + az;
+        pos[az * 3] = this._grid[gi * 3];
+        pos[az * 3 + 1] = this._grid[gi * 3 + 1];
+        pos[az * 3 + 2] = this._grid[gi * 3 + 2];
+        if (az > 0 && this._gridOk[gi] && this._gridOk[gi - 1]) {
+          idx[ni++] = az - 1;
+          idx[ni++] = az;
+        }
+      }
+      seg.geometry.attributes.position.needsUpdate = true;
+      seg.geometry.index.needsUpdate = true;
+      seg.geometry.setDrawRange(0, ni);
+    }
+    this._lineGroup.visible = this._viewMode === "line";
+  },
+
+  // RETOUCH: estimate the room — per-azimuth median wall radius (points in the
+  // wall height band), median-smoothed, gaps interpolated, extruded into a
+  // translucent floor-to-ceiling shell
+  buildRoom() {
+    const c = this._ctx;
+    if (!c) return;
+    const THREE = this._three.THREE;
+    const ceilY = this.histTop(this._st.histY, -0.5, 3.5, 5) || 2.4;
+
+    // 1) raw per-azimuth wall radius
+    const raw = new Array(181).fill(null);
+    for (let az = 0; az <= 180; az++) {
+      const rs = [];
+      for (let ch = 0; ch < 7; ch++) {
+        const gi = ch * 181 + az;
+        if (!this._gridOk[gi]) continue;
+        const y = this._grid[gi * 3 + 1];
+        if (y < 0.3 || y > ceilY - 0.25) continue; // floor/ceiling hits are not walls
+        rs.push(Math.hypot(this._grid[gi * 3], this._grid[gi * 3 + 2]));
+      }
+      if (rs.length) {
+        rs.sort((p, q) => p - q);
+        raw[az] = rs[Math.floor(rs.length / 2)];
+      }
+    }
+    // 2) fill gaps (linear, up to 12°) then 5-tap median smoothing
+    const filled = raw.slice();
+    let last = -1;
+    for (let az = 0; az <= 180; az++) {
+      if (filled[az] != null) {
+        if (last >= 0 && az - last > 1 && az - last <= 12) {
+          for (let k = last + 1; k < az; k++) {
+            filled[k] = filled[last] + (filled[az] - filled[last]) * ((k - last) / (az - last));
+          }
+        }
+        last = az;
+      }
+    }
+    const smooth = filled.map((v, az) => {
+      if (v == null) return null;
+      const win = [];
+      for (let k = az - 2; k <= az + 2; k++) {
+        if (k >= 0 && k <= 180 && filled[k] != null) win.push(filled[k]);
+      }
+      win.sort((p, q) => p - q);
+      return win[Math.floor(win.length / 2)];
+    });
+
+    // 3) extrude contiguous runs into a wall ribbon
+    if (this._roomGroup) {
+      c.scene.remove(this._roomGroup);
+      this._roomGroup.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+    }
+    this._roomGroup = new THREE.Group();
+    const verts = [];
+    const indices = [];
+    const topPts = [];
+    const botPts = [];
+    let runStart = null;
+    const flushRun = () => { runStart = null; };
+    for (let az = 0; az <= 181; az++) {
+      const r = az <= 180 ? smooth[az] : null;
+      if (r == null) { flushRun(); continue; }
+      const ph = (az * Math.PI) / 180;
+      const x = r * Math.cos(ph);
+      const z = -r * Math.sin(ph);
+      const base = verts.length / 3;
+      verts.push(x, 0.02, z, x, ceilY, z);
+      botPts.push(new THREE.Vector3(x, 0.03, z));
+      topPts.push(new THREE.Vector3(x, ceilY, z));
+      if (runStart != null) {
+        indices.push(base - 2, base - 1, base, base - 1, base + 1, base);
+      }
+      runStart = az;
+    }
+    if (verts.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+      geo.setIndex(indices);
+      geo.computeVertexNormals();
+      const wall = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: 0x35d6ff, transparent: true, opacity: 0.1,
+        side: THREE.DoubleSide, depthWrite: false,
+      }));
+      this._roomGroup.add(wall);
+      const mkLine = (pts, opacity) => {
+        const g = new THREE.BufferGeometry().setFromPoints(pts);
+        return new THREE.Line(g, new THREE.LineBasicMaterial({
+          color: 0x35d6ff, transparent: true, opacity,
+        }));
+      };
+      this._roomGroup.add(mkLine(botPts, 0.7));
+      this._roomGroup.add(mkLine(topPts, 0.7));
+    }
+    c.scene.add(this._roomGroup);
+    this._roomGroup.visible = this._viewMode === "retouch";
   },
 });
 

@@ -391,6 +391,17 @@
       </div>
 
       <div class="r3d-viewport" id="arc-viewport">
+        <div class="arc-analytics" id="arc-analytics" hidden>
+          <div class="arc-an-title">SCAN ANALYTICS</div>
+          <canvas id="arc-hist" width="212" height="62"></canvas>
+          <div class="arc-an-axis"><span>0</span><span>DISTANCE</span><span>4M</span></div>
+          <div class="arc-ch"><span>MEAN</span><span></span><span></span><span class="val" id="as-mean">&mdash;</span></div>
+          <div class="arc-ch"><span>MEDIAN</span><span></span><span></span><span class="val" id="as-med">&mdash;</span></div>
+          <div class="arc-ch"><span>&sigma;</span><span></span><span></span><span class="val" id="as-std">&mdash;</span></div>
+          <div class="arc-ch"><span>VALID</span><span></span><span></span><span class="val" id="as-valid">&mdash;</span></div>
+          <div class="arc-ch"><span>SWEEPS</span><span></span><span></span><span class="val" id="as-sweeps">&mdash;</span></div>
+          <div class="arc-az" id="as-room">EST ROOM &mdash;</div>
+        </div>
         <div class="arc-side" id="arc-side"></div>
         <div class="arc-hint" id="arc-hint">
           <div class="r3d-drop-title">ROOM LIDAR OFFLINE</div>
@@ -407,6 +418,12 @@
         <button class="ig-tab" id="arc-stop">&#9633; STOP</button>
         <button class="ig-tab" id="arc-center">&#8982; CENTER</button>
         <button class="ig-tab" id="arc-clear">CLEAR PTS</button>
+        <span class="divider">|</span>
+        <div class="r3d-modes" id="arc-modes">
+          <button class="ig-tab active" data-mode="point">POINT</button>
+          <button class="ig-tab" data-mode="line">LINE</button>
+          <button class="ig-tab" data-mode="retouch">RETOUCH</button>
+        </div>
         <span class="r3d-file" id="arc-note">POINTS COLORED BY HEIGHT &middot; 7 CH &times; 180&deg; SWEEP</span>
         <span class="r3l-label">PT SIZE</span>
         <input type="range" class="r3l-slider arc-size" id="arc-size" min="1" max="7" step="0.5" value="2.5" />
@@ -419,7 +436,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
       <span class="divider">|</span>
-      <span>v0.15.2</span>
+      <span>v0.16.0</span>
     </footer>
   </div>
 
