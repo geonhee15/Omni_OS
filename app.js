@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.21.0",
+  version: "0.22.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2172,6 +2172,7 @@ OmniOS.register("arc", {
   _rate: 0,
 
   init() {
+    this.initWorkspaces();
     const $ = (id) => document.getElementById(id);
     this.els = {
       panel: $("panel-arc"),
@@ -2197,6 +2198,7 @@ OmniOS.register("arc", {
       paint: $("arc-paint"),
       note: $("arc-note"),
       cplan: $("arc-cplan"),
+      tabs: $("arc-tabs"),
       cplanCv: $("arc-cplan-cv"),
       creset: $("arc-creset"),
       recent: $("arc-recent"),
@@ -2234,6 +2236,17 @@ OmniOS.register("arc", {
         this.applyPaint();
       }));
     this.els.load.addEventListener("click", () => this.els.loadInput.click());
+    this.els.viewport.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+    this.els.viewport.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      for (const f of Array.from(e.dataTransfer.files)) {
+        if (!/\.ply$/i.test(f.name)) continue;
+        await this.loadPlyCloud(await f.arrayBuffer(), f.name);
+      }
+    });
     this.els.loadInput.addEventListener("change", async () => {
       const f = this.els.loadInput.files && this.els.loadInput.files[0];
       this.els.loadInput.value = "";
@@ -2263,18 +2276,17 @@ OmniOS.register("arc", {
     window.addEventListener("mouseup", (e) => {
       if (!this._dragStart) return;
       const a = this._dragStart;
-      const b = this.planXY(e, this._dragCv);
+      const cv2 = this._dragCv;
+      const b = this.planXY(e, cv2);
       this._dragStart = null;
       this._dragCur = null;
       this._dragCv = null;
-      if (Math.hypot(b.px - a.px, b.pz - a.pz) < 6) {
-        this.setSelection(null); // plain click — release
-      } else {
-        this.setSelection({
-          x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x),
-          z0: Math.min(a.z, b.z), z1: Math.max(a.z, b.z),
-        });
-      }
+      const sel = Math.hypot(b.px - a.px, b.pz - a.pz) < 6 ? null : {
+        x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x),
+        z0: Math.min(a.z, b.z), z1: Math.max(a.z, b.z),
+      };
+      if (cv2 === this.els.cplanCv) this.setPaintSel(sel); // COLOR PLAN paints
+      else this.setSelection(sel);                          // FLOOR PLAN isolates
       this.renderPlan();
       this.renderCPlan();
     });
@@ -2379,13 +2391,13 @@ OmniOS.register("arc", {
       new THREE.LineBasicMaterial({ color: 0x35d6ff, transparent: true, opacity: 0.4 }));
     scene.add(azLine);
 
-    // point cloud (preallocated ring buffer)
-    const positions = new Float32Array(this.MAX_POINTS * 3);
-    const colors = new Float32Array(this.MAX_POINTS * 3);
+    // point cloud (preallocated ring buffer, backed by the active workspace)
+    const positions = this.activeWs().positions;
+    const colors = this.activeWs().colors;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    geo.setDrawRange(0, 0);
+    geo.setDrawRange(0, this._count);
     const material = new THREE.PointsMaterial({
       size: parseFloat(this.els.size.value) / 100,
       vertexColors: true,
@@ -2533,20 +2545,21 @@ OmniOS.register("arc", {
     }
     const a = typeof msg.a === "number" ? msg.a : 0;
     const az = Math.max(0, Math.min(180, Math.round(a)));
+    const L = this.liveWs(); // stream accumulates here even while another tab is viewed
     for (let ch = 0; ch < Math.min(7, msg.d.length); ch++) {
       const mm = msg.d[ch];
       this.updateChannel(ch, mm);
       const valid = typeof mm === "number" && mm >= this.MIN_MM && mm <= this.MAX_MM;
-      const S = this._st;
+      const S = L.st;
       S.total++;
       if (valid) {
-        const p = this.addPoint(a, ch, mm);
+        const p = this.addPoint(L, a, ch, mm);
         // latest-sweep grid (LINE/RETOUCH modes rebuild from this)
         const gi = ch * 181 + az;
-        this._grid[gi * 3] = p.x;
-        this._grid[gi * 3 + 1] = p.y;
-        this._grid[gi * 3 + 2] = p.z;
-        this._gridOk[gi] = 1;
+        L.grid[gi * 3] = p.x;
+        L.grid[gi * 3 + 1] = p.y;
+        L.grid[gi * 3 + 2] = p.z;
+        L.gridOk[gi] = 1;
         // running stats + histograms
         S.n++;
         S.sum += mm;
@@ -2560,20 +2573,20 @@ OmniOS.register("arc", {
           const cz = Math.floor((p.z + 4) / 8 * 160);
           if (cx >= 0 && cx < 160 && cz >= 0 && cz < 160) {
             const oi = cz * 160 + cx;
-            if (this._occ[oi] < 65535) this._occ[oi]++;
+            if (L.occ[oi] < 65535) L.occ[oi]++;
           }
         }
       } else {
-        this._gridOk[ch * 181 + az] = 0;
+        L.gridOk[ch * 181 + az] = 0;
       }
     }
     // sweep counter: count each time the servo reaches an end stop
     if ((az === 0 || az === 180) && this._lastEdge !== az) {
       this._lastEdge = az;
-      this._st.edges++;
+      L.st.edges++;
     }
     const nowMs = performance.now();
-    if (nowMs - (this._anAt || 0) > 500) {
+    if (nowMs - (this._anAt || 0) > 500 && this.activeWs().live) {
       this._anAt = nowMs;
       this.renderAnalytics();
       if (this._layers.line) this.buildLines();
@@ -2603,7 +2616,7 @@ OmniOS.register("arc", {
     el.fill.style.width = valid ? `${Math.min(100, (mm / this.MAX_MM) * 100)}%` : "0%";
   },
 
-  addPoint(aDeg, ch, mm) {
+  addPoint(ws, aDeg, ch, mm) {
     const c = this._ctx;
     if (!c) return;
     const th = (this.TILTS[ch] * Math.PI) / 180;   // elevation
@@ -2614,18 +2627,20 @@ OmniOS.register("arc", {
     const z = -horiz * Math.sin(ph);
     const y = r * Math.sin(th) + this.CH_HEIGHTS[ch];
 
-    const i = this._writeIdx;
-    c.positions[i * 3] = x;
-    c.positions[i * 3 + 1] = y;
-    c.positions[i * 3 + 2] = z;
+    const i = ws.writeIdx;
+    ws.positions[i * 3] = x;
+    ws.positions[i * 3 + 1] = y;
+    ws.positions[i * 3 + 2] = z;
 
-    this.styleColor(x, y, z, c.colors, i * 3);
+    this.styleColor(x, y, z, ws.colors, i * 3, ws.paintLog);
 
-    this._writeIdx = (this._writeIdx + 1) % this.MAX_POINTS;
-    this._count = Math.min(this._count + 1, this.MAX_POINTS);
-    c.geo.attributes.position.needsUpdate = true;
-    c.geo.attributes.color.needsUpdate = true;
-    c.geo.setDrawRange(0, this._count);
+    ws.writeIdx = (ws.writeIdx + 1) % this.MAX_POINTS;
+    ws.count = Math.min(ws.count + 1, this.MAX_POINTS);
+    if (ws === this.activeWs()) {
+      c.geo.attributes.position.needsUpdate = true;
+      c.geo.attributes.color.needsUpdate = true;
+      c.geo.setDrawRange(0, ws.count);
+    }
     return { x, y, z };
   },
 
@@ -2682,10 +2697,10 @@ OmniOS.register("arc", {
   // applied CUSTOM edits, replayed onto points, LINE, RETOUCH and new samples
   _paintLog: [],
 
-  styleColor(x, y, z, out, o) {
+  styleColor(x, y, z, out, o, log) {
     this.pointColor(x, y, z, out, o);
     if (this._cmode !== "custom") return;
-    for (const P of this._paintLog) {
+    for (const P of (log || this._paintLog)) {
       if (x >= P.x0 && x <= P.x1 && z >= P.z0 && z <= P.z1) {
         out[o] = P.c[0];
         out[o + 1] = P.c[1];
@@ -2723,7 +2738,7 @@ OmniOS.register("arc", {
 
   setColorMode(m) {
     if (this._cmode === m) return;
-    this.setSelection(null); // clears clip planes or pending paint highlight
+    this.setPaintSel(null); // pending paint highlight is mode-specific; isolation stays
     this._cmode = m;
     this.syncColorUi();
     this.recolorAll();
@@ -2734,7 +2749,7 @@ OmniOS.register("arc", {
 
   // RESET: back to the signature HUD hologram ramp, custom edits wiped
   resetColors() {
-    this.setSelection(null);
+    this.setPaintSel(null);
     this._paintLog = [];
     this._cmode = "custom";
     this.syncColorUi();
@@ -2751,7 +2766,7 @@ OmniOS.register("arc", {
     if (!c) return;
     const idx = [];
     for (let i = 0; i < this._count; i++) {
-      if (this.inSel(c.positions[i * 3], c.positions[i * 3 + 2])) idx.push(i);
+      if (this.inCSel(c.positions[i * 3], c.positions[i * 3 + 2])) idx.push(i);
     }
     if (!idx.length) return;
     const old = new Float32Array(idx.length * 3);
@@ -2793,7 +2808,7 @@ OmniOS.register("arc", {
     });
     P.applied = true;
     // log the edit so LINE/RETOUCH and future samples pick it up too
-    const s = this._sel;
+    const s = this._csel;
     if (s) {
       const entry = { x0: s.x0, x1: s.x1, z0: s.z0, z1: s.z1, c: [r, g, b] };
       if (P.logIdx != null) this._paintLog[P.logIdx] = entry;
@@ -2874,8 +2889,7 @@ OmniOS.register("arc", {
 
   setSelection(sel) {
     this._sel = sel;
-    const custom = this._cmode === "custom";
-    if (sel && !custom && this._three) {
+    if (sel && this._three) {
       const THREE = this._three.THREE;
       this._clip = [
         new THREE.Plane(new THREE.Vector3(1, 0, 0), -sel.x0),
@@ -2891,10 +2905,20 @@ OmniOS.register("arc", {
     if (this._ctx) apply(this._ctx.material);
     if (this._lineSegs) for (const s of this._lineSegs) apply(s.material);
     if (this._roomGroup) this._roomGroup.traverse((o) => o.material && apply(o.material));
-    if (custom) {
-      this.dropPaint(true); // un-highlight a previous unpainted selection
-      if (sel) this.buildPaintSet();
-    }
+  },
+
+  // COLOR PLAN's own selection — paints, never hides
+  _csel: null,
+
+  inCSel(x, z) {
+    const s = this._csel;
+    return !s || (x >= s.x0 && x <= s.x1 && z >= s.z0 && z <= s.z1);
+  },
+
+  setPaintSel(sel) {
+    this._csel = sel;
+    this.dropPaint(true); // un-highlight a previous unpainted selection
+    if (sel) this.buildPaintSet();
   },
 
   inSel(x, z) {
@@ -2982,10 +3006,15 @@ OmniOS.register("arc", {
       ctx.strokeRect(Math.min(ax, bx), Math.min(az, bz), Math.abs(bx - ax), Math.abs(bz - az));
       ctx.restore();
     };
-    if (this._sel) {
+    const isColor = cv === this.els.cplanCv;
+    if (!isColor && this._sel) {
       drawRect(this._sel.x0, this._sel.z0, this._sel.x1, this._sel.z1, "rgba(255, 200, 87, 0.9)", false);
     }
-    if (this._dragStart && this._dragCur) {
+    if (isColor && this._csel) {
+      drawRect(this._csel.x0, this._csel.z0, this._csel.x1, this._csel.z1,
+        "rgba(234, 252, 255, 0.9)", false);
+    }
+    if (this._dragStart && this._dragCur && this._dragCv === cv) {
       drawRect(this._dragStart.x, this._dragStart.z, this._dragCur.x, this._dragCur.z,
         "rgba(234, 252, 255, 0.8)", true);
     }
@@ -3141,8 +3170,12 @@ OmniOS.register("arc", {
         if (r && r.ok) {
           this.setStatus(`SAVED ${name}`, "ok");
           this.refreshRecents();
+        } else {
+          this.setStatus("PLY SAVE FAILED", "alert");
         }
-      } catch (e) {}
+      } catch (e) {
+        this.setStatus("PLY SAVE FAILED", "alert");
+      }
     } else {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -3209,7 +3242,7 @@ OmniOS.register("arc", {
       }
       await this.loadPlyCloud(buf, it.name);
     } catch (e) {
-      this.setStatus("PLY LOAD FAILED", "alert");
+      this.setStatus("PLY READ FAILED", "alert");
     }
   },
 
@@ -3284,21 +3317,21 @@ OmniOS.register("arc", {
     if (!this._ctx) await this.initViewport();
     const parsed = this.parsePlyVertices(buf);
     if (!parsed || !parsed.count) {
-      this.setStatus("PLY LOAD FAILED", "alert");
+      this.setStatus("PLY PARSE FAILED", "alert");
       return;
     }
-    this.clearCloud();
-    const c = this._ctx;
-    c.positions.set(parsed.P.subarray(0, parsed.count * 3));
-    c.colors.set(parsed.C.subarray(0, parsed.count * 3));
-    this._count = parsed.count;
-    this._writeIdx = parsed.count % this.MAX_POINTS;
+    const short = name.replace(/\.ply$/i, "").toUpperCase().slice(0, 22) || "SCAN";
+    const ws = this.newWs(short, false);
+    ws.positions.set(parsed.P.subarray(0, parsed.count * 3));
+    ws.colors.set(parsed.C.subarray(0, parsed.count * 3));
+    ws.count = parsed.count;
+    ws.writeIdx = parsed.count % this.MAX_POINTS;
     // rebuild stats / occupancy / sweep grid so analytics, PLAN, LINE and
     // RETOUCH all work on the loaded cloud (channel inferred from elevation)
+    const S = ws.st;
     for (let i = 0; i < parsed.count; i++) {
       const x = parsed.P[i * 3], y = parsed.P[i * 3 + 1], z = parsed.P[i * 3 + 2];
       const mm = Math.hypot(x, y - this.CH_HEIGHTS[3], z) * 1000;
-      const S = this._st;
       S.total++;
       S.n++;
       S.sum += mm;
@@ -3312,7 +3345,7 @@ OmniOS.register("arc", {
         const cz = Math.floor((z + 4) / 8 * 160);
         if (cx >= 0 && cx < 160 && cz >= 0 && cz < 160) {
           const oi = cz * 160 + cx;
-          if (this._occ[oi] < 65535) this._occ[oi]++;
+          if (ws.occ[oi] < 65535) ws.occ[oi]++;
         }
       }
       const deg = Math.atan2(-z, x) * 180 / Math.PI;
@@ -3325,24 +3358,52 @@ OmniOS.register("arc", {
             * 180 / Math.PI;
           if (Math.abs(elev - this.TILTS[ch]) < 2) {
             const gi = ch * 181 + az;
-            this._grid[gi * 3] = x;
-            this._grid[gi * 3 + 1] = y;
-            this._grid[gi * 3 + 2] = z;
-            this._gridOk[gi] = 1;
+            ws.grid[gi * 3] = x;
+            ws.grid[gi * 3 + 1] = y;
+            ws.grid[gi * 3 + 2] = z;
+            ws.gridOk[gi] = 1;
             break;
           }
         }
       }
     }
-    c.geo.attributes.position.needsUpdate = true;
-    c.geo.attributes.color.needsUpdate = true;
-    c.geo.setDrawRange(0, this._count);
-    this.els.stats.textContent = `${this._count.toLocaleString()} PTS`;
-    this.renderAnalytics();
-    this.els.analytics.hidden = false;
-    this.applyLayers();
-    this.renderCPlan();
-    this.setStatus(`LOADED ${name}`, "ok");
+    this._wss.push(ws);
+    this.els.hint.hidden = true; // a loaded scan replaces the offline hint
+    this.switchWs(this._wss.length - 1); // aliases now point at the new scan
+    // outcome check: if the inferred sweep grid yields no wall outline
+    // (RETOUCH ribbon exports, foreign PLYs), synthesize a CH3 outline at
+    // mid-wall height + occupancy so LINE/RETOUCH/PLAN stay editable
+    const ceilY = this.histTop(this._st.histY, -0.5, 3.5, 5) || 2.4;
+    const outline = this.computeOutline(ceilY);
+    if (outline.filter((v) => v != null).length < 20) {
+      const yMid = Math.max(0.35, (0.3 + ceilY - 0.25) / 2);
+      for (let i = 0; i < ws.count; i++) {
+        const x = ws.positions[i * 3], z = ws.positions[i * 3 + 2];
+        const deg = Math.atan2(-z, x) * 180 / Math.PI;
+        if (deg < -1 || deg > 181) continue;
+        const az2 = Math.max(0, Math.min(180, Math.round(deg)));
+        const gi = 3 * 181 + az2;
+        const r = Math.hypot(x, z);
+        const prev = ws.gridOk[gi] && ws.grid[gi * 3 + 1] === yMid
+          ? Math.hypot(ws.grid[gi * 3], ws.grid[gi * 3 + 2]) : -1;
+        if (r > prev) {
+          ws.grid[gi * 3] = x;
+          ws.grid[gi * 3 + 1] = yMid;
+          ws.grid[gi * 3 + 2] = z;
+          ws.gridOk[gi] = 1;
+        }
+        const cx = Math.floor((x + 4) / 8 * 160);
+        const cz = Math.floor((z + 4) / 8 * 160);
+        if (cx >= 0 && cx < 160 && cz >= 0 && cz < 160) {
+          const oi = cz * 160 + cx;
+          if (ws.occ[oi] < 65535) ws.occ[oi]++;
+        }
+      }
+      this.renderAnalytics();
+      this.applyLayers();
+      this.renderCPlan();
+    }
+    this.setStatus(`LOADED ${name} \u00b7 ${ws.count.toLocaleString()} PTS`, "ok");
   },
 
   clearCloud() {
@@ -3358,18 +3419,126 @@ OmniOS.register("arc", {
 
   // ── analytics: keep every sample's statistics even though the point ring
   // buffer eventually overwrites old points ──
-  resetStats() {
-    this._st = {
+  freshStats() {
+    return {
       n: 0, total: 0, sum: 0, sumsq: 0, edges: 0,
       histD: new Uint32Array(25),
       histX: new Uint32Array(80),
       histY: new Uint32Array(80),
       histZ: new Uint32Array(80),
     };
+  },
+
+  resetStats() {
+    this._st = this.freshStats();
     this._grid = new Float32Array(7 * 181 * 3);
     this._gridOk = new Uint8Array(7 * 181);
     this._occ = new Uint16Array(160 * 160); // 8×8 m, 5 cm cells (floor plan)
     this._lastEdge = -1;
+  },
+
+  // ── workspaces: the LIVE stream plus any number of loaded PLY scans.
+  // The legacy per-scan fields (_count, _grid, _occ, _st, _paintLog, …)
+  // become aliases onto the active workspace so every consumer — layers,
+  // analytics, painting, exports — is workspace-aware unchanged. ──
+  _wss: null,
+  _wsActive: 0,
+  activeWs() { return this._wss[this._wsActive]; },
+  liveWs() { return this._wss[0]; },
+
+  newWs(name, live) {
+    return {
+      name, live: !!live,
+      positions: new Float32Array(this.MAX_POINTS * 3),
+      colors: new Float32Array(this.MAX_POINTS * 3),
+      count: 0, writeIdx: 0,
+      grid: new Float32Array(7 * 181 * 3),
+      gridOk: new Uint8Array(7 * 181),
+      occ: new Uint16Array(160 * 160),
+      st: this.freshStats(),
+      paintLog: [],
+    };
+  },
+
+  initWorkspaces() {
+    this._wss = [this.newWs("LIVE", true)];
+    this._wsActive = 0;
+    const map = { _count: "count", _writeIdx: "writeIdx", _grid: "grid",
+      _gridOk: "gridOk", _occ: "occ", _st: "st", _paintLog: "paintLog" };
+    for (const [alias, key] of Object.entries(map)) {
+      Object.defineProperty(this, alias, {
+        get: () => this.activeWs()[key],
+        set: (v) => { this.activeWs()[key] = v; },
+        configurable: true,
+      });
+    }
+  },
+
+  switchWs(i) {
+    if (i === this._wsActive || !this._wss[i]) return;
+    this._wsActive = i;
+    const ws = this.activeWs();
+    const c = this._ctx;
+    if (c) {
+      c.positions = ws.positions;
+      c.colors = ws.colors;
+      c.geo.attributes.position.array = ws.positions;
+      c.geo.attributes.color.array = ws.colors;
+      c.geo.attributes.position.needsUpdate = true;
+      c.geo.attributes.color.needsUpdate = true;
+      c.geo.setDrawRange(0, ws.count);
+    }
+    this.setSelection(null);
+    this.setPaintSel(null);
+    this.els.stats.textContent = `${ws.count.toLocaleString()} PTS`;
+    this.renderAnalytics();
+    this.els.analytics.hidden = ws.count === 0;
+    this.applyLayers();
+    this.renderCPlan();
+    this.renderTabs();
+  },
+
+  closeWs(i) {
+    const ws = this._wss[i];
+    if (!ws || ws.live) return;
+    this._wss.splice(i, 1);
+    if (this._wsActive >= i) {
+      const target = Math.max(0, this._wsActive - 1);
+      if (target === this._wsActive) {
+        this._wsActive = -1; // force the refresh even for index 0
+      }
+      this.switchWs(target);
+    } else {
+      this.renderTabs();
+    }
+  },
+
+  renderTabs() {
+    const bar = this.els.tabs;
+    if (!bar) return;
+    bar.hidden = this._wss.length < 2;
+    bar.innerHTML = "";
+    if (bar.hidden) return;
+    this._wss.forEach((ws, i) => {
+      const tab = document.createElement("div");
+      tab.className = `r3d-tab${i === this._wsActive ? " active" : ""}`;
+      const label = document.createElement("span");
+      label.className = "r3d-tab-label";
+      label.textContent = ws.live ? "◎ LIVE" : ws.name;
+      tab.appendChild(label);
+      if (!ws.live) {
+        const x = document.createElement("span");
+        x.className = "r3d-tab-x";
+        x.textContent = "✕";
+        x.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.closeWs(i);
+        });
+        tab.appendChild(x);
+      }
+      tab.addEventListener("click", () => this.switchWs(i));
+      bar.appendChild(tab);
+    });
   },
 
   // highest bin with a meaningful count — robust "max" that ignores stray noise
