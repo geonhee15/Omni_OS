@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.17.0",
+  version: "0.18.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2154,6 +2154,7 @@ OmniOS.register("r3d", {
 // the omni:// secure origin); in a browser it falls back to a JS WebSocket.
 OmniOS.register("arc", {
   TILTS: [30, 20, 10, 0, -10, -20, -30],
+  CH_SHADES: [0xeafcff, 0xbfeaff, 0x8fdcff, 0x35d6ff, 0x2fa8d8, 0x2b86b8, 0x275f8e],
   CH_HEIGHTS: [0.19, 0.16, 0.14, 0.11, 0.09, 0.06, 0.03], // sensor z on mast (m)
   MAX_POINTS: 300000,
   MIN_MM: 40,
@@ -2191,6 +2192,7 @@ OmniOS.register("arc", {
       planArea: $("arc-plan-area"),
       savePly: $("arc-save"),
       toR3d: $("arc-to-r3d"),
+      exp: $("arc-exp"),
       side: $("arc-side"),
       hint: $("arc-hint"),
       ip: $("arc-ip"),
@@ -2213,6 +2215,34 @@ OmniOS.register("arc", {
       b.addEventListener("click", () => this.toggleLayer(b.dataset.mode)));
     this.els.savePly.addEventListener("click", () => this.exportPly(false));
     this.els.toR3d.addEventListener("click", () => this.exportPly(true));
+
+    // drag on the floor plan = select a region; a plain click clears it
+    const cv = this.els.planCv;
+    cv.addEventListener("mousedown", (e) => {
+      this._dragStart = this.planXY(e);
+      this._dragCur = this._dragStart;
+    });
+    cv.addEventListener("mousemove", (e) => {
+      if (!this._dragStart) return;
+      this._dragCur = this.planXY(e);
+      this.renderPlan();
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (!this._dragStart) return;
+      const a = this._dragStart;
+      const b = this.planXY(e);
+      this._dragStart = null;
+      this._dragCur = null;
+      if (Math.hypot(b.px - a.px, b.pz - a.pz) < 6) {
+        this.setSelection(null); // plain click — release
+      } else {
+        this.setSelection({
+          x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x),
+          z0: Math.min(a.z, b.z), z1: Math.max(a.z, b.z),
+        });
+      }
+      this.renderPlan();
+    });
     this.resetStats();
     this.els.stop.addEventListener("click", () => this.sendCmd("stop"));
     this.els.center.addEventListener("click", () => this.sendCmd("center"));
@@ -2278,6 +2308,7 @@ OmniOS.register("arc", {
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setSize(vp.clientWidth || 640, vp.clientHeight || 480);
+    renderer.localClippingEnabled = true; // PLAN region selection clips the scene
     vp.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -2577,6 +2608,43 @@ OmniOS.register("arc", {
     return { x, y, z };
   },
 
+  // ── PLAN region selection: drag a rectangle to isolate that area in 3D ──
+  _sel: null,
+  _clip: null,
+
+  planXY(e) {
+    const cv = this.els.planCv;
+    const r = cv.getBoundingClientRect();
+    const px = (e.clientX - r.left) * (cv.width / r.width);
+    const pz = (e.clientY - r.top) * (cv.height / r.height);
+    return { px, pz, x: (px / cv.width) * 8 - 4, z: (pz / cv.height) * 8 - 4 };
+  },
+
+  setSelection(sel) {
+    this._sel = sel;
+    if (sel && this._three) {
+      const THREE = this._three.THREE;
+      this._clip = [
+        new THREE.Plane(new THREE.Vector3(1, 0, 0), -sel.x0),
+        new THREE.Plane(new THREE.Vector3(-1, 0, 0), sel.x1),
+        new THREE.Plane(new THREE.Vector3(0, 0, 1), -sel.z0),
+        new THREE.Plane(new THREE.Vector3(0, 0, -1), sel.z1),
+      ];
+    } else {
+      this._clip = null;
+    }
+    // apply to every scanned-content material (grid/mast stay visible)
+    const apply = (m) => { m.clippingPlanes = this._clip; m.needsUpdate = true; };
+    if (this._ctx) apply(this._ctx.material);
+    if (this._lineSegs) for (const s of this._lineSegs) apply(s.material);
+    if (this._roomGroup) this._roomGroup.traverse((o) => o.material && apply(o.material));
+  },
+
+  inSel(x, z) {
+    const s = this._sel;
+    return !s || (x >= s.x0 && x <= s.x1 && z >= s.z0 && z <= s.z1);
+  },
+
   // ── PLAN: occupancy-grid 2D floor plan minimap ──
   renderPlan() {
     const cv = this.els.planCv;
@@ -2628,39 +2696,156 @@ OmniOS.register("arc", {
     const [ox, oz] = toPx(0, 0);
     ctx.fillStyle = "#35d6ff";
     ctx.beginPath(); ctx.arc(ox, oz, 3, 0, 7); ctx.fill();
-    this.els.planArea.textContent = `EST AREA ${Math.abs(area).toFixed(1)} M\u00b2`;
+    // active region selection (amber) / in-progress drag (dashed white)
+    const drawRect = (x0, z0, x1, z1, stroke, dash) => {
+      const [ax, az] = toPx(x0, z0);
+      const [bx, bz] = toPx(x1, z1);
+      ctx.save();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.2;
+      if (dash) ctx.setLineDash([4, 3]);
+      ctx.strokeRect(Math.min(ax, bx), Math.min(az, bz), Math.abs(bx - ax), Math.abs(bz - az));
+      ctx.restore();
+    };
+    if (this._sel) {
+      drawRect(this._sel.x0, this._sel.z0, this._sel.x1, this._sel.z1, "rgba(255, 200, 87, 0.9)", false);
+    }
+    if (this._dragStart && this._dragCur) {
+      drawRect(this._dragStart.x, this._dragStart.z, this._dragCur.x, this._dragCur.z,
+        "rgba(234, 252, 255, 0.8)", true);
+    }
+    this.els.planArea.textContent = this._sel
+      ? "REGION SELECTED \u00b7 CLICK TO CLEAR"
+      : `EST AREA ${Math.abs(area).toFixed(1)} M\u00b2`;
   },
 
-  // ── PLY export: binary little-endian, positions + colors ──
-  buildPlyBlob() {
-    const n = this._count;
-    if (!n || !this._ctx) return null;
-    const header =
-      "ply\nformat binary_little_endian 1.0\n" +
-      `element vertex ${n}\n` +
+  // ── PLY export: binary little-endian. POINT = colored point cloud,
+  // LINE = latest-sweep vertices + edge elements, RETOUCH = wall shell mesh.
+  // An active PLAN region selection filters POINT/LINE exports. ──
+  plyHeader(nVerts, extra) {
+    return "ply\nformat binary_little_endian 1.0\n" +
+      `element vertex ${nVerts}\n` +
       "property float x\nproperty float y\nproperty float z\n" +
       "property uchar red\nproperty uchar green\nproperty uchar blue\n" +
+      (extra || "") +
       "end_header\n";
-    const head = new TextEncoder().encode(header);
-    const body = new ArrayBuffer(n * 15);
-    const dv = new DataView(body);
+  },
+
+  buildPlyBlob(kind) {
+    if (!this._ctx) return null;
+    const enc = (s) => new TextEncoder().encode(s);
+
+    if (kind === "line") {
+      // vertices from the latest-sweep grid, edges between azimuth neighbors
+      const verts = [];
+      const edges = [];
+      const map = new Int32Array(7 * 181).fill(-1);
+      for (let ch = 0; ch < 7; ch++) {
+        const shade = this.CH_SHADES[ch];
+        const r = (shade >> 16) & 255, g = (shade >> 8) & 255, b = shade & 255;
+        for (let az = 0; az <= 180; az++) {
+          const gi = ch * 181 + az;
+          if (!this._gridOk[gi]) continue;
+          const x = this._grid[gi * 3], y = this._grid[gi * 3 + 1], z = this._grid[gi * 3 + 2];
+          if (!this.inSel(x, z)) continue;
+          map[gi] = verts.length;
+          verts.push([x, y, z, r, g, b]);
+          if (az > 0 && map[gi - 1] >= 0) edges.push([map[gi - 1], map[gi]]);
+        }
+      }
+      if (!verts.length) return null;
+      const head = enc(this.plyHeader(verts.length,
+        `element edge ${edges.length}\nproperty int vertex1\nproperty int vertex2\n`));
+      const body = new ArrayBuffer(verts.length * 15 + edges.length * 8);
+      const dv = new DataView(body);
+      verts.forEach((v, i) => {
+        const o = i * 15;
+        dv.setFloat32(o, v[0], true);
+        dv.setFloat32(o + 4, v[1], true);
+        dv.setFloat32(o + 8, v[2], true);
+        dv.setUint8(o + 12, v[3]);
+        dv.setUint8(o + 13, v[4]);
+        dv.setUint8(o + 14, v[5]);
+      });
+      const eo = verts.length * 15;
+      edges.forEach((e, i) => {
+        dv.setInt32(eo + i * 8, e[0], true);
+        dv.setInt32(eo + i * 8 + 4, e[1], true);
+      });
+      return new Blob([head, body], { type: "application/octet-stream" });
+    }
+
+    if (kind === "retouch") {
+      // estimated room shell as a real triangle mesh
+      const ceilY = this.histTop(this._st.histY, -0.5, 3.5, 5) || 2.4;
+      const smooth = this.computeOutline(ceilY);
+      const verts = [];
+      const faces = [];
+      let prevBase = -1;
+      for (let az = 0; az <= 180; az++) {
+        const r = smooth[az];
+        if (r == null) { prevBase = -1; continue; }
+        const ph = (az * Math.PI) / 180;
+        const x = r * Math.cos(ph), z = -r * Math.sin(ph);
+        const base = verts.length;
+        verts.push([x, 0.02, z], [x, ceilY, z]);
+        if (prevBase >= 0) {
+          faces.push([prevBase, prevBase + 1, base], [prevBase + 1, base + 1, base]);
+        }
+        prevBase = base;
+      }
+      if (!verts.length) return null;
+      const head = enc(this.plyHeader(verts.length,
+        `element face ${faces.length}\nproperty list uchar int vertex_indices\n`));
+      const body = new ArrayBuffer(verts.length * 15 + faces.length * 13);
+      const dv = new DataView(body);
+      verts.forEach((v, i) => {
+        const o = i * 15;
+        dv.setFloat32(o, v[0], true);
+        dv.setFloat32(o + 4, v[1], true);
+        dv.setFloat32(o + 8, v[2], true);
+        dv.setUint8(o + 12, 0x35);
+        dv.setUint8(o + 13, 0xd6);
+        dv.setUint8(o + 14, 0xff);
+      });
+      const fo = verts.length * 15;
+      faces.forEach((f, i) => {
+        const o = fo + i * 13;
+        dv.setUint8(o, 3);
+        dv.setInt32(o + 1, f[0], true);
+        dv.setInt32(o + 5, f[1], true);
+        dv.setInt32(o + 9, f[2], true);
+      });
+      return new Blob([head, body], { type: "application/octet-stream" });
+    }
+
+    // POINT (default): the accumulated cloud
     const P = this._ctx.positions, C = this._ctx.colors;
-    for (let i = 0; i < n; i++) {
-      const o = i * 15;
+    const idx = [];
+    for (let i = 0; i < this._count; i++) {
+      if (this.inSel(P[i * 3], P[i * 3 + 2])) idx.push(i);
+    }
+    if (!idx.length) return null;
+    const head = enc(this.plyHeader(idx.length));
+    const body = new ArrayBuffer(idx.length * 15);
+    const dv = new DataView(body);
+    idx.forEach((i, k) => {
+      const o = k * 15;
       dv.setFloat32(o, P[i * 3], true);
       dv.setFloat32(o + 4, P[i * 3 + 1], true);
       dv.setFloat32(o + 8, P[i * 3 + 2], true);
       dv.setUint8(o + 12, Math.round(C[i * 3] * 255));
       dv.setUint8(o + 13, Math.round(C[i * 3 + 1] * 255));
       dv.setUint8(o + 14, Math.round(C[i * 3 + 2] * 255));
-    }
+    });
     return new Blob([head, body], { type: "application/octet-stream" });
   },
 
   async exportPly(toR3d) {
-    const blob = this.buildPlyBlob();
+    const kind = this.els.exp.value;
+    const blob = this.buildPlyBlob(kind);
     if (!blob) return;
-    const name = `arc_scan_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.ply`;
+    const name = `arc_${kind}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.ply`;
     if (toR3d) {
       // panel-to-panel handoff: open the scan as a model in RENDER_3D
       const file = new File([blob], name);
@@ -2803,14 +2988,14 @@ OmniOS.register("arc", {
     if (!(this._lineGroup instanceof THREE.Group)) {
       this._lineGroup = new THREE.Group();
       this._lineSegs = [];
-      const shades = [0xeafcff, 0xbfeaff, 0x8fdcff, 0x35d6ff, 0x2fa8d8, 0x2b86b8, 0x275f8e];
       for (let ch = 0; ch < 7; ch++) {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(181 * 3), 3));
         geo.setIndex(new THREE.BufferAttribute(new Uint16Array(180 * 2), 1));
         geo.setDrawRange(0, 0);
         const mat = new THREE.LineBasicMaterial({
-          color: shades[ch], transparent: true, opacity: 0.9,
+          color: this.CH_SHADES[ch], transparent: true, opacity: 0.9,
+          clippingPlanes: this._clip || null,
         });
         const seg = new THREE.LineSegments(geo, mat);
         seg.frustumCulled = false;
@@ -2928,12 +3113,14 @@ OmniOS.register("arc", {
       const wall = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
         color: 0x35d6ff, transparent: true, opacity: 0.1,
         side: THREE.DoubleSide, depthWrite: false,
+        clippingPlanes: this._clip || null,
       }));
       this._roomGroup.add(wall);
       const mkLine = (pts, opacity) => {
         const g = new THREE.BufferGeometry().setFromPoints(pts);
         return new THREE.Line(g, new THREE.LineBasicMaterial({
           color: 0x35d6ff, transparent: true, opacity,
+          clippingPlanes: this._clip || null,
         }));
       };
       this._roomGroup.add(mkLine(botPts, 0.7));
