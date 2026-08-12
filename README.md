@@ -39,6 +39,14 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   양손 주먹을 세게 당기며 놓으면 분해가 관성으로 끝까지 진행.
   랜드마크 지수평활 + 60fps 보간 스켈레톤. 켜는 동안 Security-Protocol-1 워처를 깨끗하게 종료
   (launchctl bootout)해 카메라를 해제하고, 끄거나 앱 종료 시 자동 재기동
+- **SYSTEM MONITOR** — 아이언맨 미션 컨트롤 스타일 실시간 시스템 대시보드 (1초 갱신, 패널이
+  보일 때만 폴링). 네이티브 수집기(`macos/sysmon.m`, mach/sysctl/IOKit — 루트 불필요):
+  **CPU** 전체·코어별 사용률(원호 게이지 + 코어 바, 부하별 색), **GPU** 사용률(IOAccelerator),
+  **MEMORY** 사용률 게이지 + WIRED/APP/COMPRESSED/FREE 구성 바 + 메모리 압력,
+  **DISK** 사용량 + 읽기/쓰기 속도 스파크라인(IOBlockStorageDriver),
+  **NETWORK** 다운/업 속도 + 60초 스파크라인, **BATTERY** 잔량·충전 상태·건강도·사이클·남은 시간,
+  **PROCESS TOP** CPU 상위 8개, 열 상태(THERMAL)·로드평균·업타임·macOS 버전.
+  브라우저 개발 모드에서는 모의 지표로 렌더.
 - **ARC-SCAN** — [arc-scan](https://github.com/geonhee15/arc-scan)(ESP32 + VL53L1X ToF 7개 회전 라이다)
   실시간 포인트 클라우드 뷰어. **FIND DEVICES**로 로컬 서브넷(/24)을 스캔해 포트 81이 열린 기기를
   찾고 웹소켓 핸드셰이크로 arc-scan 프로토콜인지 검증해 목록에 띄운다 — 클릭 한 번으로 연결

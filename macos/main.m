@@ -2,6 +2,7 @@
 #import <WebKit/WebKit.h>
 #import <signal.h>
 #import "sp1_status.h"
+#import "sysmon.h"
 #import "arduino_bridge.h"
 
 // SP-1 watcher pause/resume lives in sp1_status.m (SP1PauseWatcher /
@@ -304,7 +305,17 @@ static NSString *ArcSavesDir(void) {
     NSString *arg = [body[@"arg"] isKindOfClass:[NSString class]] ? body[@"arg"] : nil;
     if (msgId == nil || cmd == nil) return;
 
-    if ([cmd isEqualToString:@"sp1.status"]) {
+    if ([cmd isEqualToString:@"sys.stats"]) {
+        // 시스템 지표는 전용 직렬 큐에서 — 델타 static이 경쟁하지 않게
+        static dispatch_queue_t sysQ;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            sysQ = dispatch_queue_create("omni.sysmon", DISPATCH_QUEUE_SERIAL);
+        });
+        dispatch_async(sysQ, ^{
+            [self deliverPayload:SysmonCollect() forId:msgId];
+        });
+    } else if ([cmd isEqualToString:@"sp1.status"]) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             [self deliverPayload:SP1CollectStatus() forId:msgId];
         });

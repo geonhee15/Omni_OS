@@ -1903,3 +1903,108 @@ input.arc-paint[hidden] { display: none; }
 .arc-grip-bl { left: 1px; bottom: 1px; cursor: nesw-resize; transform: scaleX(-1); }
 .arc-grip-tr { right: 1px; top: 1px; cursor: nesw-resize; transform: scaleY(-1); }
 .arc-grip-tl { left: 1px; top: 1px; cursor: nwse-resize; transform: scale(-1); }
+
+/* ---------- panel: SYSTEM MONITOR ---------- */
+.sy-gauge {
+  display: block;
+  margin: 2px auto 0;
+}
+
+.sy-cores {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.sy-core {
+  height: 22px;
+  background: rgba(53, 214, 255, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.sy-core i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--cyan);
+  box-shadow: 0 0 6px rgba(53, 214, 255, 0.5);
+}
+
+.sy-membar {
+  display: flex;
+  height: 8px;
+  margin-top: 6px;
+  background: rgba(53, 214, 255, 0.08);
+  overflow: hidden;
+}
+
+.sy-membar i {
+  display: block;
+  height: 100%;
+}
+
+.sy-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 5px 0 4px;
+  font-size: 7.5px;
+  letter-spacing: 1.2px;
+  color: var(--text-dim);
+}
+
+.sy-legend i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+}
+
+.sy-spark {
+  display: block;
+  width: 100%;
+  height: 32px;
+  margin-top: 3px;
+}
+
+.sy-top {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sy-top-row {
+  display: grid;
+  grid-template-columns: 1fr 52px 44px;
+  gap: 8px;
+  font-size: 8.5px;
+  letter-spacing: 1px;
+  align-items: center;
+}
+
+.sy-top-row .name {
+  color: #bfe9f7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sy-top-row .bar {
+  height: 4px;
+  background: rgba(53, 214, 255, 0.12);
+}
+
+.sy-top-row .bar i {
+  display: block;
+  height: 100%;
+  background: var(--cyan);
+}
+
+.sy-top-row .val {
+  text-align: right;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}

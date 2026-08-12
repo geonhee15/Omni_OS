@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.22.0",
+  version: "0.23.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -85,6 +85,320 @@ OmniOS.register("clock", {
 
     const up = Math.floor((Date.now() - OmniOS.bootTime) / 1000);
     this.uptimeEl.textContent = `UPTIME ${pad(Math.floor(up / 3600))}:${pad(Math.floor((up % 3600) / 60))}:${pad(up % 60)}`;
+  },
+});
+
+// ---------- module: SYSTEM MONITOR (mission control) ----------
+OmniOS.register("sys", {
+  els: null,
+  _timer: null,
+  _hist: { rx: [], tx: [], dr: [], dw: [] },
+  _mockT: 0,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      model: $("sy-model"), thermal: $("sy-thermal"), load: $("sy-load"),
+      uptime: $("sy-uptime"),
+      cpuGauge: $("sy-cpu-gauge"), cpuPct: $("sy-cpu-pct"), cores: $("sy-cores"),
+      gpuMod: $("sy-gpu-mod"), gpuGauge: $("sy-gpu-gauge"), gpuPct: $("sy-gpu-pct"),
+      memGauge: $("sy-mem-gauge"), memNote: $("sy-mem-note"),
+      membar: $("sy-membar"), pressure: $("sy-pressure"),
+      diskNote: $("sy-disk-note"), diskUsed: $("sy-disk-used"),
+      diskBar: $("sy-disk-bar"), diskR: $("sy-disk-r"), diskW: $("sy-disk-w"),
+      diskSpark: $("sy-disk-spark"),
+      netRx: $("sy-net-rx"), netTx: $("sy-net-tx"),
+      netRxSpark: $("sy-net-rx-spark"), netTxSpark: $("sy-net-tx-spark"),
+      batMod: $("sy-bat-mod"), batGauge: $("sy-bat-gauge"),
+      batState: $("sy-bat-state"), batHealth: $("sy-bat-health"),
+      batCycles: $("sy-bat-cycles"), batTime: $("sy-bat-time"),
+      top: $("sy-top"), osver: $("sy-osver"), ncores: $("sy-ncores"),
+      ramTotal: $("sy-ram-total"),
+    };
+    // 패널이 보일 때만 1초 폴링
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "sys") this.startPolling();
+      else this.stopPolling();
+    });
+  },
+
+  startPolling() {
+    if (this._timer) return;
+    this.tick();
+    this._timer = setInterval(() => this.tick(), 1000);
+  },
+
+  stopPolling() {
+    if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = null;
+    }
+  },
+
+  async tick() {
+    let d;
+    if (OmniNative.available) {
+      try {
+        d = await OmniNative.request("sys.stats", null, 4000);
+      } catch (e) {
+        return;
+      }
+    } else {
+      d = this.mock(); // 브라우저 개발 모드
+    }
+    if (d) this.render(d);
+  },
+
+  // 브라우저 개발용 가짜 지표 — 실제 앱에서는 네이티브 수집기 사용
+  mock() {
+    const t = this._mockT += 1;
+    const wob = (base, amp, speed, ph) =>
+      base + amp * (0.5 + 0.5 * Math.sin(t * speed + ph));
+    const cores = Array.from({ length: 12 },
+      (_, i) => Math.max(0, Math.min(1, wob(0.2, 0.6, 0.31, i * 1.7))));
+    return {
+      cpu: cores.reduce((s, v) => s + v, 0) / cores.length,
+      cores,
+      cpuModel: "MOCK CPU (BROWSER DEV)",
+      gpu: Math.round(wob(15, 60, 0.23, 1)),
+      load: [wob(2, 3, 0.1, 0), 2.5, 2.2],
+      uptime: 137000 + t,
+      mem: {
+        total: 128 * 2 ** 30,
+        wired: 9 * 2 ** 30,
+        compressed: wob(2, 2, 0.05, 0) * 2 ** 30,
+        active: wob(30, 20, 0.07, 2) * 2 ** 30,
+        inactive: 20 * 2 ** 30,
+        free: 40 * 2 ** 30,
+        pressure: 1,
+      },
+      net: { rxRate: wob(0.2, 8, 0.4, 0) * 2 ** 20, txRate: wob(0.05, 1.5, 0.5, 2) * 2 ** 20 },
+      disk: {
+        total: 2048 * 2 ** 30, free: 959 * 2 ** 30,
+        readRate: wob(0.1, 40, 0.6, 1) * 2 ** 20, writeRate: wob(0.05, 15, 0.7, 3) * 2 ** 20,
+      },
+      battery: {
+        percent: 74, charging: t % 40 > 20, external: true,
+        timeToEmpty: 312, timeToFull: -1, cycles: 195, health: 0.95,
+      },
+      thermal: 0,
+      top: [
+        { pid: 1201, cpu: wob(20, 60, 0.3, 0), mem: 4.1, name: "MockRenderer" },
+        { pid: 88, cpu: wob(10, 25, 0.4, 1), mem: 2.0, name: "WindowServer" },
+        { pid: 421, cpu: 8.2, mem: 1.2, name: "kernel_task" },
+        { pid: 902, cpu: 4.0, mem: 6.3, name: "Safari" },
+        { pid: 77, cpu: 2.1, mem: 0.4, name: "coreaudiod" },
+        { pid: 3, cpu: 1.0, mem: 0.2, name: "launchd" },
+      ],
+      osver: "Version 26.0 (Mock)",
+    };
+  },
+
+  fmtBytes(v) {
+    if (v >= 2 ** 30) return `${(v / 2 ** 30).toFixed(1)} GB`;
+    if (v >= 2 ** 20) return `${(v / 2 ** 20).toFixed(1)} MB`;
+    return `${(v / 1024).toFixed(0)} KB`;
+  },
+
+  fmtRate(v) {
+    if (v >= 2 ** 20) return `${(v / 2 ** 20).toFixed(1)} MB/S`;
+    return `${(v / 1024).toFixed(0)} KB/S`;
+  },
+
+  // 원호 게이지: 0~100%를 -210°→30° 스윕으로
+  gauge(cv, frac, label, color) {
+    const ctx = cv.getContext("2d");
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    const cx = W / 2, cy = H * 0.62, r = Math.min(W, H) * 0.46;
+    const a0 = Math.PI * (-210 / 180), a1 = Math.PI * (30 / 180);
+    ctx.lineWidth = 7;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(53, 214, 255, 0.12)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, a0, a1);
+    ctx.stroke();
+    const f = Math.max(0, Math.min(1, frac));
+    ctx.strokeStyle = color || "#35d6ff";
+    ctx.shadowColor = color || "#35d6ff";
+    ctx.shadowBlur = 8;
+    if (f > 0.004) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, a0, a0 + (a1 - a0) * f);
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#eafcff";
+    ctx.font = "700 22px 'Orbitron', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(label, cx, cy + 8);
+  },
+
+  spark(cv, hist, color) {
+    const ctx = cv.getContext("2d");
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    if (hist.length < 2) return;
+    const max = Math.max(...hist, 1e-6);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    hist.forEach((v, i) => {
+      const x = (i / (hist.length - 1)) * W;
+      const y = H - 2 - (v / max) * (H - 6);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.lineTo(W, H);
+    ctx.lineTo(0, H);
+    ctx.closePath();
+    ctx.fillStyle = color.replace(")", ", 0.12)").replace("rgb", "rgba");
+    ctx.fill();
+  },
+
+  push(key, v) {
+    const h = this._hist[key];
+    h.push(v);
+    if (h.length > 60) h.shift();
+  },
+
+  render(d) {
+    const E = this.els;
+    const THERMAL = ["NOMINAL", "FAIR", "SERIOUS", "CRITICAL"];
+
+    E.model.textContent = (d.cpuModel || "").toUpperCase();
+    const th = THERMAL[d.thermal] || "?";
+    E.thermal.textContent = `THERMAL ${th}`;
+    E.thermal.className = `ts-item${d.thermal >= 2 ? " alert" : d.thermal === 1 ? "" : " ok"}`;
+    E.load.textContent = `LOAD ${(d.load || [0])[0].toFixed(2)}`;
+    const up = d.uptime || 0;
+    E.uptime.textContent =
+      `UP ${Math.floor(up / 86400)}D ${Math.floor((up % 86400) / 3600)}H ` +
+      `${Math.floor((up % 3600) / 60)}M`;
+
+    // CPU
+    const cpu = d.cpu || 0;
+    this.gauge(E.cpuGauge, cpu, `${Math.round(cpu * 100)}%`,
+      cpu > 0.85 ? "#ff4d5e" : cpu > 0.6 ? "#ffc857" : "#35d6ff");
+    E.cpuPct.textContent = `${(d.cores || []).length} CORES`;
+    const cores = d.cores || [];
+    if (E.cores.childElementCount !== cores.length) {
+      E.cores.textContent = "";
+      cores.forEach(() => {
+        const c = document.createElement("div");
+        c.className = "sy-core";
+        c.appendChild(document.createElement("i"));
+        E.cores.appendChild(c);
+      });
+    }
+    [...E.cores.children].forEach((c, i) => {
+      c.firstChild.style.height = `${Math.round((cores[i] || 0) * 100)}%`;
+    });
+
+    // GPU
+    if (typeof d.gpu === "number") {
+      E.gpuMod.hidden = false;
+      this.gauge(E.gpuGauge, d.gpu / 100, `${Math.round(d.gpu)}%`,
+        d.gpu > 85 ? "#ff4d5e" : d.gpu > 60 ? "#ffc857" : "#35d6ff");
+      E.gpuPct.textContent = "";
+    } else {
+      E.gpuMod.hidden = true;
+    }
+
+    // MEMORY
+    const m = d.mem || {};
+    const app = (m.active || 0) + (m.inactive || 0);
+    const used = (m.wired || 0) + (m.compressed || 0) + app;
+    const frac = m.total ? used / m.total : 0;
+    this.gauge(E.memGauge, frac, `${Math.round(frac * 100)}%`,
+      frac > 0.9 ? "#ff4d5e" : frac > 0.75 ? "#ffc857" : "#35d6ff");
+    E.memNote.textContent =
+      `${this.fmtBytes(used)} / ${this.fmtBytes(m.total || 0)}`;
+    const segs = [
+      [m.wired || 0, "#35d6ff"],
+      [app, "#2f7bff"],
+      [m.compressed || 0, "#b26bff"],
+      [Math.max(0, (m.total || 0) - used), "rgba(53,214,255,0.15)"],
+    ];
+    if (E.membar.childElementCount !== segs.length) {
+      E.membar.textContent = "";
+      segs.forEach(() => E.membar.appendChild(document.createElement("i")));
+    }
+    [...E.membar.children].forEach((el, i) => {
+      el.style.width = `${(segs[i][0] / (m.total || 1)) * 100}%`;
+      el.style.background = segs[i][1];
+    });
+    const P = { 1: "NORMAL", 2: "WARNING", 4: "CRITICAL" };
+    E.pressure.textContent = P[m.pressure] || "—";
+    E.ramTotal.textContent = this.fmtBytes(m.total || 0);
+
+    // DISK
+    const dk = d.disk || {};
+    const dUsed = (dk.total || 0) - (dk.free || 0);
+    const dFrac = dk.total ? dUsed / dk.total : 0;
+    E.diskNote.textContent = `${this.fmtBytes(dk.free || 0)} FREE`;
+    E.diskUsed.textContent = `${Math.round(dFrac * 100)}%`;
+    E.diskBar.style.setProperty("--w", `${dFrac * 100}%`);
+    E.diskBar.innerHTML = `<i style="display:block;height:100%;width:${(dFrac * 100).toFixed(1)}%;background:${dFrac > 0.9 ? "#ff4d5e" : "#35d6ff"};"></i>`;
+    E.diskR.textContent = this.fmtRate(dk.readRate || 0);
+    E.diskW.textContent = this.fmtRate(dk.writeRate || 0);
+    this.push("dr", dk.readRate || 0);
+    this.push("dw", dk.writeRate || 0);
+    this.spark(E.diskSpark, this._hist.dr.map((v, i) => v + this._hist.dw[i]), "rgb(53, 214, 255)");
+
+    // NETWORK
+    const n = d.net || {};
+    E.netRx.textContent = this.fmtRate(n.rxRate || 0);
+    E.netTx.textContent = this.fmtRate(n.txRate || 0);
+    this.push("rx", n.rxRate || 0);
+    this.push("tx", n.txRate || 0);
+    this.spark(E.netRxSpark, this._hist.rx, "rgb(53, 214, 255)");
+    this.spark(E.netTxSpark, this._hist.tx, "rgb(47, 123, 255)");
+
+    // BATTERY
+    const b = d.battery;
+    if (b && b.percent >= 0) {
+      E.batMod.hidden = false;
+      this.gauge(E.batGauge, b.percent / 100, `${b.percent}%`,
+        b.percent <= 15 ? "#ff4d5e" : b.charging ? "#3dffa8" : "#35d6ff");
+      E.batState.textContent = b.charging ? "CHARGING"
+        : b.external ? "AC POWER" : "ON BATTERY";
+      E.batHealth.textContent =
+        typeof b.health === "number" ? `${Math.round(b.health * 100)}%` : "—";
+      E.batCycles.textContent = b.cycles >= 0 ? `${b.cycles}` : "—";
+      const mins = b.charging ? b.timeToFull : b.timeToEmpty;
+      E.batTime.textContent = mins > 0
+        ? `${Math.floor(mins / 60)}H ${mins % 60}M ${b.charging ? "TO FULL" : "LEFT"}`
+        : "—";
+    } else {
+      E.batMod.hidden = true;
+    }
+
+    // PROCESS TOP
+    const rows = d.top || [];
+    E.top.textContent = "";
+    const maxCpu = Math.max(10, ...rows.map((r) => r.cpu));
+    rows.forEach((r) => {
+      const row = document.createElement("div");
+      row.className = "sy-top-row";
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = r.name;
+      const bar = document.createElement("span");
+      bar.className = "bar";
+      const fill = document.createElement("i");
+      fill.style.width = `${Math.min(100, (r.cpu / maxCpu) * 100)}%`;
+      bar.appendChild(fill);
+      const val = document.createElement("span");
+      val.className = "val";
+      val.textContent = `${r.cpu.toFixed(1)}%`;
+      row.append(name, bar, val);
+      E.top.appendChild(row);
+    });
+
+    E.osver.textContent = (d.osver || "").replace("Version ", "");
+    E.ncores.textContent = `${cores.length}`;
   },
 });
 

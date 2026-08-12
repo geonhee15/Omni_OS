@@ -35,6 +35,10 @@
         <span class="nav-icon">&#9711;</span>
         <span class="nav-label">CLOCK</span>
       </button>
+      <button class="nav-item" data-panel="sys">
+        <span class="nav-icon">&#9636;</span>
+        <span class="nav-label">SYSTEM MONITOR</span>
+      </button>
       <button class="nav-item" data-panel="sp1">
         <span class="nav-icon">&#11041;</span>
         <span class="nav-label">SECURITY-PROTOCOL-1</span>
@@ -71,6 +75,87 @@
         <div class="clock-core">
           <div class="clock-time" id="clock-time">--:--:--</div>
           <div class="clock-date" id="clock-date"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- panel: SYSTEM MONITOR (mission control) -->
+    <section class="panel panel-sp1 panel-sys" id="panel-sys">
+      <div class="sp1-topstrip">
+        <span class="sp1-title">SYSTEM MONITOR</span>
+        <span class="ts-item" id="sy-model">&mdash;</span>
+        <span class="ts-spacer"></span>
+        <span class="ts-item" id="sy-thermal">THERMAL &mdash;</span>
+        <span class="ts-item" id="sy-load">LOAD &mdash;</span>
+        <span class="ts-item" id="sy-uptime">UP &mdash;</span>
+      </div>
+
+      <div class="sp1-grid">
+        <!-- left: CPU / GPU -->
+        <div class="sp1-col">
+          <div class="mod">
+            <div class="mod-title">CPU <span class="mod-note" id="sy-cpu-pct"></span></div>
+            <canvas class="sy-gauge" id="sy-cpu-gauge" width="150" height="120"></canvas>
+            <div class="sy-cores" id="sy-cores"></div>
+          </div>
+          <div class="mod" id="sy-gpu-mod">
+            <div class="mod-title">GPU <span class="mod-note" id="sy-gpu-pct"></span></div>
+            <canvas class="sy-gauge" id="sy-gpu-gauge" width="150" height="120"></canvas>
+          </div>
+        </div>
+
+        <!-- center: MEMORY / DISK -->
+        <div class="sp1-col sp1-col-center">
+          <div class="mod">
+            <div class="mod-title">MEMORY <span class="mod-note" id="sy-mem-note"></span></div>
+            <canvas class="sy-gauge" id="sy-mem-gauge" width="150" height="120"></canvas>
+            <div class="sy-membar" id="sy-membar"></div>
+            <div class="sy-legend">
+              <span><i style="background:#35d6ff"></i>WIRED</span>
+              <span><i style="background:#2f7bff"></i>APP</span>
+              <span><i style="background:#b26bff"></i>COMPRESSED</span>
+              <span><i style="background:rgba(53,214,255,0.15)"></i>FREE</span>
+            </div>
+            <div class="kv"><span>PRESSURE</span><span id="sy-pressure">&mdash;</span></div>
+          </div>
+          <div class="mod">
+            <div class="mod-title">DISK <span class="mod-note" id="sy-disk-note"></span></div>
+            <div class="meter">
+              <div class="meter-label"><span>USED</span><span id="sy-disk-used">&mdash;</span></div>
+              <div class="meter-bar" id="sy-disk-bar"></div>
+            </div>
+            <div class="kv"><span>READ</span><span id="sy-disk-r">&mdash;</span></div>
+            <div class="kv"><span>WRITE</span><span id="sy-disk-w">&mdash;</span></div>
+            <canvas class="sy-spark" id="sy-disk-spark" width="200" height="34"></canvas>
+          </div>
+          <div class="mod mod-feed">
+            <div class="mod-title">PROCESS TOP <span class="mod-note">BY CPU</span></div>
+            <div class="sy-top" id="sy-top"></div>
+          </div>
+        </div>
+
+        <!-- right: NETWORK / BATTERY -->
+        <div class="sp1-col">
+          <div class="mod">
+            <div class="mod-title">NETWORK</div>
+            <div class="kv"><span>&#9660; DOWN</span><span id="sy-net-rx">&mdash;</span></div>
+            <canvas class="sy-spark" id="sy-net-rx-spark" width="200" height="30"></canvas>
+            <div class="kv"><span>&#9650; UP</span><span id="sy-net-tx">&mdash;</span></div>
+            <canvas class="sy-spark" id="sy-net-tx-spark" width="200" height="30"></canvas>
+          </div>
+          <div class="mod" id="sy-bat-mod">
+            <div class="mod-title">BATTERY <span class="mod-note" id="sy-bat-state"></span></div>
+            <canvas class="sy-gauge" id="sy-bat-gauge" width="150" height="120"></canvas>
+            <div class="kv"><span>HEALTH</span><span id="sy-bat-health">&mdash;</span></div>
+            <div class="kv"><span>CYCLES</span><span id="sy-bat-cycles">&mdash;</span></div>
+            <div class="kv"><span>TIME</span><span id="sy-bat-time">&mdash;</span></div>
+          </div>
+          <div class="mod">
+            <div class="mod-title">SYSTEM</div>
+            <div class="kv"><span>MACOS</span><span id="sy-osver">&mdash;</span></div>
+            <div class="kv"><span>CORES</span><span id="sy-ncores">&mdash;</span></div>
+            <div class="kv"><span>RAM</span><span id="sy-ram-total">&mdash;</span></div>
+          </div>
         </div>
       </div>
     </section>
@@ -473,9 +558,9 @@
     <footer class="bottombar">
       <span id="uptime">UPTIME 00:00:00</span>
       <span class="divider">|</span>
-      <span>MODULES: CLOCK &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
+      <span>MODULES: CLOCK &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
       <span class="divider">|</span>
-      <span>v0.22.0</span>
+      <span>v0.23.0</span>
     </footer>
   </div>
 
