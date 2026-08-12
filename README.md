@@ -65,6 +65,9 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   **자동 저장**: 💾 PLY가 `ARC-SCAN-SAVES/` 폴더에 바로 누적 저장(패널 없음), 툴바 **RECENT**에
   최근 3개가 칩으로 떠서 원클릭 리로드(스윕 그리드·점유 격자·통계까지 역추론 복원) + 📁 LOAD로
   임의 PLY 불러오기.
+  **떠 있는 패널 리사이즈**: SCAN ANALYTICS·채널 리드아웃·FLOOR PLAN·COLOR PLAN 네 오버레이 모두
+  모서리 그립을 드래그해 크기 조절(캔버스는 새 해상도로 선명하게 재렌더링, 채널 바는 늘어남),
+  더블클릭으로 기본 크기 복원, 크기는 localStorage에 저장되어 재시작 후에도 유지.
   앱에서는 네이티브 WebSocket 릴레이(NSURLSessionWebSocketTask) 사용 — omni:// 보안 컨텍스트에서
   평문 ws://가 차단되는 문제 회피. 브라우저 개발 모드는 JS WebSocket 폴백
 - **ARDUINO IDE** — Arduino IDE.app에 번들된 arduino-cli를 백엔드로 쓰는 임베디드 툴체인 패널.

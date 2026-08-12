@@ -1445,7 +1445,7 @@ body {
 
 .arc-ch {
   display: grid;
-  grid-template-columns: 46px 34px 70px 44px;
+  grid-template-columns: 46px 34px minmax(70px, 1fr) 44px;
   align-items: center;
   gap: 8px;
   font-size: 8.5px;
@@ -1780,6 +1780,7 @@ body {
   bottom: 12px;
   left: 12px;
   z-index: 3;
+  width: 250px;
   border: 1px solid rgba(53, 214, 255, 0.25);
   background: rgba(3, 12, 24, 0.85);
   padding: 8px 10px;
@@ -1867,3 +1868,38 @@ input.arc-paint[hidden] { display: none; }
 }
 
 #arc-load-input[hidden] { display: none; }
+
+/* ---------- resizable floating panels (ARC-SCAN overlays) ---------- */
+#arc-hist {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.arc-plan canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.arc-grip {
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  pointer-events: auto;
+  z-index: 5;
+  opacity: 0.55;
+  background:
+    linear-gradient(135deg,
+      transparent 46%, rgba(53, 214, 255, 0.9) 46%, rgba(53, 214, 255, 0.9) 54%, transparent 54%),
+    linear-gradient(135deg,
+      transparent 70%, rgba(53, 214, 255, 0.9) 70%, rgba(53, 214, 255, 0.9) 78%, transparent 78%);
+  transition: opacity 0.15s;
+}
+
+.arc-grip:hover { opacity: 1; }
+
+.arc-grip-br { right: 1px; bottom: 1px; cursor: nwse-resize; }
+.arc-grip-bl { left: 1px; bottom: 1px; cursor: nesw-resize; transform: scaleX(-1); }
+.arc-grip-tr { right: 1px; top: 1px; cursor: nesw-resize; transform: scaleY(-1); }
+.arc-grip-tl { left: 1px; top: 1px; cursor: nwse-resize; transform: scale(-1); }

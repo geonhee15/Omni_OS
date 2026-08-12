@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.20.0",
+  version: "0.21.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2285,6 +2285,7 @@ OmniOS.register("arc", {
       if (this._ctx) this._ctx.material.size = parseFloat(this.els.size.value) / 100;
     });
     this.buildSide();
+    this.initPanelResize(); // after buildSide — it wipes arc-side's children
 
     // native relay pushes messages/states here
     window.OmniArc = {
@@ -2802,6 +2803,63 @@ OmniOS.register("arc", {
     this.retintLayers();
   },
 
+  // ── floating panel resize: corner grip drag, double-click resets,
+  // widths persist in localStorage ──
+  initPanelResize() {
+    let store = {};
+    try { store = JSON.parse(localStorage.getItem("omni.arc.panelW") || "{}"); } catch (e) {}
+    const save = () => {
+      try { localStorage.setItem("omni.arc.panelW", JSON.stringify(store)); } catch (e) {}
+    };
+    const cfg = [
+      { el: this.els.analytics, key: "an", corner: "br", min: 200, max: 480,
+        onSize: () => this.renderAnalytics() },
+      { el: this.els.side, key: "side", corner: "bl", min: 215, max: 520 },
+      { el: this.els.plan, key: "plan", corner: "tr", min: 170, max: 560,
+        onSize: () => this.renderPlan() },
+      { el: this.els.cplan, key: "cplan", corner: "tl", min: 190, max: 560,
+        onSize: () => this.renderCPlan() },
+    ];
+    for (const p of cfg) {
+      if (!p.el) continue;
+      const grip = document.createElement("div");
+      grip.className = `arc-grip arc-grip-${p.corner}`;
+      grip.title = "DRAG TO RESIZE \u00b7 DOUBLE-CLICK TO RESET";
+      p.el.appendChild(grip);
+      const apply = (w) => {
+        if (w == null) {
+          p.el.style.width = "";
+        } else {
+          w = Math.max(p.min, Math.min(p.max, Math.round(w)));
+          p.el.style.width = `${w}px`;
+        }
+        if (p.onSize) p.onSize();
+        return w;
+      };
+      if (store[p.key]) apply(store[p.key]);
+      grip.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const sx = e.clientX;
+        const sw = p.el.getBoundingClientRect().width;
+        const dir = (p.corner === "br" || p.corner === "tr") ? 1 : -1;
+        const move = (ev) => { store[p.key] = apply(sw + (ev.clientX - sx) * dir); };
+        const up = () => {
+          window.removeEventListener("mousemove", move);
+          window.removeEventListener("mouseup", up);
+          save();
+        };
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
+      });
+      grip.addEventListener("dblclick", () => {
+        delete store[p.key];
+        apply(null);
+        save();
+      });
+    }
+  },
+
   // ── PLAN region selection: drag a rectangle to isolate that area in 3D ──
   _sel: null,
   _clip: null,
@@ -2861,6 +2919,11 @@ OmniOS.register("arc", {
 
   drawPlan(cv) {
     if (!cv) return null;
+    const disp = Math.round(cv.clientWidth);
+    if (disp && cv.width !== disp) {
+      cv.width = disp;
+      cv.height = disp;
+    }
     const ctx = cv.getContext("2d");
     const W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
@@ -3349,6 +3412,11 @@ OmniOS.register("arc", {
 
     // distance histogram with mean marker
     const cv = this.els.hist;
+    const disp = Math.round(cv.clientWidth);
+    if (disp && cv.width !== disp) {
+      cv.width = disp;
+      cv.height = Math.round(disp * 62 / 212);
+    }
     const ctx = cv.getContext("2d");
     const W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
