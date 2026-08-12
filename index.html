@@ -437,7 +437,15 @@
         </select>
         <button class="ig-tab" id="arc-save">&#128190; PLY</button>
         <button class="ig-tab" id="arc-to-r3d">&#8594; RENDER_3D</button>
-        <span class="r3d-file" id="arc-note">POINTS COLORED BY HEIGHT &middot; 7 CH &times; 180&deg; SWEEP</span>
+        <span class="divider">|</span>
+        <div class="r3d-modes" id="arc-cmodes">
+          <button class="ig-tab active" data-cmode="custom">CUSTOM</button>
+          <button class="ig-tab" data-cmode="dist">DIST</button>
+          <button class="ig-tab" data-cmode="original">ORIGINAL</button>
+        </div>
+        <input type="color" class="arc-paint" id="arc-paint" value="#ff3355"
+          title="Paint color &mdash; drag a region on the floor plan, then pick" />
+        <span class="r3d-file" id="arc-note">CUSTOM &middot; DRAG PLAN REGION &#8594; PICK COLOR</span>
         <span class="r3l-label">PT SIZE</span>
         <input type="range" class="r3l-slider arc-size" id="arc-size" min="1" max="7" step="0.5" value="2.5" />
       </div>
@@ -449,7 +457,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
       <span class="divider">|</span>
-      <span>v0.18.0</span>
+      <span>v0.19.0</span>
     </footer>
   </div>
 

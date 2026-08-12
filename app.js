@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.18.0",
+  version: "0.19.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2193,6 +2193,9 @@ OmniOS.register("arc", {
       savePly: $("arc-save"),
       toR3d: $("arc-to-r3d"),
       exp: $("arc-exp"),
+      cmodes: $("arc-cmodes"),
+      paint: $("arc-paint"),
+      note: $("arc-note"),
       side: $("arc-side"),
       hint: $("arc-hint"),
       ip: $("arc-ip"),
@@ -2215,6 +2218,9 @@ OmniOS.register("arc", {
       b.addEventListener("click", () => this.toggleLayer(b.dataset.mode)));
     this.els.savePly.addEventListener("click", () => this.exportPly(false));
     this.els.toR3d.addEventListener("click", () => this.exportPly(true));
+    this.els.cmodes.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => this.setColorMode(b.dataset.cmode)));
+    this.els.paint.addEventListener("input", () => this.applyPaint());
 
     // drag on the floor plan = select a region; a plain click clears it
     const cv = this.els.planCv;
@@ -2582,23 +2588,7 @@ OmniOS.register("arc", {
     c.positions[i * 3 + 1] = y;
     c.positions[i * 3 + 2] = z;
 
-    // color by height: deep blue (floor) -> cyan -> near-white (ceiling)
-    const t = Math.max(0, Math.min(1, y / 2.4));
-    let cr, cg, cb;
-    if (t < 0.5) {
-      const k = t / 0.5;
-      cr = 0.04 + (0.21 - 0.04) * k;
-      cg = 0.29 + (0.84 - 0.29) * k;
-      cb = 0.43 + (1.0 - 0.43) * k;
-    } else {
-      const k = (t - 0.5) / 0.5;
-      cr = 0.21 + (0.92 - 0.21) * k;
-      cg = 0.84 + (0.99 - 0.84) * k;
-      cb = 1.0;
-    }
-    c.colors[i * 3] = cr;
-    c.colors[i * 3 + 1] = cg;
-    c.colors[i * 3 + 2] = cb;
+    this.pointColor(x, y, z, c.colors, i * 3);
 
     this._writeIdx = (this._writeIdx + 1) % this.MAX_POINTS;
     this._count = Math.min(this._count + 1, this.MAX_POINTS);
@@ -2606,6 +2596,132 @@ OmniOS.register("arc", {
     c.geo.attributes.color.needsUpdate = true;
     c.geo.setDrawRange(0, this._count);
     return { x, y, z };
+  },
+
+  // ── color modes: CUSTOM (paint plan regions) / DIST (range from CH3) /
+  // ORIGINAL (the original arc-scan web viewer's height rainbow) ──
+  _cmode: "custom",
+  _paint: null,
+
+  hsl2rgb(h, s, l, out, o) {
+    const hue2 = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    out[o] = hue2(p, q, h + 1 / 3);
+    out[o + 1] = hue2(p, q, h);
+    out[o + 2] = hue2(p, q, h - 1 / 3);
+  },
+
+  pointColor(x, y, z, out, o) {
+    if (this._cmode === "dist") {
+      // euclidean range from the CH3 (0-tilt) sensor, blue near -> red far
+      const d = Math.hypot(x, y - this.CH_HEIGHTS[3], z);
+      const t = Math.max(0, Math.min(1, d / 4));
+      this.hsl2rgb(0.66 * (1 - t), 0.9, 0.55, out, o);
+      return;
+    }
+    if (this._cmode === "original") {
+      // arc-scan web viewer: 0m blue -> 2.5m red by height
+      const t = Math.max(0, Math.min(1, y / 2.5));
+      this.hsl2rgb(0.66 * (1 - t), 0.9, 0.55, out, o);
+      return;
+    }
+    // CUSTOM base: HUD ramp — deep blue (floor) -> cyan -> near-white (ceiling)
+    const t = Math.max(0, Math.min(1, y / 2.4));
+    if (t < 0.5) {
+      const k = t / 0.5;
+      out[o] = 0.04 + (0.21 - 0.04) * k;
+      out[o + 1] = 0.29 + (0.84 - 0.29) * k;
+      out[o + 2] = 0.43 + (1.0 - 0.43) * k;
+    } else {
+      const k = (t - 0.5) / 0.5;
+      out[o] = 0.21 + (0.92 - 0.21) * k;
+      out[o + 1] = 0.84 + (0.99 - 0.84) * k;
+      out[o + 2] = 1.0;
+    }
+  },
+
+  recolorAll() {
+    const c = this._ctx;
+    if (!c) return;
+    for (let i = 0; i < this._count; i++) {
+      this.pointColor(c.positions[i * 3], c.positions[i * 3 + 1], c.positions[i * 3 + 2],
+        c.colors, i * 3);
+    }
+    c.geo.attributes.color.needsUpdate = true;
+  },
+
+  setColorMode(m) {
+    if (this._cmode === m) return;
+    this.setSelection(null); // clears clip planes or pending paint highlight
+    this._cmode = m;
+    this.els.cmodes.querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.cmode === m));
+    this.els.paint.hidden = m !== "custom";
+    this.els.note.textContent = m === "custom"
+      ? "CUSTOM \u00b7 DRAG PLAN REGION \u2192 PICK COLOR"
+      : m === "dist"
+        ? "COLORED BY DISTANCE FROM CH3"
+        : "ORIGINAL VIEWER \u00b7 HEIGHT RAINBOW";
+    if (m !== "custom") this.recolorAll(); // entering CUSTOM keeps colors as the paint base
+    if (this._layers.plan) this.renderPlan();
+  },
+
+  // pending paint selection: indices + saved colors, highlighted until painted
+  buildPaintSet() {
+    const c = this._ctx;
+    if (!c) return;
+    const idx = [];
+    for (let i = 0; i < this._count; i++) {
+      if (this.inSel(c.positions[i * 3], c.positions[i * 3 + 2])) idx.push(i);
+    }
+    if (!idx.length) return;
+    const old = new Float32Array(idx.length * 3);
+    idx.forEach((p, k) => {
+      for (let d = 0; d < 3; d++) {
+        old[k * 3 + d] = c.colors[p * 3 + d];
+        c.colors[p * 3 + d] += (1 - c.colors[p * 3 + d]) * 0.6; // lift toward white
+      }
+    });
+    c.geo.attributes.color.needsUpdate = true;
+    this._paint = { idx, old, applied: false };
+  },
+
+  dropPaint(restore) {
+    const P = this._paint, c = this._ctx;
+    this._paint = null;
+    if (!P || !c) return;
+    if (restore && !P.applied) {
+      P.idx.forEach((p, k) => {
+        c.colors[p * 3] = P.old[k * 3];
+        c.colors[p * 3 + 1] = P.old[k * 3 + 1];
+        c.colors[p * 3 + 2] = P.old[k * 3 + 2];
+      });
+      c.geo.attributes.color.needsUpdate = true;
+    }
+  },
+
+  applyPaint() {
+    const P = this._paint, c = this._ctx;
+    if (!P || !c) return;
+    const hex = this.els.paint.value;
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    P.idx.forEach((p) => {
+      c.colors[p * 3] = r;
+      c.colors[p * 3 + 1] = g;
+      c.colors[p * 3 + 2] = b;
+    });
+    P.applied = true;
+    c.geo.attributes.color.needsUpdate = true;
   },
 
   // ── PLAN region selection: drag a rectangle to isolate that area in 3D ──
@@ -2622,7 +2738,8 @@ OmniOS.register("arc", {
 
   setSelection(sel) {
     this._sel = sel;
-    if (sel && this._three) {
+    const custom = this._cmode === "custom";
+    if (sel && !custom && this._three) {
       const THREE = this._three.THREE;
       this._clip = [
         new THREE.Plane(new THREE.Vector3(1, 0, 0), -sel.x0),
@@ -2638,6 +2755,10 @@ OmniOS.register("arc", {
     if (this._ctx) apply(this._ctx.material);
     if (this._lineSegs) for (const s of this._lineSegs) apply(s.material);
     if (this._roomGroup) this._roomGroup.traverse((o) => o.material && apply(o.material));
+    if (custom) {
+      this.dropPaint(true); // un-highlight a previous unpainted selection
+      if (sel) this.buildPaintSet();
+    }
   },
 
   inSel(x, z) {
@@ -2875,6 +2996,7 @@ OmniOS.register("arc", {
   clearCloud() {
     this._count = 0;
     this._writeIdx = 0;
+    this._paint = null;
     if (this._ctx) this._ctx.geo.setDrawRange(0, 0);
     this.els.stats.textContent = "0 PTS";
     this.resetStats();
