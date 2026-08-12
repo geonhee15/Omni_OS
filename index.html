@@ -407,6 +407,19 @@
           <div class="arc-an-title">FLOOR PLAN <span id="arc-plan-area" class="arc-plan-area">&mdash;</span></div>
           <canvas id="arc-plan-cv" width="228" height="228"></canvas>
         </div>
+        <div class="arc-plan arc-cplan" id="arc-cplan">
+          <div class="arc-an-title">COLOR PLAN <span class="arc-plan-area">DRAG &#8594; PICK</span></div>
+          <canvas id="arc-cplan-cv" width="228" height="228"></canvas>
+          <div class="cplan-row">
+            <input type="color" class="arc-paint" id="arc-paint" value="#ff3355" title="Paint color" />
+            <button class="cplan-sw" data-c="#ff3355" style="background:#ff3355" title="#ff3355"></button>
+            <button class="cplan-sw" data-c="#ffc857" style="background:#ffc857" title="#ffc857"></button>
+            <button class="cplan-sw" data-c="#3dffa8" style="background:#3dffa8" title="#3dffa8"></button>
+            <button class="cplan-sw" data-c="#35d6ff" style="background:#35d6ff" title="#35d6ff"></button>
+            <button class="cplan-sw" data-c="#b26bff" style="background:#b26bff" title="#b26bff"></button>
+            <button class="cplan-sw" data-c="#eafcff" style="background:#eafcff" title="#eafcff"></button>
+          </div>
+        </div>
         <div class="arc-hint" id="arc-hint">
           <div class="r3d-drop-title">ROOM LIDAR OFFLINE</div>
           <div class="r3d-drop-sub">ENTER THE ESP32 ADDRESS AND CONNECT &mdash; WS PORT 81</div>
@@ -442,10 +455,14 @@
           <button class="ig-tab active" data-cmode="custom">CUSTOM</button>
           <button class="ig-tab" data-cmode="dist">DIST</button>
           <button class="ig-tab" data-cmode="original">ORIGINAL</button>
+          <button class="ig-tab" id="arc-creset">RESET</button>
         </div>
-        <input type="color" class="arc-paint" id="arc-paint" value="#ff3355"
-          title="Paint color &mdash; drag a region on the floor plan, then pick" />
-        <span class="r3d-file" id="arc-note">CUSTOM &middot; DRAG PLAN REGION &#8594; PICK COLOR</span>
+        <span class="divider">|</span>
+        <span class="r3l-label">RECENT</span>
+        <span class="arc-recent" id="arc-recent"></span>
+        <button class="ig-tab" id="arc-load">&#128194; LOAD</button>
+        <input type="file" id="arc-load-input" accept=".ply" hidden />
+        <span class="r3d-file" id="arc-note">CUSTOM &middot; DRAG COLOR PLAN &#8594; PICK COLOR</span>
         <span class="r3l-label">PT SIZE</span>
         <input type="range" class="r3l-slider arc-size" id="arc-size" min="1" max="7" step="0.5" value="2.5" />
       </div>
@@ -457,7 +474,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
       <span class="divider">|</span>
-      <span>v0.19.0</span>
+      <span>v0.20.0</span>
     </footer>
   </div>
 

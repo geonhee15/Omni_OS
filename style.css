@@ -1828,3 +1828,42 @@ input.arc-paint {
 input.arc-paint::-webkit-color-swatch-wrapper { padding: 2px; }
 input.arc-paint::-webkit-color-swatch { border: none; }
 input.arc-paint[hidden] { display: none; }
+
+.arc-cplan {
+  left: auto;
+  right: 12px;
+  pointer-events: auto;
+}
+
+.arc-cplan[hidden] { display: none; }
+
+.cplan-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.cplan-sw {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(53, 214, 255, 0.35);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.cplan-sw:hover { border-color: #eafcff; }
+
+.arc-recent {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.arc-recent-empty {
+  color: rgba(111, 168, 201, 0.5);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+}
+
+#arc-load-input[hidden] { display: none; }

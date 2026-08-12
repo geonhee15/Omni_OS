@@ -63,6 +63,22 @@
 
 @end
 
+// PLY exports accumulate in <project>/ARC-SCAN-SAVES (falls back to
+// ~/Documents/OmniOS/ARC-SCAN-SAVES when the dev checkout is absent)
+static NSString *ArcSavesDir(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *dev = [NSHomeDirectory()
+        stringByAppendingPathComponent:@"Desktop/Important/Omni_OS"];
+    BOOL isDir = NO;
+    NSString *base = ([fm fileExistsAtPath:dev isDirectory:&isDir] && isDir)
+        ? dev
+        : [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)
+               firstObject] stringByAppendingPathComponent:@"OmniOS"];
+    NSString *dir = [base stringByAppendingPathComponent:@"ARC-SCAN-SAVES"];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return dir;
+}
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, WKScriptMessageHandler, WKUIDelegate>
 @property (strong) NSWindow *window;
 @property (strong) WKWebView *webView;
@@ -347,7 +363,7 @@
             [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
         }
     } else if ([cmd isEqualToString:@"arc.savePly"]) {
-        // save the current point cloud via NSSavePanel
+        // auto-save the export into ARC-SCAN-SAVES (no panel)
         NSDictionary *a = nil;
         if (arg != nil) {
             NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
@@ -356,22 +372,55 @@
         }
         NSString *b64 = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
         NSString *fname = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : @"arc_scan.ply";
+        fname = fname.lastPathComponent; // never allow path escapes
+        if (![fname.pathExtension.lowercaseString isEqualToString:@"ply"]) {
+            fname = [fname stringByAppendingPathExtension:@"ply"] ?: @"arc_scan.ply";
+        }
         NSData *data = b64 ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
         if (data == nil) {
             [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
         } else {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                NSSavePanel *panel = [NSSavePanel savePanel];
-                panel.nameFieldStringValue = fname;
-                [panel beginSheetModalForWindow:self.window
-                              completionHandler:^(NSModalResponse result) {
-                    BOOL ok = NO;
-                    if (result == NSModalResponseOK && panel.URL != nil) {
-                        ok = [data writeToURL:panel.URL atomically:YES];
-                    }
-                    [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
-                }];
-            });
+            NSString *path = [ArcSavesDir() stringByAppendingPathComponent:fname];
+            BOOL ok = [data writeToFile:path atomically:YES];
+            [self deliverPayload:@{ @"ok" : @(ok), @"path" : path ?: @"", @"name" : fname }
+                           forId:msgId];
+        }
+    } else if ([cmd isEqualToString:@"arc.listSaves"]) {
+        // newest-first listing of ARC-SCAN-SAVES/*.ply
+        NSString *dir = ArcSavesDir();
+        NSFileManager *fm = NSFileManager.defaultManager;
+        NSMutableArray *files = [NSMutableArray array];
+        for (NSString *f in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+            if (![f.pathExtension.lowercaseString isEqualToString:@"ply"]) continue;
+            NSString *p = [dir stringByAppendingPathComponent:f];
+            NSDictionary *at = [fm attributesOfItemAtPath:p error:nil];
+            NSTimeInterval mt = at.fileModificationDate.timeIntervalSince1970;
+            [files addObject:@{ @"name" : f, @"path" : p, @"mtime" : @(mt) }];
+        }
+        [files sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y) {
+            return [(NSNumber *)y[@"mtime"] compare:(NSNumber *)x[@"mtime"]];
+        }];
+        [self deliverPayload:@{ @"ok" : @YES, @"files" : files } forId:msgId];
+    } else if ([cmd isEqualToString:@"arc.readPly"]) {
+        // read a saved scan back — restricted to the ARC-SCAN-SAVES folder
+        NSDictionary *a = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+        }
+        NSString *reqPath = [a[@"path"] isKindOfClass:[NSString class]] ? a[@"path"] : nil;
+        NSString *dir = ArcSavesDir();
+        NSString *std = reqPath.stringByStandardizingPath;
+        BOOL inside = std != nil && [std hasPrefix:[dir stringByAppendingString:@"/"]];
+        NSData *data = inside ? [NSData dataWithContentsOfFile:std] : nil;
+        if (data == nil) {
+            [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
+        } else {
+            [self deliverPayload:@{ @"ok" : @YES,
+                                    @"name" : std.lastPathComponent,
+                                    @"data" : [data base64EncodedStringWithOptions:0] }
+                           forId:msgId];
         }
     } else if ([cmd isEqualToString:@"arc.disconnect"]) {
         [self.arcTask cancel];
