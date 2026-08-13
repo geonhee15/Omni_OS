@@ -114,6 +114,9 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   구문 강조 13종: C/C++/Obj-C/Java·JS/TS·JSON·HTML·CSS·XML·Python·Shell·Markdown·
   YAML·Rust·Go·Swift·TOML. **진짜 PTY 터미널**(forkpty + zsh + xterm.js) — + TERM으로
   얼마든지 생성, 터미널 탭 전환·닫기·접기, 열린 폴더에서 시작, 256색·리사이즈 지원.
+  **RUN 버튼**: 활성 파일을 자동 저장 후 터미널(없으면 자동 생성)에서 실행 —
+  py/js/ts/sh/swift/go/rs/c/cpp/objc(-framework Foundation)/java/rb/php/pl/lua 러너 내장,
+  html은 기본 브라우저로. 경로 공백·따옴표 셸 이스케이프 처리.
   **+ NEW FILE**: 이름을 안 넣으면 `Untitled.txt`(중복 시 자동 넘버링), 넣으면
   `이름.선택확장자` — 확장자 그룹 선택(TEXT/CODE/IMAGE/AUDIO/VIDEO 30여 종), 트리에서
   선택한 폴더에 생성되고 텍스트 계열은 바로 편집 탭으로 열림. **미디어 뷰어**: 이미지

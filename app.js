@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.27.0",
+  version: "0.27.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -2974,10 +2974,11 @@ OmniOS.register("ce", {
       termwrap: $("ce-termwrap"), termtabs: $("ce-termtabs"),
       termNew: $("ce-term-new"), termToggle: $("ce-term-toggle"),
       termhost: $("ce-termhost"),
-      viewer: $("ce-viewer"), newFile: $("ce-newfile"),
+      viewer: $("ce-viewer"), newFile: $("ce-newfile"), run: $("ce-run"),
       nfModal: $("ce-modal"), nfName: $("ce-nf-name"), nfExt: $("ce-nf-ext"),
       nfDir: $("ce-nf-dir"), nfCancel: $("ce-nf-cancel"), nfCreate: $("ce-nf-create"),
     };
+    this.els.run.addEventListener("click", () => this.runActive());
     this.els.newFile.addEventListener("click", () => this.openNewFile());
     this.els.nfCancel.addEventListener("click", () => { this.els.nfModal.hidden = true; });
     this.els.nfCreate.addEventListener("click", () => this.createFile());
@@ -3112,6 +3113,74 @@ OmniOS.register("ce", {
         });
       }
     }
+  },
+
+  // ── RUN: 활성 파일을 자동 저장 후 터미널에서 언어별 러너로 실행 ──
+  RUNNERS: {
+    py: (f) => `python3 ${f}`,
+    js: (f) => `node ${f}`,
+    mjs: (f) => `node ${f}`,
+    cjs: (f) => `node ${f}`,
+    ts: (f) => `npx tsx ${f}`,
+    tsx: (f) => `npx tsx ${f}`,
+    sh: (f) => `sh ${f}`,
+    zsh: (f) => `zsh ${f}`,
+    bash: (f) => `bash ${f}`,
+    swift: (f) => `swift ${f}`,
+    go: (f) => `go run ${f}`,
+    rs: (f) => `rustc ${f} -o /tmp/ce_run && /tmp/ce_run`,
+    c: (f) => `clang ${f} -o /tmp/ce_run && /tmp/ce_run`,
+    cpp: (f) => `clang++ -std=c++17 ${f} -o /tmp/ce_run && /tmp/ce_run`,
+    cc: (f) => `clang++ -std=c++17 ${f} -o /tmp/ce_run && /tmp/ce_run`,
+    m: (f) => `clang -fobjc-arc -framework Foundation ${f} -o /tmp/ce_run && /tmp/ce_run`,
+    java: (f) => `java ${f}`,
+    rb: (f) => `ruby ${f}`,
+    php: (f) => `php ${f}`,
+    pl: (f) => `perl ${f}`,
+    lua: (f) => `lua ${f}`,
+    html: (f) => `open ${f}`,
+  },
+
+  shq(s) {
+    return `'${s.replace(/'/g, "'\\''")}'`;
+  },
+
+  async runActive() {
+    const f = this._files[this._active];
+    if (!f || !f.doc) {
+      this.flash("OPEN A CODE FILE TO RUN", "alert");
+      return;
+    }
+    const ext = f.name.split(".").pop().toLowerCase();
+    const runner = this.RUNNERS[ext];
+    if (!runner) {
+      this.flash(`NO RUNNER FOR .${ext.toUpperCase()}`, "alert");
+      return;
+    }
+    if (f.dirty) await this.saveActive(); // VSCode처럼 실행 전 자동 저장
+    const dir = f.path.slice(0, f.path.lastIndexOf("/"));
+    const cmd = `cd ${this.shq(dir)} && ${runner(this.shq(f.name))}`;
+    await this.runInTerm(cmd);
+  },
+
+  async runInTerm(cmd) {
+    let t = this._terms[this._termActive];
+    if (!t || t.dead) {
+      await this.newTerm();
+      t = this._terms[this._termActive];
+    }
+    if (!t || t.tid == null) {
+      this.flash("TERMINAL UNAVAILABLE", "alert");
+      return;
+    }
+    if (this.els.termhost.hidden) this.toggleTerms();
+    const bytes = new TextEncoder().encode(`${cmd}\n`);
+    let bin = "";
+    bytes.forEach((b) => { bin += String.fromCharCode(b); });
+    OmniNative.request("ce.termWrite", JSON.stringify({
+      tid: t.tid, data: btoa(bin),
+    })).catch(() => {});
+    t.term.focus();
   },
 
   // ── 새 파일: 이름 없으면 Untitled.txt(자동 넘버링), 있으면 이름.선택확장자 ──
