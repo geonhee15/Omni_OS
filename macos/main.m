@@ -3,6 +3,33 @@
 #import <signal.h>
 #import "sp1_status.h"
 #import "sysmon.h"
+#import <CommonCrypto/CommonDigest.h>
+
+// ── 오너 잠금 ──
+// 소스는 공개돼 있지만 이 앱은 개인용이다. 레포에 포함되지 않는 키 파일
+// (~/.omni/owner.key)의 SHA-256이 아래 해시와 일치해야만 부팅한다.
+// 해시는 공개돼도 키를 역산할 수 없고(256비트 랜덤), 키 파일은 오너의
+// 기기에만 존재한다. 클론+빌드만으로는 실행되지 않는다.
+static NSString *const kOwnerKeyHash =
+    @"28016bfbe5e0182ec476aee96fd0f560f9bab63a605c22ce929f438872ef4795";
+
+static BOOL OmniOwnerAuthorized(void) {
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/owner.key"];
+    NSString *raw = [NSString stringWithContentsOfFile:path
+                                              encoding:NSUTF8StringEncoding
+                                                 error:nil];
+    if (raw == nil) return NO;
+    NSString *key = [raw stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSData *d = [key dataUsingEncoding:NSUTF8StringEncoding];
+    unsigned char h[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(d.bytes, (CC_LONG)d.length, h);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:64];
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        [hex appendFormat:@"%02x", h[i]];
+    }
+    return [hex isEqualToString:kOwnerKeyHash];
+}
 #import "arduino_bridge.h"
 
 // SP-1 watcher pause/resume lives in sp1_status.m (SP1PauseWatcher /
@@ -90,7 +117,38 @@ static NSString *ArcSavesDir(void) {
 
 @implementation AppDelegate
 
+- (void)showAccessDeniedAndQuit {
+    NSWindow *w = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, 560, 200)
+                  styleMask:NSWindowStyleMaskTitled
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    w.title = @"OMNI_OS";
+    w.backgroundColor = [NSColor colorWithRed:0.008 green:0.03 blue:0.075 alpha:1.0];
+    NSTextField *label = [NSTextField wrappingLabelWithString:
+        @"⛔  ACCESS DENIED\n\n"
+        @"OWNER KEY NOT FOUND (~/.omni/owner.key)\n"
+        @"THIS IS A PERSONAL BUILD — OMNI_OS REFUSES TO START\n"
+        @"ON UNAUTHORIZED DEVICES."];
+    label.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightSemibold];
+    label.textColor = [NSColor colorWithRed:0.21 green:0.84 blue:1.0 alpha:1.0];
+    label.alignment = NSTextAlignmentCenter;
+    label.frame = NSMakeRect(20, 20, 520, 160);
+    [w.contentView addSubview:label];
+    [w center];
+    [w makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [NSApp terminate:nil];
+    });
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    if (!OmniOwnerAuthorized()) {
+        [self showAccessDeniedAndQuit];
+        return;
+    }
     NSWindow *window = [[NSWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, 1100, 720)
                   styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
