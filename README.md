@@ -114,7 +114,10 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   0.8초 디바운스), **EDIT / PREVIEW 토글**(GFM 렌더 — 체크박스·표·코드블록·인용).
   **[[위키링크]]**: `[[`만 치면 노트 이름 자동완성, 프리뷰에서 클릭하면 그 노트로 이동,
   없는 노트는 앰버로 표시되고 클릭 시 즉석 생성(옵시디언과 동일). + NOTE는 Untitled 자동
-  넘버링. 외부 링크는 기본 브라우저로.
+  넘버링. 외부 링크는 기본 브라우저로. **트리 우클릭 메뉴**: RENAME(인라인)·DUPLICATE·
+  COPY PATH·COPY [[LINK]]·REVEAL IN FINDER·MOVE TO TRASH(휴지통 — 복구 가능),
+  폴더엔 NEW NOTE HERE·NEW FOLDER. CODE EDITOR 트리도 동일 메뉴(+ NEW FILE, COPY NAME) —
+  이름 변경/삭제 시 열린 탭 경로 자동 동기화.
 - **PROJECTS 폴더 골격**: 프로젝트를 만들면 `Projects/<이름>/{3d, arduino, code, notes}`
   폴더가 실제로 생성되고, 에디터 모드 도구가 자동 연결 — CODE EDITOR는 `code/`를 루트로,
   NOTES는 `notes/`를 볼트로 엶 (`3d/`, `arduino/`는 해당 산출물 보관용). 기존 프로젝트도
