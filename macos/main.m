@@ -126,7 +126,7 @@ static NSString *ArcSavesDir(void) {
     w.title = @"OMNI_OS";
     w.backgroundColor = [NSColor colorWithRed:0.008 green:0.03 blue:0.075 alpha:1.0];
     NSTextField *label = [NSTextField wrappingLabelWithString:
-        @"ACCESS DENIED\n\n"
+        @"\u2298  ACCESS DENIED\n\n"
         @"OWNER KEY NOT FOUND (~/.omni/owner.key)\n"
         @"THIS IS A PERSONAL BUILD — OMNI_OS REFUSES TO START\n"
         @"ON UNAUTHORIZED DEVICES."];
