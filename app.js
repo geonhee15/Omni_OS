@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.23.1",
+  version: "0.23.2",
   bootTime: Date.now(),
   modules: {},
 
@@ -207,8 +207,15 @@ OmniOS.register("sys", {
 
   // 원호 게이지: 0~100%를 -210°→30° 스윕으로
   gauge(cv, frac, label, color) {
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth || 150, H = cv.clientHeight || 120;
+    const bw = Math.round(W * dpr), bh = Math.round(H * dpr);
+    if (cv.width !== bw || cv.height !== bh) {
+      cv.width = bw;
+      cv.height = bh;
+    }
     const ctx = cv.getContext("2d");
-    const W = cv.width, H = cv.height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 이후 좌표는 전부 CSS px — 레티나에서 선명
     ctx.clearRect(0, 0, W, H);
     const cx = W / 2, cy = H * 0.62, r = Math.min(W, H) * 0.46;
     const a0 = Math.PI * (-210 / 180), a1 = Math.PI * (30 / 180);
@@ -235,8 +242,15 @@ OmniOS.register("sys", {
   },
 
   spark(cv, hist, color) {
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth || cv.width, H = cv.clientHeight || cv.height;
+    const bw = Math.round(W * dpr), bh = Math.round(H * dpr);
+    if (cv.width !== bw || cv.height !== bh) {
+      cv.width = bw;
+      cv.height = bh;
+    }
     const ctx = cv.getContext("2d");
-    const W = cv.width, H = cv.height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     if (hist.length < 2) return;
     const max = Math.max(...hist, 1e-6);
@@ -3257,13 +3271,16 @@ OmniOS.register("arc", {
 
   drawPlan(cv) {
     if (!cv) return null;
+    const dpr = window.devicePixelRatio || 1;
     const disp = Math.round(cv.clientWidth);
-    if (disp && cv.width !== disp) {
-      cv.width = disp;
-      cv.height = disp;
+    const bpx = Math.round(disp * dpr);
+    if (disp && cv.width !== bpx) {
+      cv.width = bpx;
+      cv.height = bpx;
     }
     const ctx = cv.getContext("2d");
-    const W = cv.width, H = cv.height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // CSS px 좌표계 — 레티나 선명
+    const W = disp || cv.width, H = disp || cv.height;
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "rgba(2, 8, 19, 0.9)";
     ctx.fillRect(0, 0, W, H);
@@ -3895,13 +3912,16 @@ OmniOS.register("arc", {
 
     // distance histogram with mean marker
     const cv = this.els.hist;
+    const dpr = window.devicePixelRatio || 1;
     const disp = Math.round(cv.clientWidth);
-    if (disp && cv.width !== disp) {
-      cv.width = disp;
-      cv.height = Math.round(disp * 62 / 212);
+    const bpx = Math.round(disp * dpr);
+    if (disp && cv.width !== bpx) {
+      cv.width = bpx;
+      cv.height = Math.round(bpx * 62 / 212);
     }
     const ctx = cv.getContext("2d");
-    const W = cv.width, H = cv.height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = disp || cv.width, H = Math.round((disp || cv.width) * 62 / 212);
     ctx.clearRect(0, 0, W, H);
     let max = 1;
     for (const v of S.histD) max = Math.max(max, v);

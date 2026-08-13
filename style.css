@@ -1908,6 +1908,8 @@ input.arc-paint[hidden] { display: none; }
 .sy-gauge {
   display: block;
   margin: 2px auto 0;
+  width: 150px;   /* 표시 크기 고정 — 비트맵은 DPR 배율로 렌더 */
+  height: 120px;
 }
 
 .sy-cores {
