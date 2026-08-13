@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.28.1",
+  version: "0.29.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -206,7 +206,7 @@ OmniOS.register("proj", {
       return;
     }
     const link = E.fLink.value.trim();
-    this._items.unshift({
+    const item = {
       id: `p${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
       name,
       type: this.picked(E.fType) || "software",
@@ -217,10 +217,22 @@ OmniOS.register("proj", {
       link: /^https?:\/\//i.test(link) ? link : null,
       status: this.picked(E.fStatus) || "planning",
       createdAt: Date.now(),
-    });
+    };
+    this._items.unshift(item);
     this.persist();
     this.render();
     this.closeForm();
+    // 실제 폴더 골격 생성: Projects/<이름>/{3d, arduino, code, notes}
+    if (OmniNative.available) {
+      OmniNative.request("proj.scaffold", JSON.stringify({ name }), 10000)
+        .then((r) => {
+          if (r && r.ok) {
+            item.dir = r.path;
+            this.persist();
+          }
+        })
+        .catch(() => {});
+    }
   },
 
   cycleStatus(item) {
@@ -368,6 +380,16 @@ OmniOS.register("proj", {
 
   openEditor(p) {
     this._edProject = p;
+    if (!p.dir && OmniNative.available) {
+      OmniNative.request("proj.scaffold", JSON.stringify({ name: p.name }), 10000)
+        .then((r) => {
+          if (r && r.ok) {
+            p.dir = r.path;
+            this.persist();
+          }
+        })
+        .catch(() => {});
+    }
     this.els.edName.textContent = p.name.toUpperCase();
     this.els.editor.hidden = false;
     this.els.list.hidden = true;
@@ -398,6 +420,16 @@ OmniOS.register("proj", {
     this.syncToolChips(key);
     const mod = OmniOS.modules[key];
     if (mod && mod.resize) mod.resize();
+    // 프로젝트 폴더가 있으면 도구를 해당 하위 폴더로 자동 연결
+    const p = this._edProject;
+    if (p && p.dir && OmniNative.available) {
+      if (key === "ce" && OmniOS.modules.ce.openPath) {
+        OmniOS.modules.ce.openPath(`${p.dir}/code`);
+      } else if (key === "notes" && OmniOS.modules.notes.openVault) {
+        OmniOS.modules.notes._booted = true; // 기본 볼트 부팅 건너뛰고
+        OmniOS.modules.notes.openVault(`${p.dir}/notes`);
+      }
+    }
   },
 
   unmountPanel() {
@@ -2928,6 +2960,298 @@ OmniOS.register("r3d", {
   },
 });
 
+// ---------- module: NOTES (obsidian-style markdown vault) ----------
+OmniOS.register("notes", {
+  els: null,
+  _cm: null,
+  _vault: null,
+  _cur: null,          // 열려 있는 노트 경로
+  _index: [],          // [{name, path}] — 위키링크 해석용 전체 색인
+  _mode: "edit",
+  _saveT: null,
+  _dirty: false,
+  _booted: false,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      vault: $("nt-vault"), msg: $("nt-msg"), mode: $("nt-mode"),
+      newBtn: $("nt-new"), tree: $("nt-tree"), treeEmpty: $("nt-tree-empty"),
+      title: $("nt-title"), editor: $("nt-editor"),
+      preview: $("nt-preview"), empty: $("nt-empty"),
+    };
+    this.els.newBtn.addEventListener("click", () => this.newNote());
+    this.els.mode.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => this.setMode(b.dataset.m)));
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "notes") {
+        this.boot();
+        setTimeout(() => this._cm && this._cm.refresh(), 50);
+      }
+    });
+    // 프리뷰의 위키링크 클릭 → 해당 노트 열기 (없으면 생성)
+    this.els.preview.addEventListener("click", (e) => {
+      const a = e.target.closest("a.wikilink");
+      if (a) {
+        e.preventDefault();
+        this.openByName(a.dataset.note);
+        return;
+      }
+      const ext = e.target.closest("a[href]");
+      if (ext) {
+        e.preventDefault();
+        const url = ext.getAttribute("href");
+        if (/^https?:\/\//.test(url)) {
+          if (OmniNative.available) {
+            OmniNative.request("open.url", JSON.stringify({ url })).catch(() => {});
+          } else {
+            window.open(url, "_blank");
+          }
+        }
+      }
+    });
+  },
+
+  async boot() {
+    if (this._booted) return;
+    this._booted = true;
+    if (!OmniNative.available) {
+      this.flash("BROWSER DEV \u2014 VAULT NEEDS THE NATIVE APP");
+      return;
+    }
+    try {
+      const r = await OmniNative.request("notes.vault", null, 8000);
+      if (r && r.ok) this.setVault(r.path);
+    } catch (e) {}
+  },
+
+  // 프로젝트 에디터가 프로젝트의 notes 폴더로 볼트를 바꿀 때 사용
+  async openVault(path) {
+    try {
+      const r = await OmniNative.request("ce.addRoot", JSON.stringify({ path }), 8000);
+      if (r && r.ok) this.setVault(r.path);
+    } catch (e) {}
+  },
+
+  flash(text, tone) {
+    const el = this.els.msg;
+    el.textContent = text;
+    el.className = `ts-item${tone ? " " + tone : ""}`;
+    clearTimeout(this._msgT);
+    if (tone === "ok") this._msgT = setTimeout(() => { el.textContent = ""; }, 2000);
+  },
+
+  async setVault(path) {
+    this._vault = path;
+    this.els.vault.textContent = path.replace(/^\/Users\/[^/]+/, "~").toUpperCase();
+    await this.rescan();
+  },
+
+  // 볼트 전체 색인 (위키링크 해석 + 트리 렌더)
+  async rescan() {
+    this._index = [];
+    this.els.tree.querySelectorAll(".ce-node, .ce-kids").forEach((n) => n.remove());
+    await this.scanDir(this._vault, this.els.tree, 0);
+    this.els.treeEmpty.hidden = this._index.length > 0;
+  },
+
+  async scanDir(path, container, depth) {
+    if (depth > 4) return;
+    let r;
+    try {
+      r = await OmniNative.request("ce.tree", JSON.stringify({ path }), 10000);
+    } catch (e) {
+      return;
+    }
+    if (!r || !r.ok) return;
+    for (const ent of r.entries) {
+      const full = `${path}/${ent.name}`;
+      if (ent.dir) {
+        const node = document.createElement("div");
+        node.className = "ce-node dir";
+        node.style.paddingLeft = `${6 + depth * 12}px`;
+        const glyph = document.createElement("span");
+        glyph.className = "glyph";
+        glyph.textContent = "\u25BE";
+        const label = document.createElement("span");
+        label.textContent = ent.name;
+        node.append(glyph, label);
+        container.appendChild(node);
+        const kids = document.createElement("div");
+        kids.className = "ce-kids open";
+        container.appendChild(kids);
+        node.addEventListener("click", () => {
+          const open = kids.classList.toggle("open");
+          glyph.textContent = open ? "\u25BE" : "\u25B8";
+        });
+        await this.scanDir(full, kids, depth + 1);
+      } else if (/\.md$/i.test(ent.name)) {
+        const node = document.createElement("div");
+        node.className = "ce-node";
+        node.dataset.path = full;
+        node.style.paddingLeft = `${6 + depth * 12}px`;
+        const glyph = document.createElement("span");
+        glyph.className = "glyph";
+        glyph.textContent = "\u00B7";
+        const label = document.createElement("span");
+        label.textContent = ent.name.replace(/\.md$/i, "");
+        node.append(glyph, label);
+        node.addEventListener("click", () => this.openNote(full));
+        container.appendChild(node);
+        this._index.push({ name: ent.name.replace(/\.md$/i, ""), path: full });
+      }
+    }
+  },
+
+  ensureCM() {
+    if (this._cm) return this._cm;
+    if (typeof window.CodeMirror === "undefined") return null;
+    this._cm = window.CodeMirror(this.els.editor, {
+      mode: "markdown",
+      lineNumbers: false,
+      lineWrapping: true,
+      indentUnit: 2,
+    });
+    this._cm.on("change", () => {
+      if (!this._cur) return;
+      this._dirty = true;
+      clearTimeout(this._saveT);
+      this._saveT = setTimeout(() => this.save(), 800); // 옵시디언식 자동 저장
+    });
+    // [[ 위키링크 자동완성
+    this._cm.on("inputRead", (cm, change) => {
+      const cur = cm.getCursor();
+      const line = cm.getLine(cur.line).slice(0, cur.ch);
+      if (/\[\[[^\]]*$/.test(line)) this.linkHint(cm);
+    });
+    return this._cm;
+  },
+
+  linkHint(cm) {
+    const CM = window.CodeMirror;
+    cm.showHint({
+      completeSingle: false,
+      hint: (c) => {
+        const cur = c.getCursor();
+        const line = c.getLine(cur.line).slice(0, cur.ch);
+        const m = line.match(/\[\[([^\]]*)$/);
+        if (!m) return null;
+        const partial = m[1].toLowerCase();
+        const list = this._index
+          .filter((n) => n.name.toLowerCase().includes(partial))
+          .slice(0, 30)
+          .map((n) => ({ text: `${n.name}]]` , displayText: n.name }));
+        if (!list.length) return null;
+        return {
+          list,
+          from: CM.Pos(cur.line, cur.ch - m[1].length),
+          to: CM.Pos(cur.line, cur.ch),
+        };
+      },
+    });
+  },
+
+  async newNote() {
+    if (!this._vault) return;
+    let name = "Untitled.md";
+    let n = 2;
+    const names = this._index.map((x) => `${x.name}.md`);
+    while (names.includes(name)) name = `Untitled-${n++}.md`;
+    const path = `${this._vault}/${name}`;
+    try {
+      await OmniNative.request("ce.write",
+        JSON.stringify({ path, data: `# ${name.replace(/\.md$/, "")}\n\n` }), 8000);
+    } catch (e) {
+      return;
+    }
+    await this.rescan();
+    this.openNote(path);
+  },
+
+  async openNote(path) {
+    if (this._dirty) await this.save();
+    let r;
+    try {
+      r = await OmniNative.request("ce.read", JSON.stringify({ path }), 10000);
+    } catch (e) {
+      return;
+    }
+    if (!r || !r.ok) return;
+    this._cur = path;
+    const cm = this.ensureCM();
+    cm.setValue(r.text);
+    this._dirty = false;
+    const name = path.split("/").pop().replace(/\.md$/i, "");
+    this.els.title.hidden = false;
+    this.els.title.textContent = name.toUpperCase();
+    this.els.empty.hidden = true;
+    this.els.tree.querySelectorAll(".ce-node.active").forEach((x) => x.classList.remove("active"));
+    const node = this.els.tree.querySelector(`.ce-node[data-path="${CSS.escape(path)}"]`);
+    if (node) node.classList.add("active");
+    this.setMode(this._mode); // 현재 모드 유지 (프리뷰면 다시 렌더)
+    setTimeout(() => cm.refresh(), 0);
+  },
+
+  async openByName(name) {
+    const hit = this._index.find((n) => n.name.toLowerCase() === name.toLowerCase());
+    if (hit) {
+      this.openNote(hit.path);
+      return;
+    }
+    // 없는 노트는 옵시디언처럼 즉석 생성
+    const path = `${this._vault}/${name}.md`;
+    try {
+      await OmniNative.request("ce.write",
+        JSON.stringify({ path, data: `# ${name}\n\n` }), 8000);
+      await this.rescan();
+      this.openNote(path);
+    } catch (e) {}
+  },
+
+  async save() {
+    if (!this._cur || !this._cm || !this._dirty) return;
+    this._dirty = false;
+    try {
+      const r = await OmniNative.request("ce.write",
+        JSON.stringify({ path: this._cur, data: this._cm.getValue() }), 10000);
+      if (r && r.ok) this.flash("SAVED", "ok");
+      else this.flash("SAVE FAILED", "alert");
+    } catch (e) {
+      this.flash("SAVE FAILED", "alert");
+    }
+  },
+
+  setMode(m) {
+    this._mode = m;
+    this.els.mode.querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.m === m));
+    if (m === "preview" && this._cur) {
+      this.renderPreview();
+      this.els.preview.hidden = false;
+    } else {
+      this.els.preview.hidden = true;
+      if (this._cm) setTimeout(() => this._cm.refresh(), 0);
+    }
+  },
+
+  renderPreview() {
+    if (typeof window.marked === "undefined" || !this._cm) return;
+    let md = this._cm.getValue();
+    // [[위키링크]] → 클릭 가능한 앵커 (존재하지 않으면 앰버)
+    md = md.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (all, target, label) => {
+      const exists = this._index.some((n) => n.name.toLowerCase() === target.toLowerCase());
+      const cls = exists ? "wikilink" : "wikilink missing";
+      const text = label || target;
+      return `<a class="${cls}" data-note="${target.replace(/"/g, "&quot;")}">${text}</a>`;
+    });
+    this.els.preview.innerHTML = window.marked.parse(md, { gfm: true, breaks: true });
+  },
+
+  resize() {
+    if (this._cm) this._cm.refresh();
+  },
+});
+
 // ---------- module: CODE EDITOR (files + CodeMirror + PTY terminals) ----------
 OmniOS.register("ce", {
   els: null,
@@ -3063,6 +3387,17 @@ OmniOS.register("ce", {
   async openFolder() {
     try {
       const r = await OmniNative.request("ce.pickFolder", null, 120000);
+      if (r && r.ok) {
+        localStorage.setItem("omni.ce.root", r.path);
+        this.setRoot(r.path);
+      }
+    } catch (e) {}
+  },
+
+  // 프로젝트 에디터가 프로젝트의 code 폴더를 열 때 사용
+  async openPath(path) {
+    try {
+      const r = await OmniNative.request("ce.addRoot", JSON.stringify({ path }), 8000);
       if (r && r.ok) {
         localStorage.setItem("omni.ce.root", r.path);
         this.setRoot(r.path);

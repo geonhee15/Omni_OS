@@ -62,6 +62,10 @@
         <span class="nav-icon">&#10216;&#10217;</span>
         <span class="nav-label">CODE EDITOR</span>
       </button>
+      <button class="nav-item" data-panel="notes">
+        <span class="nav-icon">&#9998;</span>
+        <span class="nav-label">NOTES</span>
+      </button>
       <button class="nav-item" data-panel="arc">
         <span class="nav-icon">&#9678;</span>
         <span class="nav-label">ARC-SCAN</span>
@@ -112,6 +116,7 @@
             <button class="ig-tab" data-tool="r3d">RENDER_3D</button>
             <button class="ig-tab" data-tool="ino">ARDUINO IDE</button>
             <button class="ig-tab" data-tool="ce">CODE EDITOR</button>
+            <button class="ig-tab" data-tool="notes">NOTES</button>
           </div>
           <span class="ts-spacer"></span>
           <button class="ig-tab" id="pj-ed-close">&#10005; CLOSE</button>
@@ -562,6 +567,36 @@
       </div>
     </section>
 
+    <!-- panel: NOTES (obsidian-style markdown vault) -->
+    <section class="panel panel-ce panel-notes" id="panel-notes">
+      <div class="sp1-topstrip">
+        <span class="sp1-title">NOTES</span>
+        <span class="ts-item" id="nt-vault">&mdash;</span>
+        <span class="ts-spacer"></span>
+        <span class="ts-item" id="nt-msg"></span>
+        <div class="r3d-modes" id="nt-mode">
+          <button class="ig-tab active" data-m="edit">EDIT</button>
+          <button class="ig-tab" data-m="preview">PREVIEW</button>
+        </div>
+        <button class="ig-tab" id="nt-new">+ NOTE</button>
+      </div>
+      <div class="ce-body">
+        <div class="ce-tree" id="nt-tree">
+          <div class="ce-tree-empty" id="nt-tree-empty">VAULT EMPTY<br />PRESS + NOTE</div>
+        </div>
+        <div class="ce-main">
+          <div class="nt-title" id="nt-title" hidden>&mdash;</div>
+          <div class="ce-editor nt-editor" id="nt-editor">
+            <div class="nt-preview" id="nt-preview" hidden></div>
+            <div class="ino-editor-empty" id="nt-empty">
+              <div class="r3d-drop-title">NOTES</div>
+              <div class="r3d-drop-sub">OBSIDIAN-STYLE VAULT &mdash; [[WIKILINKS]] &middot; AUTOSAVE &middot; PREVIEW</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- panel: CODE EDITOR (files + CodeMirror + PTY terminals) -->
     <section class="panel panel-ce" id="panel-ce">
       <div class="sp1-topstrip">
@@ -761,9 +796,9 @@
     <footer class="bottombar">
       <span id="uptime">UPTIME 00:00:00</span>
       <span class="divider">|</span>
-      <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE</span>
+      <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES</span>
       <span class="divider">|</span>
-      <span>v0.28.1</span>
+      <span>v0.29.0</span>
     </footer>
   </div>
 
@@ -795,6 +830,7 @@
   <script src="vendor/codemirror/modes/go.js"></script>
   <script src="vendor/codemirror/modes/swift.js"></script>
   <script src="vendor/codemirror/modes/toml.js"></script>
+  <script src="vendor/marked/marked.umd.js"></script>
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/xterm-addon-fit.js"></script>
   <script src="app.js"></script>

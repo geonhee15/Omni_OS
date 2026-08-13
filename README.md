@@ -109,6 +109,16 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   더블클릭으로 기본 크기 복원, 크기는 localStorage에 저장되어 재시작 후에도 유지.
   앱에서는 네이티브 WebSocket 릴레이(NSURLSessionWebSocketTask) 사용 — omni:// 보안 컨텍스트에서
   평문 ws://가 차단되는 문제 회피. 브라우저 개발 모드는 JS WebSocket 폴백
+- **NOTES** — Obsidian식 마크다운 노트 패널. 볼트(`Notes/` — 프로젝트 에디터에서는 그
+  프로젝트의 `notes/`)의 .md를 트리로 탐색, CodeMirror 마크다운 에디터(줄바꿈, 자동 저장
+  0.8초 디바운스), **EDIT / PREVIEW 토글**(GFM 렌더 — 체크박스·표·코드블록·인용).
+  **[[위키링크]]**: `[[`만 치면 노트 이름 자동완성, 프리뷰에서 클릭하면 그 노트로 이동,
+  없는 노트는 앰버로 표시되고 클릭 시 즉석 생성(옵시디언과 동일). + NOTE는 Untitled 자동
+  넘버링. 외부 링크는 기본 브라우저로.
+- **PROJECTS 폴더 골격**: 프로젝트를 만들면 `Projects/<이름>/{3d, arduino, code, notes}`
+  폴더가 실제로 생성되고, 에디터 모드 도구가 자동 연결 — CODE EDITOR는 `code/`를 루트로,
+  NOTES는 `notes/`를 볼트로 엶 (`3d/`, `arduino/`는 해당 산출물 보관용). 기존 프로젝트도
+  에디터를 열면 골격이 생김. 에디터 도구 바: RENDER_3D · ARDUINO IDE · CODE EDITOR · NOTES.
 - **CODE EDITOR** — VSCode 감성의 미니 코드 IDE. **OPEN FOLDER**(최근 폴더 자동 재오픈)로
   파일 트리(지연 로딩)를 열고, 파일 탭 + CodeMirror 에디터로 편집(Cmd+S 저장, 수정 표시 ●).
   구문 강조 13종: C/C++/Obj-C/Java·JS/TS·JSON·HTML·CSS·XML·Python·Shell·Markdown·

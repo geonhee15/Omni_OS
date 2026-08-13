@@ -153,6 +153,17 @@ static NSString *MediaMime(NSString *ext) {
 
 @end
 
+// 앱 데이터 베이스 폴더: 개발 체크아웃이 있으면 그 안, 없으면 ~/Documents/OmniOS
+static NSString *OmniBaseDir(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *dev = [NSHomeDirectory()
+        stringByAppendingPathComponent:@"Desktop/Important/Omni_OS"];
+    BOOL isDir = NO;
+    if ([fm fileExistsAtPath:dev isDirectory:&isDir] && isDir) return dev;
+    return [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)
+               firstObject] stringByAppendingPathComponent:@"OmniOS"];
+}
+
 // PLY exports accumulate in <project>/ARC-SCAN-SAVES (falls back to
 // ~/Documents/OmniOS/ARC-SCAN-SAVES when the dev checkout is absent)
 static NSString *ArcSavesDir(void) {
@@ -442,7 +453,42 @@ static NSString *ArcSavesDir(void) {
     NSString *arg = [body[@"arg"] isKindOfClass:[NSString class]] ? body[@"arg"] : nil;
     if (msgId == nil || cmd == nil) return;
 
-    if ([cmd hasPrefix:@"ce."]) {
+    if ([cmd isEqualToString:@"proj.scaffold"] || [cmd isEqualToString:@"notes.vault"]) {
+        // 프로젝트 폴더 골격 생성 / 기본 노트 볼트 — 만들고 ce 루트로 등록
+        if (self.ceRoots == nil) self.ceRoots = [NSMutableSet set];
+        NSFileManager *fm = NSFileManager.defaultManager;
+        NSString *base = OmniBaseDir();
+        NSString *dir = nil;
+        if ([cmd isEqualToString:@"notes.vault"]) {
+            dir = [base stringByAppendingPathComponent:@"Notes"];
+            [fm createDirectoryAtPath:dir withIntermediateDirectories:YES
+                           attributes:nil error:nil];
+        } else {
+            NSDictionary *a = nil;
+            if (arg != nil) {
+                NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+                id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+                if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+            }
+            NSString *name = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : nil;
+            name = [[name componentsSeparatedByCharactersInSet:
+                [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|"]]
+                componentsJoinedByString:@""];
+            name = [name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+            if (name.length == 0) {
+                [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
+                return;
+            }
+            dir = [[base stringByAppendingPathComponent:@"Projects"]
+                stringByAppendingPathComponent:name];
+            for (NSString *sub in @[ @"3d", @"arduino", @"code", @"notes" ]) {
+                [fm createDirectoryAtPath:[dir stringByAppendingPathComponent:sub]
+              withIntermediateDirectories:YES attributes:nil error:nil];
+            }
+        }
+        [self.ceRoots addObject:dir.stringByStandardizingPath];
+        [self deliverPayload:@{ @"ok" : @YES, @"path" : dir } forId:msgId];
+    } else if ([cmd hasPrefix:@"ce."]) {
         NSDictionary *a = nil;
         if (arg != nil) {
             NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
