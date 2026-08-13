@@ -546,6 +546,22 @@ int main(int argc, const char *argv[]) {
         [appMenu addItemWithTitle:@"Quit OMNI_OS" action:@selector(terminate:) keyEquivalent:@"q"];
         appMenuItem.submenu = appMenu;
 
+        // Edit menu — Cmd+C/V/X/A/Z가 이 메뉴의 key equivalent로 동작한다.
+        // 표준 셀렉터라 웹뷰(입력 필드, CodeMirror)까지 리스폰더 체인으로 전달됨
+        NSMenuItem *editMenuItem = [NSMenuItem new];
+        [mainMenu addItem:editMenuItem];
+        NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+        [editMenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+        [editMenu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
+        [editMenu addItem:[NSMenuItem separatorItem]];
+        [editMenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+        [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+        [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+        [editMenu addItem:[NSMenuItem separatorItem]];
+        [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:)
+                     keyEquivalent:@"a"];
+        editMenuItem.submenu = editMenu;
+
         NSMenuItem *windowMenuItem = [NSMenuItem new];
         [mainMenu addItem:windowMenuItem];
         NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
