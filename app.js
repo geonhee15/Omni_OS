@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.31.0",
+  version: "0.31.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -549,7 +549,6 @@ OmniOS.register("proj", {
       if (key === "ce" && OmniOS.modules.ce.openPath) {
         OmniOS.modules.ce.openPath(`${dir}/code`);
       } else if (key === "notes" && OmniOS.modules.notes.openVault) {
-        OmniOS.modules.notes._booted = true; // 기본 볼트 부팅 건너뛰고
         OmniOS.modules.notes.openVault(`${dir}/notes`);
       }
     }
@@ -3109,7 +3108,9 @@ OmniOS.register("notes", {
   init() {
     const $ = (id) => document.getElementById(id);
     this.els = {
+      panel: $("panel-notes"),
       vault: $("nt-vault"), msg: $("nt-msg"), mode: $("nt-mode"),
+      open: $("nt-open"),
       newBtn: $("nt-new"), tree: $("nt-tree"), treeEmpty: $("nt-tree-empty"),
       title: $("nt-title"), editor: $("nt-editor"),
       preview: $("nt-preview"), empty: $("nt-empty"),
@@ -3129,11 +3130,13 @@ OmniOS.register("notes", {
       if (files.length) await this.insertImages(files);
     });
     this.els.newBtn.addEventListener("click", () => this.newNote());
+    this.els.open.addEventListener("click", () => this.pickFolder());
     this.els.mode.querySelectorAll("button").forEach((b) =>
       b.addEventListener("click", () => this.setMode(b.dataset.m)));
     document.addEventListener("omni:panel", (e) => {
       if (e.detail === "notes") {
-        this.boot();
+        // 사이드바로 열면 무조건 메인 Notes 볼트 (프로젝트 이식 상태가 아니면)
+        if (!this.els.panel.classList.contains("pj-embedded")) this.openMain();
         setTimeout(() => this._cm && this._cm.refresh(), 50);
       }
     });
@@ -3160,15 +3163,24 @@ OmniOS.register("notes", {
     });
   },
 
-  async boot() {
-    if (this._booted) return;
-    this._booted = true;
+  async openMain() {
     if (!OmniNative.available) {
-      this.flash("BROWSER DEV \u2014 VAULT NEEDS THE NATIVE APP");
+      if (!this._booted) {
+        this._booted = true;
+        this.flash("BROWSER DEV \u2014 VAULT NEEDS THE NATIVE APP");
+      }
       return;
     }
     try {
       const r = await OmniNative.request("notes.vault", null, 8000);
+      if (r && r.ok && this._vault !== r.path) this.setVault(r.path);
+    } catch (e) {}
+  },
+
+  async pickFolder() {
+    if (!OmniNative.available) return;
+    try {
+      const r = await OmniNative.request("ce.pickFolder", null, 120000);
       if (r && r.ok) this.setVault(r.path);
     } catch (e) {}
   },
@@ -3190,7 +3202,15 @@ OmniOS.register("notes", {
   },
 
   async setVault(path) {
+    if (this._dirty) await this.save();
     this._vault = path;
+    this._cur = null;
+    this._dirty = false;
+    this.els.title.hidden = true;
+    this.els.toolbar.hidden = true;
+    this.els.preview.hidden = true;
+    this.els.empty.hidden = false;
+    if (this._cm) this._cm.setValue("");
     this.els.vault.textContent = path.replace(/^\/Users\/[^/]+/, "~").toUpperCase();
     await this.rescan();
   },
