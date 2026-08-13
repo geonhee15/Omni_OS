@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.29.1",
+  version: "0.30.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -58,6 +58,32 @@ OmniOS.register("nav", {
     document.dispatchEvent(new CustomEvent("omni:panel", { detail: name }));
   },
 });
+
+// 프로젝트 에디터 도구용: 불러온/저장한 파일을 프로젝트 하위 폴더에 보관
+OmniOS.projectKeep = async function (dir, name, data) {
+  // data: string(텍스트) | ArrayBuffer(바이너리)
+  if (!dir || !window.OmniNative || !OmniNative.available) return false;
+  const safe = String(name).split("/").pop();
+  try {
+    if (typeof data === "string") {
+      const r = await OmniNative.request("ce.write",
+        JSON.stringify({ path: `${dir}/${safe}`, data }), 30000);
+      return !!(r && r.ok);
+    }
+    const bytes = new Uint8Array(data);
+    if (bytes.length > 80 * 1024 * 1024) return false;
+    let bin = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    const r = await OmniNative.request("ce.writeBin",
+      JSON.stringify({ path: `${dir}/${safe}`, data: btoa(bin) }), 60000);
+    return !!(r && r.ok);
+  } catch (e) {
+    return false;
+  }
+};
 
 // 범용 우클릭 메뉴: items = [{label, hint, disabled, onClick} | {sep:true}]
 OmniOS.ctxMenu = function (items, x, y) {
@@ -472,9 +498,12 @@ OmniOS.register("proj", {
     this.syncToolChips(key);
     const mod = OmniOS.modules[key];
     if (mod && mod.resize) mod.resize();
-    // 프로젝트 폴더가 있으면 도구를 해당 하위 폴더로 자동 연결
+    // 프로젝트 폴더가 있으면 도구를 해당 하위 폴더로 자동 연결하고,
+    // 도구에서 불러온/저장한 파일이 그 폴더에 계속 보관되게 저장 폴더를 지정
     const p = this._edProject;
     if (p && p.dir && OmniNative.available) {
+      const SUB = { r3d: "3d", ino: "arduino", ce: "code", notes: "notes" };
+      if (mod && SUB[key]) mod._projectSaveDir = `${p.dir}/${SUB[key]}`;
       if (key === "ce" && OmniOS.modules.ce.openPath) {
         OmniOS.modules.ce.openPath(`${p.dir}/code`);
       } else if (key === "notes" && OmniOS.modules.notes.openVault) {
@@ -487,6 +516,8 @@ OmniOS.register("proj", {
   unmountPanel() {
     const panel = document.querySelector(".pj-ed-host .panel.pj-embedded");
     if (!panel) return;
+    const mod = OmniOS.modules[panel.id.replace("panel-", "")];
+    if (mod) mod._projectSaveDir = null;
     const home = this._homes[panel.id];
     panel.classList.remove("pj-embedded");
     if (home) home.parent.insertBefore(panel, home.next);
@@ -2047,6 +2078,13 @@ OmniOS.register("r3d", {
 
   async loadFiles(files) {
     this.els.stats.textContent = "LOADING\u2026";
+    // 프로젝트 에디터에 이식된 상태면 불러온 모델을 프로젝트 3d/에 보관
+    if (this._projectSaveDir) {
+      for (const f of files) {
+        f.arrayBuffer().then((buf) =>
+          OmniOS.projectKeep(this._projectSaveDir, f.name, buf));
+      }
+    }
     try {
       const t = await this.ensureThree();
       this.initViewport();
@@ -3012,7 +3050,7 @@ OmniOS.register("r3d", {
   },
 });
 
-// ---------- module: NOTES (obsidian-style markdown vault) ----------
+// ---------- module: NOTES (markdown vault) ----------
 OmniOS.register("notes", {
   els: null,
   _cm: null,
@@ -3031,7 +3069,21 @@ OmniOS.register("notes", {
       newBtn: $("nt-new"), tree: $("nt-tree"), treeEmpty: $("nt-tree-empty"),
       title: $("nt-title"), editor: $("nt-editor"),
       preview: $("nt-preview"), empty: $("nt-empty"),
+      toolbar: $("nt-toolbar"), imgInput: $("nt-img-input"),
     };
+    this.els.toolbar.querySelectorAll("button[data-fmt]").forEach((b) =>
+      b.addEventListener("click", () => this.fmt(b.dataset.fmt)));
+    this.els.toolbar.querySelectorAll("button[data-color]").forEach((b) =>
+      b.addEventListener("click", () => this.wrapSel(
+        `<span style="color:${b.dataset.color}">`, "</span>")));
+    this.els.toolbar.querySelectorAll("button[data-size]").forEach((b) =>
+      b.addEventListener("click", () => this.wrapSel(
+        `<span style="font-size:${b.dataset.size}px">`, "</span>")));
+    this.els.imgInput.addEventListener("change", async () => {
+      const files = [...this.els.imgInput.files];
+      this.els.imgInput.value = "";
+      if (files.length) await this.insertImages(files);
+    });
     this.els.newBtn.addEventListener("click", () => this.newNote());
     this.els.mode.querySelectorAll("button").forEach((b) =>
       b.addEventListener("click", () => this.setMode(b.dataset.m)));
@@ -3161,6 +3213,92 @@ OmniOS.register("notes", {
     }
   },
 
+  // ── 서식 도구 ──
+  wrapSel(prefix, suffix) {
+    const cm = this._cm;
+    if (!cm || !this._cur) return;
+    const sel = cm.getSelection();
+    if (sel) {
+      cm.replaceSelection(prefix + sel + suffix);
+    } else {
+      const cur = cm.getCursor();
+      cm.replaceRange(prefix + suffix, cur);
+      cm.setCursor({ line: cur.line, ch: cur.ch + prefix.length });
+    }
+    cm.focus();
+  },
+
+  headingLine(level) {
+    const cm = this._cm;
+    if (!cm || !this._cur) return;
+    const cur = cm.getCursor();
+    const line = cm.getLine(cur.line);
+    const stripped = line.replace(/^#{1,6}\s+/, "");
+    const mark = "#".repeat(level) + " ";
+    const already = line.startsWith(mark) && line.slice(mark.length) === stripped;
+    cm.replaceRange(already ? stripped : mark + stripped,
+      { line: cur.line, ch: 0 }, { line: cur.line, ch: line.length });
+    cm.focus();
+  },
+
+  fmt(kind) {
+    if (kind === "bold") this.wrapSel("**", "**");
+    else if (kind === "italic") this.wrapSel("*", "*");
+    else if (kind === "strike") this.wrapSel("~~", "~~");
+    else if (kind === "code") this.wrapSel("`", "`");
+    else if (kind === "h1") this.headingLine(1);
+    else if (kind === "h2") this.headingLine(2);
+    else if (kind === "h3") this.headingLine(3);
+    else if (kind === "image") this.els.imgInput.click();
+  },
+
+  // ── 이미지 삽입: 볼트 assets/에 복사 후 상대 경로로 참조 ──
+  async insertImages(files) {
+    if (!this._vault || !this._cur || !OmniNative.available) {
+      this.flash("IMAGE INSERT NEEDS THE NATIVE APP", "alert");
+      return;
+    }
+    const ce = OmniOS.modules.ce;
+    const assets = `${this._vault}/assets`;
+    await ce.fileOp("ce.mkdir", { path: assets }); // 이미 있으면 무시
+    let existing = [];
+    try {
+      const t = await OmniNative.request("ce.tree", JSON.stringify({ path: assets }), 10000);
+      existing = ((t && t.entries) || []).map((x) => x.name);
+    } catch (e) {}
+    for (const f of files) {
+      if (f.size > 50 * 1024 * 1024) {
+        this.flash(`${f.name}: OVER 50MB`, "alert");
+        continue;
+      }
+      let name = f.name.replace(/[\/\\:]/g, "");
+      const dot = name.lastIndexOf(".");
+      const base = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : "";
+      let n = 2;
+      while (existing.includes(name)) name = `${base}-${n++}${ext}`;
+      existing.push(name);
+      const buf = await f.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let bin = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+      }
+      const ok = await ce.fileOp("ce.writeBin",
+        { path: `${assets}/${name}`, data: btoa(bin) });
+      if (ok) {
+        const cm = this._cm;
+        const cur = cm.getCursor();
+        cm.replaceRange(`![${base}](assets/${name})\n`, cur);
+        this.flash(`INSERTED ${name}`, "ok");
+      } else {
+        this.flash(`${name}: SAVE FAILED`, "alert");
+      }
+    }
+    if (this._mode === "preview") this.renderPreview();
+  },
+
   treeMenu(e, info) {
     // info: {path, name(파일명), isDir, parent, labelEl}
     e.preventDefault();
@@ -3245,6 +3383,7 @@ OmniOS.register("notes", {
               || (this._cur && this._cur.startsWith(`${info.path}/`))) {
             this._cur = null;
             this.els.title.hidden = true;
+            this.els.toolbar.hidden = true;
             this.els.empty.hidden = false;
             this.els.preview.hidden = true;
             if (this._cm) this._cm.setValue("");
@@ -3267,12 +3406,13 @@ OmniOS.register("notes", {
       lineNumbers: false,
       lineWrapping: true,
       indentUnit: 2,
+      autoCloseBrackets: true,
     });
     this._cm.on("change", () => {
       if (!this._cur) return;
       this._dirty = true;
       clearTimeout(this._saveT);
-      this._saveT = setTimeout(() => this.save(), 800); // 옵시디언식 자동 저장
+      this._saveT = setTimeout(() => this.save(), 800); // 자동 저장
     });
     // [[ 위키링크 자동완성
     this._cm.on("inputRead", (cm, change) => {
@@ -3341,6 +3481,7 @@ OmniOS.register("notes", {
     const name = path.split("/").pop().replace(/\.md$/i, "");
     this.els.title.hidden = false;
     this.els.title.textContent = name.toUpperCase();
+    this.els.toolbar.hidden = false;
     this.els.empty.hidden = true;
     this.els.tree.querySelectorAll(".ce-node.active").forEach((x) => x.classList.remove("active"));
     const node = this.els.tree.querySelector(`.ce-node[data-path="${CSS.escape(path)}"]`);
@@ -3355,7 +3496,7 @@ OmniOS.register("notes", {
       this.openNote(hit.path);
       return;
     }
-    // 없는 노트는 옵시디언처럼 즉석 생성
+    // 없는 노트는 즉석 생성
     const path = `${this._vault}/${name}.md`;
     try {
       await OmniNative.request("ce.write",
@@ -3402,6 +3543,13 @@ OmniOS.register("notes", {
       return `<a class="${cls}" data-note="${target.replace(/"/g, "&quot;")}">${text}</a>`;
     });
     this.els.preview.innerHTML = window.marked.parse(md, { gfm: true, breaks: true });
+    // 상대 경로 이미지 → 로컬 미디어 스킴 (볼트 기준)
+    this.els.preview.querySelectorAll("img").forEach((img) => {
+      const src = img.getAttribute("src") || "";
+      if (!/^(https?:|omni:|data:)/.test(src)) {
+        img.src = `omni://local/__media__?p=${encodeURIComponent(`${this._vault}/${src}`)}`;
+      }
+    });
   },
 
   resize() {
@@ -3461,9 +3609,10 @@ OmniOS.register("ce", {
       nfDir: $("ce-nf-dir"), nfCancel: $("ce-nf-cancel"), nfCreate: $("ce-nf-create"),
     };
     this.els.run.addEventListener("click", () => this.runActive());
-    const savedTheme = localStorage.getItem("omni.ce.theme") || "vscode";
+    const savedTheme = (localStorage.getItem("omni.ce.theme") || "visual").replace("vscode", "visual");
     this.els.theme.value = savedTheme;
     this.els.editor.dataset.theme = savedTheme;
+    this.els.theme.value = savedTheme;
     this.els.theme.addEventListener("change", () => {
       const t = this.els.theme.value;
       this.els.editor.dataset.theme = t;
@@ -3676,7 +3825,7 @@ OmniOS.register("ce", {
       this.flash(`NO RUNNER FOR .${ext.toUpperCase()}`, "alert");
       return;
     }
-    if (f.dirty) await this.saveActive(); // VSCode처럼 실행 전 자동 저장
+    if (f.dirty) await this.saveActive(); // 실행 전 자동 저장
     const dir = f.path.slice(0, f.path.lastIndexOf("/"));
     const cmd = `cd ${this.shq(dir)} && ${runner(this.shq(f.name))}`;
     await this.runInTerm(cmd);
@@ -3769,7 +3918,7 @@ OmniOS.register("ce", {
     }
   },
 
-  // 언어별 완성 사전 — keywords/builtins + 모듈 멤버 (VSCode식 IntelliSense 근사)
+  // 언어별 완성 사전 — keywords/builtins + 모듈 멤버 (자동완성 사전)
   DICTS: {
     python: {
       keywords: ("and as assert async await break class continue def del elif else except finally "
@@ -3797,6 +3946,13 @@ OmniOS.register("ce", {
         functools: "reduce partial lru_cache wraps cache cmp_to_key".split(" "),
         subprocess: "run Popen call check_output check_call PIPE DEVNULL".split(" "),
       },
+      modules: ("os sys time json re math random datetime collections itertools functools pathlib "
+        + "subprocess threading multiprocessing argparse typing string csv sqlite3 socket http urllib "
+        + "logging unittest asyncio dataclasses enum abc io shutil glob pickle hashlib base64 secrets "
+        + "statistics decimal fractions heapq bisect queue struct zlib gzip tarfile zipfile tempfile "
+        + "webbrowser platform getpass uuid copy warnings traceback inspect signal select textwrap "
+        + "numpy pandas requests flask django matplotlib scipy pytest PIL cv2 torch tensorflow "
+        + "sounddevice serial mediapipe").split(" "),
       generic: ("append extend insert remove pop clear index count sort reverse copy keys values items "
         + "get update setdefault add discard union intersection join split strip lstrip rstrip replace "
         + "startswith endswith find rfind upper lower title capitalize format encode decode isdigit "
@@ -3825,6 +3981,10 @@ OmniOS.register("ce", {
         window: "addEventListener removeEventListener requestAnimationFrame innerWidth innerHeight devicePixelRatio open close scrollTo".split(" "),
         localStorage: "getItem setItem removeItem clear key length".split(" "),
       },
+      modules: ("fs path os http https crypto util events stream url querystring child_process "
+        + "readline zlib assert buffer cluster net tls dns worker_threads react react-dom vue svelte "
+        + "express axios lodash moment dayjs uuid chalk commander inquirer dotenv ws socket.io "
+        + "three jquery d3 chart.js zod").split(" "),
       generic: ("map filter reduce forEach find findIndex some every includes indexOf lastIndexOf push "
         + "pop shift unshift slice splice concat join reverse sort flat flatMap fill keys values entries "
         + "length split replace replaceAll trim trimStart trimEnd toUpperCase toLowerCase padStart "
@@ -3844,6 +4004,13 @@ OmniOS.register("ce", {
         + "fgets fputs fseek ftell exit abs rand srand atoi atof qsort main NSLog "
         + "dispatch_async dispatch_get_main_queue").split(" "),
       members: {},
+      modules: ("stdio.h stdlib.h string.h math.h time.h stdbool.h stdint.h ctype.h assert.h "
+        + "limits.h float.h signal.h unistd.h fcntl.h errno.h stdarg.h stddef.h setjmp.h locale.h "
+        + "pthread.h sys/types.h sys/stat.h sys/socket.h netinet/in.h arpa/inet.h "
+        + "iostream vector string map set unordered_map unordered_set algorithm memory thread chrono "
+        + "functional fstream sstream iomanip numeric utility tuple array deque queue stack bitset "
+        + "regex cmath cstdio cstdlib cstring Foundation/Foundation.h Cocoa/Cocoa.h "
+        + "Arduino.h WiFi.h Wire.h SPI.h Servo.h EEPROM.h").split(" "),
       generic: [],
     },
     shell: {
@@ -3898,12 +4065,44 @@ OmniOS.register("ce", {
   hintFn(cm) {
     const CM = window.CodeMirror;
     const cur = cm.getCursor();
-    const tok = cm.getTokenAt(cur);
-    if (/\b(comment|string)\b/.test(tok.type || "")) return null;
     const line = cm.getLine(cur.line).slice(0, cur.ch);
     const f = this._files[this._active];
     const lang = this.langOf(f && f.name) || "js";
     const D = this.DICTS[lang];
+
+    // 임포트 컨텍스트: 모듈/라이브러리 이름 완성
+    // (JS의 'pkg', C의 <h>는 문자열 토큰 안이므로 문자열 가드보다 먼저)
+    const modList = D.modules || [];
+    let modMatch = null;
+    if (lang === "python") {
+      const fromImp = line.match(/^\s*from\s+([A-Za-z_]\w*)\s+import\s+([\w]*)$/);
+      if (fromImp && D.members[fromImp[1]]) {
+        // from random import cho... → 멤버 완성
+        const partial = fromImp[2];
+        const list = D.members[fromImp[1]]
+          .filter((t) => t.startsWith(partial))
+          .map((t) => ({ text: t, kind: fromImp[1] }));
+        if (!list.length) return null;
+        return this.hintResult(list, cur, partial.length);
+      }
+      modMatch = line.match(/^\s*(?:import|from)\s+([A-Za-z_][\w.]*)?$/);
+    } else if (lang === "js") {
+      modMatch = line.match(/(?:from\s*|require\s*\(\s*)['"]([^'"]*)$/);
+    } else if (lang === "c") {
+      modMatch = line.match(/#(?:include|import)\s*[<"]([^>"]*)$/);
+    }
+    if (modMatch !== null) {
+      const partial = modMatch[1] || "";
+      const list = modList
+        .filter((t) => t.toLowerCase().startsWith(partial.toLowerCase()))
+        .map((t) => ({ text: t, kind: "module" }));
+      if (!list.length) return null;
+      return this.hintResult(list, cur, partial.length);
+    }
+
+    // 이하 일반 완성은 주석/문자열 안에서 비활성
+    const tok = cm.getTokenAt(cur);
+    if (/\b(comment|string)\b/.test(tok.type || "")) return null;
 
     // receiver.partial — 모듈/객체 멤버 완성
     const dot = line.match(/([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z0-9_]*)$/);
@@ -3948,19 +4147,32 @@ OmniOS.register("ce", {
     }
     if (!cands.length) return null;
     return {
-      list: cands.slice(0, 60).map((c) => ({
-        text: c.text,
-        render: (el, data, item) => {
-          const name = document.createElement("span");
-          name.textContent = c.text;
-          const kind = document.createElement("span");
-          kind.className = "hint-kind";
-          kind.textContent = c.kind.toUpperCase();
-          el.append(name, kind);
-        },
-      })),
+      list: this.hintItems(cands),
       from,
       to,
+    };
+  },
+
+  hintItems(cands) {
+    return cands.slice(0, 60).map((c) => ({
+      text: c.text,
+      render: (el) => {
+        const name = document.createElement("span");
+        name.textContent = c.text;
+        const kind = document.createElement("span");
+        kind.className = "hint-kind";
+        kind.textContent = c.kind.toUpperCase();
+        el.append(name, kind);
+      },
+    }));
+  },
+
+  hintResult(cands, cur, partialLen) {
+    const CM = window.CodeMirror;
+    return {
+      list: this.hintItems(cands),
+      from: CM.Pos(cur.line, cur.ch - partialLen),
+      to: CM.Pos(cur.line, cur.ch),
     };
   },
 
@@ -3974,7 +4186,7 @@ OmniOS.register("ce", {
     }
   },
 
-  // 트리 라벨을 입력창으로 바꿔 인라인 이름 변경 (VSCode식)
+  // 트리 라벨을 입력창으로 바꿔 인라인 이름 변경
   inlineRename(labelEl, oldName, commit) {
     const input = document.createElement("input");
     input.className = "ino-input ce-rename";
@@ -4132,16 +4344,25 @@ OmniOS.register("ce", {
       lineNumbers: true,
       indentUnit: 2,
       tabSize: 4,
+      autoCloseBrackets: true, // ( → ), { → }, " → ", ' → ' 자동 닫기
       extraKeys: {
         "Cmd-S": () => this.saveActive(),
         "Ctrl-S": () => this.saveActive(),
         "Ctrl-Space": (cm) => this.showHints(cm),
       },
     });
-    // VSCode처럼 타이핑하는 동안 자동으로 완성 팝업
+    // 타이핑하는 동안 자동으로 완성 팝업 (공백/따옴표/<는 임포트 컨텍스트용)
     this._cm.on("inputRead", (cm, change) => {
       const ch = change.text[change.text.length - 1];
-      if (/[A-Za-z_.]$/.test(ch)) this.showHints(cm);
+      if (/[A-Za-z_.]$/.test(ch)) {
+        this.showHints(cm);
+      } else if (/[\s'"<(]$/.test(ch)) {
+        const cur = cm.getCursor();
+        const line = cm.getLine(cur.line).slice(0, cur.ch);
+        if (/(?:^\s*(?:import|from)\s+$)|(?:from\s*['"]$)|(?:require\s*\(\s*['"]?$)|(?:#(?:include|import)\s*[<"]$)|(?:\s+import\s+$)/.test(line)) {
+          this.showHints(cm);
+        }
+      }
     });
     this._cm.on("change", () => {
       const f = this._files[this._active];
@@ -4311,6 +4532,10 @@ OmniOS.register("ce", {
         f.dirty = false;
         this.renderTabs();
         this.flash(`SAVED ${f.name}`, "ok");
+        if (this._projectSaveDir
+            && !f.path.startsWith(`${this._projectSaveDir.replace(/\/code$/, "")}/`)) {
+          OmniOS.projectKeep(this._projectSaveDir, f.name, f.doc.getValue());
+        }
       } else {
         this.flash("SAVE FAILED", "alert");
       }
@@ -6393,6 +6618,11 @@ OmniOS.register("ide", {
         doc: window.CodeMirror.Doc(f.content, "text/x-c++src"),
         dirty: false,
       }));
+      if (this._projectSaveDir) {
+        for (const f of r.files || []) {
+          OmniOS.projectKeep(this._projectSaveDir, f.name, f.content);
+        }
+      }
       this._fileIdx = -1;
       this.renderFileTabs();
       if (this._files.length) this.showFile(0);
@@ -6440,6 +6670,9 @@ OmniOS.register("ide", {
       if (!r.ok) throw new Error(r.error || "write failed");
       f.dirty = false;
       this.renderFileTabs();
+      if (this._projectSaveDir) {
+        OmniOS.projectKeep(this._projectSaveDir, f.name, f.doc.getValue());
+      }
       return true;
     } catch (e) {
       this.log(this.els.out, `save ${f.name} failed: ${e.message}`, "err");

@@ -1,12 +1,14 @@
-void main()
+#include "stdio.h"
+
+int main()
 {
   int a, b, c;
   
-  a = input();
-  b = input();
-  
+  scanf("%d", &a);
+  scanf("%d", &b);
+ 
   c = a + b;
   
-  printf("%d", c);
+  printf("%d\n", c);
  
 }

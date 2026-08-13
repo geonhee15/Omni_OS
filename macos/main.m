@@ -541,6 +541,12 @@ static NSString *ArcSavesDir(void) {
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
                 [self deliverPayload:(std ? CERead(std) : @{ @"ok" : @NO }) forId:msgId];
             });
+        } else if ([cmd isEqualToString:@"ce.writeBin"]) {
+            NSString *std = [self ceValidatePath:argPath];
+            NSString *b64 = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
+            NSData *data = b64 ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
+            BOOL ok = std != nil && data != nil && [data writeToFile:std atomically:YES];
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
         } else if ([cmd isEqualToString:@"ce.write"]) {
             NSString *std = [self ceValidatePath:argPath];
             NSString *text = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;

@@ -2558,30 +2558,30 @@ select.ce-nf-ext { width: 140px; }
 /* CODE EDITOR 하이라이팅 테마 (data-theme 스위칭) */
 select.ce-theme { width: 110px; }
 
-/* VSCODE — Dark+ */
-.ce-editor[data-theme="vscode"] .CodeMirror { background: #071019; }
-.ce-editor[data-theme="vscode"] .cm-keyword { color: #c586c0; }
-.ce-editor[data-theme="vscode"] .cm-atom { color: #569cd6; }
-.ce-editor[data-theme="vscode"] .cm-def { color: #dcdcaa; }
-.ce-editor[data-theme="vscode"] .cm-variable,
-.ce-editor[data-theme="vscode"] .cm-variable-2,
-.ce-editor[data-theme="vscode"] .cm-property,
-.ce-editor[data-theme="vscode"] .cm-attribute { color: #9cdcfe; }
-.ce-editor[data-theme="vscode"] .cm-variable-3,
-.ce-editor[data-theme="vscode"] .cm-type { color: #4ec9b0; }
-.ce-editor[data-theme="vscode"] .cm-builtin { color: #dcdcaa; }
-.ce-editor[data-theme="vscode"] .cm-qualifier,
-.ce-editor[data-theme="vscode"] .cm-meta { color: #d7ba7d; }
-.ce-editor[data-theme="vscode"] .cm-number { color: #b5cea8; }
-.ce-editor[data-theme="vscode"] .cm-string { color: #ce9178; }
-.ce-editor[data-theme="vscode"] .cm-string-2 { color: #d16969; }
-.ce-editor[data-theme="vscode"] .cm-comment { color: #6a9955; font-style: italic; }
-.ce-editor[data-theme="vscode"] .cm-operator { color: #d4d4d4; }
-.ce-editor[data-theme="vscode"] .cm-tag { color: #569cd6; }
-.ce-editor[data-theme="vscode"] .cm-header { color: #569cd6; font-weight: 700; }
-.ce-editor[data-theme="vscode"] .cm-link { color: #ce9178; text-decoration: underline; }
-.ce-editor[data-theme="vscode"] .cm-error { color: #f44747; }
-.ce-editor[data-theme="vscode"] .CodeMirror-linenumber { color: rgba(133, 133, 133, 0.6); }
+/* VISUAL — 모던 다크 */
+.ce-editor[data-theme="visual"] .CodeMirror { background: #071019; }
+.ce-editor[data-theme="visual"] .cm-keyword { color: #c586c0; }
+.ce-editor[data-theme="visual"] .cm-atom { color: #569cd6; }
+.ce-editor[data-theme="visual"] .cm-def { color: #dcdcaa; }
+.ce-editor[data-theme="visual"] .cm-variable,
+.ce-editor[data-theme="visual"] .cm-variable-2,
+.ce-editor[data-theme="visual"] .cm-property,
+.ce-editor[data-theme="visual"] .cm-attribute { color: #9cdcfe; }
+.ce-editor[data-theme="visual"] .cm-variable-3,
+.ce-editor[data-theme="visual"] .cm-type { color: #4ec9b0; }
+.ce-editor[data-theme="visual"] .cm-builtin { color: #dcdcaa; }
+.ce-editor[data-theme="visual"] .cm-qualifier,
+.ce-editor[data-theme="visual"] .cm-meta { color: #d7ba7d; }
+.ce-editor[data-theme="visual"] .cm-number { color: #b5cea8; }
+.ce-editor[data-theme="visual"] .cm-string { color: #ce9178; }
+.ce-editor[data-theme="visual"] .cm-string-2 { color: #d16969; }
+.ce-editor[data-theme="visual"] .cm-comment { color: #6a9955; font-style: italic; }
+.ce-editor[data-theme="visual"] .cm-operator { color: #d4d4d4; }
+.ce-editor[data-theme="visual"] .cm-tag { color: #569cd6; }
+.ce-editor[data-theme="visual"] .cm-header { color: #569cd6; font-weight: 700; }
+.ce-editor[data-theme="visual"] .cm-link { color: #ce9178; text-decoration: underline; }
+.ce-editor[data-theme="visual"] .cm-error { color: #f44747; }
+.ce-editor[data-theme="visual"] .CodeMirror-linenumber { color: rgba(133, 133, 133, 0.6); }
 
 /* HUD — Omni 시안 (ino 테마 그대로) — 오버라이드 없음, 기본 .ino-editor 스타일 사용 */
 
@@ -2805,3 +2805,58 @@ input.ce-rename {
   padding: 1px 4px;
   font-size: 9px;
 }
+
+/* NOTES: 에디터 가시성 (기본 CM 검정 커서/텍스트 수정) + 서식 툴바 */
+.nt-editor .CodeMirror {
+  color: #cfe8f5;
+}
+
+.nt-editor .CodeMirror-cursor {
+  border-left: 2px solid var(--cyan);
+}
+
+.nt-editor .CodeMirror-selected { background: rgba(53, 214, 255, 0.18); }
+.nt-editor .CodeMirror-focused .CodeMirror-selected { background: rgba(53, 214, 255, 0.25); }
+.nt-editor .CodeMirror-gutters { background: #081120; border-right: none; }
+.nt-editor .cm-variable-2 { color: #cfe8f5; }
+.nt-editor .cm-variable-3 { color: #cfe8f5; }
+.nt-editor .cm-keyword { color: #cfe8f5; }
+
+.nt-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  border: 1px solid var(--cyan-faint);
+  background: rgba(5, 18, 36, 0.5);
+  padding: 4px 8px;
+  margin-bottom: 6px;
+}
+
+.nt-toolbar[hidden] { display: none; }
+
+.nt-toolbar button {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  min-width: 26px;
+  padding: 3px 6px;
+  background: none;
+  border: 1px solid transparent;
+  color: #bfe9f7;
+  cursor: pointer;
+}
+
+.nt-toolbar button:hover {
+  border-color: var(--cyan-soft);
+  color: #eafcff;
+}
+
+.nt-toolbar .nt-sep {
+  width: 1px;
+  height: 16px;
+  background: rgba(53, 214, 255, 0.2);
+  margin: 0 5px;
+}
+
+.nt-toolbar .nt-sw { font-weight: 700; }

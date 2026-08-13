@@ -109,11 +109,14 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   더블클릭으로 기본 크기 복원, 크기는 localStorage에 저장되어 재시작 후에도 유지.
   앱에서는 네이티브 WebSocket 릴레이(NSURLSessionWebSocketTask) 사용 — omni:// 보안 컨텍스트에서
   평문 ws://가 차단되는 문제 회피. 브라우저 개발 모드는 JS WebSocket 폴백
-- **NOTES** — Obsidian식 마크다운 노트 패널. 볼트(`Notes/` — 프로젝트 에디터에서는 그
+- **NOTES** — 마크다운 노트 패널. 볼트(`Notes/` — 프로젝트 에디터에서는 그
   프로젝트의 `notes/`)의 .md를 트리로 탐색, CodeMirror 마크다운 에디터(줄바꿈, 자동 저장
   0.8초 디바운스), **EDIT / PREVIEW 토글**(GFM 렌더 — 체크박스·표·코드블록·인용).
   **[[위키링크]]**: `[[`만 치면 노트 이름 자동완성, 프리뷰에서 클릭하면 그 노트로 이동,
-  없는 노트는 앰버로 표시되고 클릭 시 즉석 생성(옵시디언과 동일). + NOTE는 Untitled 자동
+  없는 노트는 앰버로 표시되고 클릭 시 즉석 생성(즉석 생성). **서식 툴바**: 볼드·이탤릭·취소선·인라인 코드·H1/H2/H3(토글)·글자 색 5종·
+  크기 4종(S/M/L/XL — HTML span으로 저장, 프리뷰 반영)·**이미지 삽입**(볼트 `assets/`에
+  복사 후 상대 경로 참조, 프리뷰에서 로컬 미디어 스킴 표시). 에디터 커서·본문은 홀로그램
+  블루/라이트 텍스트로 가시성 보정. + NOTE는 Untitled 자동
   넘버링. 외부 링크는 기본 브라우저로. **트리 우클릭 메뉴**: RENAME(인라인)·DUPLICATE·
   COPY PATH·COPY [[LINK]]·REVEAL IN FINDER·MOVE TO TRASH(휴지통 — 복구 가능),
   폴더엔 NEW NOTE HERE·NEW FOLDER. CODE EDITOR 트리도 동일 메뉴(+ NEW FILE, COPY NAME) —
@@ -122,15 +125,18 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   폴더가 실제로 생성되고, 에디터 모드 도구가 자동 연결 — CODE EDITOR는 `code/`를 루트로,
   NOTES는 `notes/`를 볼트로 엶 (`3d/`, `arduino/`는 해당 산출물 보관용). 기존 프로젝트도
   에디터를 열면 골격이 생김. 에디터 도구 바: RENDER_3D · ARDUINO IDE · CODE EDITOR · NOTES.
-- **CODE EDITOR** — VSCode 감성의 미니 코드 IDE. **OPEN FOLDER**(최근 폴더 자동 재오픈)로
+- **CODE EDITOR** — 미니 코드 IDE. **OPEN FOLDER**(최근 폴더 자동 재오픈)로
   파일 트리(지연 로딩)를 열고, 파일 탭 + CodeMirror 에디터로 편집(Cmd+S 저장, 수정 표시 ●).
   구문 강조 13종: C/C++/Obj-C/Java·JS/TS·JSON·HTML·CSS·XML·Python·Shell·Markdown·
   YAML·Rust·Go·Swift·TOML. **진짜 PTY 터미널**(forkpty + zsh + xterm.js) — + TERM으로
   얼마든지 생성, 터미널 탭 전환·닫기·접기, 열린 폴더에서 시작, 256색·리사이즈 지원.
-  **하이라이팅 테마 5종**: VSCODE(Dark+) · HUD(Omni 시안) · HACKER(그린 포스퍼 매트릭스) ·
-  MONOKAI · DRACULA — 툴바 셀렉터로 전환, 선택 유지. 기본 VSCODE 팔레트 — 키워드 퍼플, 임포트 모듈명·변수
+  **모듈/라이브러리 자동완성**: `import ran` → random…(파이썬 표준+인기 90여 종),
+  `from random import ` → 멤버, JS `from '…'`/`require('…'` → 패키지, C/C++/ObjC
+  `#include <…>` → 헤더. **괄호·따옴표 자동 닫기**: ( { [ " ' 입력 시 짝 자동 삽입.
+  **하이라이팅 테마 5종**: VISUAL(모던 다크) · HUD(Omni 시안) · HACKER(그린 포스퍼 매트릭스) ·
+  MONOKAI · DRACULA — 툴바 셀렉터로 전환, 선택 유지. 기본 VISUAL 팔레트 — 키워드 퍼플, 임포트 모듈명·변수
   라이트블루, 함수 정의 옐로, 타입 틸, 문자열 오렌지, 숫자 연두, 주석 그린 등 토큰 전면 채색.
-  **자동완성(IntelliSense 근사)**: 타이핑하면 커서 옆에 완성 팝업 — `p` → print/pass/pow…
+  **자동완성**: 타이핑하면 커서 옆에 완성 팝업 — `p` → print/pass/pow…
   (키워드+내장함수+버퍼의 내 변수·함수, 접두사 우선 + 포함 매칭), `random.` → choice/choices/
   sample/shuffle… (파이썬 random/math/os/sys/json/re/datetime 등 + JS console/Math/JSON/
   document 등 모듈 멤버 사전, 미지의 객체엔 제네릭 메서드; `import random as rd` 같은 **별칭도 해석**해 `rd.`에서 완성,

@@ -586,11 +586,35 @@
         </div>
         <div class="ce-main">
           <div class="nt-title" id="nt-title" hidden>&mdash;</div>
+          <div class="nt-toolbar" id="nt-toolbar" hidden>
+            <button data-fmt="bold" title="Bold"><b>B</b></button>
+            <button data-fmt="italic" title="Italic"><i>I</i></button>
+            <button data-fmt="strike" title="Strikethrough"><s>S</s></button>
+            <button data-fmt="code" title="Inline code">&#96;&#96;</button>
+            <span class="nt-sep"></span>
+            <button data-fmt="h1">H1</button>
+            <button data-fmt="h2">H2</button>
+            <button data-fmt="h3">H3</button>
+            <span class="nt-sep"></span>
+            <button class="nt-sw" data-color="#ff6b6b" style="color:#ff6b6b">A</button>
+            <button class="nt-sw" data-color="#ffc857" style="color:#ffc857">A</button>
+            <button class="nt-sw" data-color="#3dffa8" style="color:#3dffa8">A</button>
+            <button class="nt-sw" data-color="#35d6ff" style="color:#35d6ff">A</button>
+            <button class="nt-sw" data-color="#b26bff" style="color:#b26bff">A</button>
+            <span class="nt-sep"></span>
+            <button data-size="12">S</button>
+            <button data-size="16">M</button>
+            <button data-size="20">L</button>
+            <button data-size="26">XL</button>
+            <span class="nt-sep"></span>
+            <button data-fmt="image">&#8853; IMAGE</button>
+            <input type="file" id="nt-img-input" accept="image/*" multiple hidden />
+          </div>
           <div class="ce-editor nt-editor" id="nt-editor">
             <div class="nt-preview" id="nt-preview" hidden></div>
             <div class="ino-editor-empty" id="nt-empty">
               <div class="r3d-drop-title">NOTES</div>
-              <div class="r3d-drop-sub">OBSIDIAN-STYLE VAULT &mdash; [[WIKILINKS]] &middot; AUTOSAVE &middot; PREVIEW</div>
+              <div class="r3d-drop-sub">MARKDOWN VAULT &mdash; [[WIKILINKS]] &middot; AUTOSAVE &middot; PREVIEW</div>
             </div>
           </div>
         </div>
@@ -605,7 +629,7 @@
         <span class="ts-spacer"></span>
         <span class="ts-item" id="ce-msg"></span>
         <select class="ino-select ce-theme" id="ce-theme" title="Highlighting theme">
-          <option value="vscode">VSCODE</option>
+          <option value="visual">VISUAL</option>
           <option value="hud">HUD</option>
           <option value="hacker">HACKER</option>
           <option value="monokai">MONOKAI</option>
@@ -798,7 +822,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES</span>
       <span class="divider">|</span>
-      <span>v0.29.1</span>
+      <span>v0.30.0</span>
     </footer>
   </div>
 
@@ -817,6 +841,7 @@
   <script src="vendor/codemirror/codemirror.min.js"></script>
   <script src="vendor/codemirror/clike.js"></script>
   <script src="vendor/codemirror/show-hint.js"></script>
+  <script src="vendor/codemirror/closebrackets.js"></script>
   <script src="vendor/codemirror/modes/javascript.js"></script>
   <script src="vendor/codemirror/modes/xml.js"></script>
   <script src="vendor/codemirror/modes/css.js"></script>
