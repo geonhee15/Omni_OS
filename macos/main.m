@@ -546,6 +546,56 @@ static NSString *ArcSavesDir(void) {
             NSString *text = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
             BOOL ok = std != nil && text != nil && CEWrite(std, text);
             [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.rename"] || [cmd isEqualToString:@"ce.copy"]) {
+            // 이동(rename)/복사 — 원본·대상 모두 루트 안이어야 함
+            NSString *src = [self ceValidatePath:argPath];
+            NSString *toReq = [a[@"to"] isKindOfClass:[NSString class]] ? a[@"to"] : nil;
+            NSString *dst = [self ceValidatePath:toReq];
+            NSFileManager *fm = NSFileManager.defaultManager;
+            BOOL ok = NO;
+            if (src != nil && dst != nil && ![fm fileExistsAtPath:dst]) {
+                if ([cmd isEqualToString:@"ce.rename"]) {
+                    ok = [fm moveItemAtPath:src toPath:dst error:nil];
+                } else {
+                    ok = [fm copyItemAtPath:src toPath:dst error:nil];
+                }
+            }
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.trash"]) {
+            // 삭제는 휴지통 이동 — 복구 가능
+            NSString *std = [self ceValidatePath:argPath];
+            BOOL ok = NO;
+            if (std != nil) {
+                ok = [NSFileManager.defaultManager
+                    trashItemAtURL:[NSURL fileURLWithPath:std]
+                  resultingItemURL:nil error:nil];
+            }
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.mkdir"]) {
+            NSString *std = argPath.stringByStandardizingPath;
+            // 새 폴더의 부모가 루트 안이면 허용
+            NSString *parent = [self ceValidatePath:std.stringByDeletingLastPathComponent];
+            BOOL ok = NO;
+            if (parent != nil && ![NSFileManager.defaultManager fileExistsAtPath:std]) {
+                ok = [NSFileManager.defaultManager createDirectoryAtPath:std
+                    withIntermediateDirectories:NO attributes:nil error:nil];
+            }
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.reveal"]) {
+            NSString *std = [self ceValidatePath:argPath];
+            BOOL ok = std != nil
+                && [[NSWorkspace sharedWorkspace] selectFile:std
+                                    inFileViewerRootedAtPath:@""];
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.clip"]) {
+            NSString *text = [a[@"text"] isKindOfClass:[NSString class]] ? a[@"text"] : nil;
+            BOOL ok = NO;
+            if (text != nil) {
+                NSPasteboard *pb = NSPasteboard.generalPasteboard;
+                [pb clearContents];
+                ok = [pb setString:text forType:NSPasteboardTypeString];
+            }
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
         } else if ([cmd isEqualToString:@"ce.termOpen"]) {
             NSString *cwd = [self ceValidatePath:argPath] ?: NSHomeDirectory();
             int cols = [a[@"cols"] intValue] ?: 80;

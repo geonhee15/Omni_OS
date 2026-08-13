@@ -2798,3 +2798,10 @@ li.CodeMirror-hint-active {
 .nt-preview th, .nt-preview td { border: 1px solid var(--cyan-faint); padding: 4px 10px; }
 .nt-preview input[type="checkbox"] { accent-color: var(--cyan); margin-right: 6px; }
 .nt-preview img { max-width: 100%; }
+
+/* 인라인 이름 변경 입력 */
+input.ce-rename {
+  width: 130px;
+  padding: 1px 4px;
+  font-size: 9px;
+}

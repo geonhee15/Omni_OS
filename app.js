@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.29.0",
+  version: "0.29.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -58,6 +58,58 @@ OmniOS.register("nav", {
     document.dispatchEvent(new CustomEvent("omni:panel", { detail: name }));
   },
 });
+
+// 범용 우클릭 메뉴: items = [{label, hint, disabled, onClick} | {sep:true}]
+OmniOS.ctxMenu = function (items, x, y) {
+  const old = document.querySelector(".omni-ctx");
+  if (old) old.remove();
+  const menu = document.createElement("div");
+  menu.className = "pj-ctx omni-ctx";
+  const close = () => {
+    menu.remove();
+    window.removeEventListener("mousedown", onDown, true);
+    window.removeEventListener("keydown", onKey, true);
+  };
+  const onDown = (e) => {
+    if (!menu.contains(e.target)) close();
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") close();
+  };
+  for (const it of items) {
+    if (it.sep) {
+      const s = document.createElement("div");
+      s.className = "pj-ctx-sep";
+      menu.appendChild(s);
+      continue;
+    }
+    const el = document.createElement("div");
+    el.className = `pj-ctx-item${it.disabled ? " disabled" : ""}`;
+    const label = document.createElement("span");
+    label.textContent = it.label;
+    el.appendChild(label);
+    if (it.hint) {
+      const h = document.createElement("span");
+      h.textContent = it.hint;
+      h.style.color = "rgba(111, 168, 201, 0.7)";
+      el.appendChild(h);
+    }
+    if (it.onClick && !it.disabled) {
+      el.addEventListener("click", () => {
+        close();
+        it.onClick();
+      });
+    }
+    menu.appendChild(el);
+  }
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - r.width - 8))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - r.height - 8))}px`;
+  window.addEventListener("mousedown", onDown, true);
+  window.addEventListener("keydown", onKey, true);
+  return close;
+};
 
 // ---------- module: clock ----------
 OmniOS.register("clock", {
@@ -3084,6 +3136,9 @@ OmniOS.register("notes", {
           const open = kids.classList.toggle("open");
           glyph.textContent = open ? "\u25BE" : "\u25B8";
         });
+        node.addEventListener("contextmenu", (e) => this.treeMenu(e, {
+          path: full, name: ent.name, isDir: true, parent: path, labelEl: label,
+        }));
         await this.scanDir(full, kids, depth + 1);
       } else if (/\.md$/i.test(ent.name)) {
         const node = document.createElement("div");
@@ -3097,10 +3152,111 @@ OmniOS.register("notes", {
         label.textContent = ent.name.replace(/\.md$/i, "");
         node.append(glyph, label);
         node.addEventListener("click", () => this.openNote(full));
+        node.addEventListener("contextmenu", (e) => this.treeMenu(e, {
+          path: full, name: ent.name, isDir: false, parent: path, labelEl: label,
+        }));
         container.appendChild(node);
         this._index.push({ name: ent.name.replace(/\.md$/i, ""), path: full });
       }
     }
+  },
+
+  treeMenu(e, info) {
+    // info: {path, name(파일명), isDir, parent, labelEl}
+    e.preventDefault();
+    e.stopPropagation();
+    const ce = OmniOS.modules.ce;
+    const items = [];
+    if (info.isDir) {
+      items.push({
+        label: "NEW NOTE HERE",
+        onClick: () => this.newNote(info.path),
+      });
+      items.push({
+        label: "NEW FOLDER",
+        onClick: async () => {
+          let existing = [];
+          try {
+            const t = await OmniNative.request("ce.tree",
+              JSON.stringify({ path: info.path }), 10000);
+            existing = ((t && t.entries) || []).map((x) => x.name);
+          } catch (err) {}
+          let nm = "New Folder";
+          let n = 2;
+          while (existing.includes(nm)) nm = `New Folder ${n++}`;
+          if (await ce.fileOp("ce.mkdir", { path: `${info.path}/${nm}` })) this.rescan();
+        },
+      });
+      items.push({ sep: true });
+    }
+    items.push({
+      label: "RENAME",
+      onClick: () => {
+        const shown = info.isDir ? info.name : info.name.replace(/\.md$/i, "");
+        ce.inlineRename(info.labelEl, shown, async (newName) => {
+          const fileName = info.isDir ? newName
+            : (/\.md$/i.test(newName) ? newName : `${newName}.md`);
+          const newPath = `${info.parent}/${fileName}`;
+          if (await ce.fileOp("ce.rename", { path: info.path, to: newPath })) {
+            if (this._cur === info.path) {
+              this._cur = newPath;
+              this.els.title.textContent = fileName.replace(/\.md$/i, "").toUpperCase();
+            } else if (this._cur && this._cur.startsWith(`${info.path}/`)) {
+              this._cur = newPath + this._cur.slice(info.path.length);
+            }
+            this.rescan();
+          } else {
+            this.flash("RENAME FAILED", "alert");
+          }
+        });
+      },
+    });
+    items.push({
+      label: "DUPLICATE",
+      onClick: async () => {
+        const nm = await ce.dupTargetName(info.parent, info.name);
+        if (await ce.fileOp("ce.copy", { path: info.path, to: `${info.parent}/${nm}` })) {
+          this.rescan();
+        } else {
+          this.flash("DUPLICATE FAILED", "alert");
+        }
+      },
+    });
+    items.push({ sep: true });
+    items.push({
+      label: "COPY PATH",
+      onClick: () => ce.fileOp("ce.clip", { text: info.path }),
+    });
+    items.push({
+      label: "COPY [[LINK]]",
+      onClick: () => ce.fileOp("ce.clip",
+        { text: `[[${info.name.replace(/\.md$/i, "")}]]` }),
+    });
+    items.push({
+      label: "REVEAL IN FINDER",
+      onClick: () => ce.fileOp("ce.reveal", { path: info.path }),
+    });
+    items.push({ sep: true });
+    items.push({
+      label: "MOVE TO TRASH",
+      onClick: async () => {
+        if (await ce.fileOp("ce.trash", { path: info.path })) {
+          if (this._cur === info.path
+              || (this._cur && this._cur.startsWith(`${info.path}/`))) {
+            this._cur = null;
+            this.els.title.hidden = true;
+            this.els.empty.hidden = false;
+            this.els.preview.hidden = true;
+            if (this._cm) this._cm.setValue("");
+          }
+          this.flash(`TRASHED ${info.name}`, "ok");
+          this.rescan();
+        } else {
+          this.flash("TRASH FAILED", "alert");
+        }
+      },
+    });
+    OmniOS.ctxMenu(items, e.clientX, e.clientY);
   },
 
   ensureCM() {
@@ -3151,13 +3307,14 @@ OmniOS.register("notes", {
     });
   },
 
-  async newNote() {
+  async newNote(dir) {
     if (!this._vault) return;
+    const target = dir || this._vault;
     let name = "Untitled.md";
     let n = 2;
     const names = this._index.map((x) => `${x.name}.md`);
     while (names.includes(name)) name = `Untitled-${n++}.md`;
-    const path = `${this._vault}/${name}`;
+    const path = `${target}/${name}`;
     try {
       await OmniNative.request("ce.write",
         JSON.stringify({ path, data: `# ${name.replace(/\.md$/, "")}\n\n` }), 8000);
@@ -3435,6 +3592,16 @@ OmniOS.register("ce", {
       node.append(glyph, label);
       container.appendChild(node);
       const full = `${path}/${ent.name}`;
+      const rerender = () => {
+        if (container === this.els.tree) {
+          this.els.tree.querySelectorAll(":scope > .ce-node, :scope > .ce-kids")
+            .forEach((n) => n.remove());
+          this.expandDir(this._root, this.els.tree, 0);
+        } else {
+          container.textContent = "";
+          this.expandDir(path, container, depth);
+        }
+      };
       if (ent.dir) {
         const kids = document.createElement("div");
         kids.className = "ce-kids";
@@ -3448,6 +3615,10 @@ OmniOS.register("ce", {
             this.expandDir(full, kids, depth + 1);
           }
         });
+        node.addEventListener("contextmenu", (e) => this.treeMenu(e, {
+          path: full, name: ent.name, isDir: true, parent: path,
+          container, depth, labelEl: label, kidsEl: kids, rerender,
+        }));
       } else {
         node.addEventListener("click", () => {
           this.els.tree.querySelectorAll(".ce-node.active")
@@ -3455,6 +3626,10 @@ OmniOS.register("ce", {
           node.classList.add("active");
           this.openFile(full);
         });
+        node.addEventListener("contextmenu", (e) => this.treeMenu(e, {
+          path: full, name: ent.name, isDir: false, parent: path,
+          container, depth, labelEl: label, rerender,
+        }));
       }
     }
   },
@@ -3787,6 +3962,166 @@ OmniOS.register("ce", {
       from,
       to,
     };
+  },
+
+  // ── 파일 조작 (우클릭 메뉴 공용) ──
+  async fileOp(cmd, payload) {
+    try {
+      const r = await OmniNative.request(cmd, JSON.stringify(payload), 15000);
+      return !!(r && r.ok);
+    } catch (e) {
+      return false;
+    }
+  },
+
+  // 트리 라벨을 입력창으로 바꿔 인라인 이름 변경 (VSCode식)
+  inlineRename(labelEl, oldName, commit) {
+    const input = document.createElement("input");
+    input.className = "ino-input ce-rename";
+    input.value = oldName;
+    labelEl.replaceWith(input);
+    input.focus();
+    const dotIdx = oldName.lastIndexOf(".");
+    input.setSelectionRange(0, dotIdx > 0 ? dotIdx : oldName.length);
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      const v = input.value.trim().replace(/[\/\\:]/g, "");
+      input.replaceWith(labelEl);
+      if (ok && v && v !== oldName) commit(v);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") finish(true);
+      if (e.key === "Escape") finish(false);
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("mousedown", (e) => e.stopPropagation());
+    input.addEventListener("click", (e) => e.stopPropagation());
+  },
+
+  // 열린 탭 경로 동기화 (이름 변경/삭제 후)
+  syncTabsRename(oldPath, newPath) {
+    for (const f of this._files) {
+      if (f.path === oldPath) {
+        f.path = newPath;
+        f.name = newPath.split("/").pop();
+      } else if (f.path.startsWith(`${oldPath}/`)) {
+        f.path = newPath + f.path.slice(oldPath.length);
+      }
+    }
+    this.renderTabs();
+  },
+
+  syncTabsDelete(path) {
+    for (let i = this._files.length - 1; i >= 0; i--) {
+      const p = this._files[i].path;
+      if (p === path || p.startsWith(`${path}/`)) this.closeTab(i);
+    }
+  },
+
+  async dupTargetName(parent, name) {
+    let existing = [];
+    try {
+      const t = await OmniNative.request("ce.tree", JSON.stringify({ path: parent }), 10000);
+      existing = ((t && t.entries) || []).map((e) => e.name);
+    } catch (e) {}
+    const dot = name.lastIndexOf(".");
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : "";
+    let cand = `${base} copy${ext}`;
+    let n = 2;
+    while (existing.includes(cand)) cand = `${base} copy ${n++}${ext}`;
+    return cand;
+  },
+
+  treeMenu(e, info) {
+    // info: {path, name, isDir, parent, container, depth, labelEl, rerender}
+    e.preventDefault();
+    e.stopPropagation();
+    const items = [];
+    if (info.isDir) {
+      items.push({
+        label: "NEW FILE",
+        onClick: () => {
+          this._selDir = { path: info.path, kidsEl: info.kidsEl, depth: info.depth + 1 };
+          this.openNewFile();
+        },
+      });
+      items.push({
+        label: "NEW FOLDER",
+        onClick: async () => {
+          let existing = [];
+          try {
+            const t = await OmniNative.request("ce.tree",
+              JSON.stringify({ path: info.path }), 10000);
+            existing = ((t && t.entries) || []).map((x) => x.name);
+          } catch (e) {}
+          let nm = "New Folder";
+          let n = 2;
+          while (existing.includes(nm)) nm = `New Folder ${n++}`;
+          if (await this.fileOp("ce.mkdir", { path: `${info.path}/${nm}` })) {
+            info.rerender();
+          } else {
+            this.flash("MKDIR FAILED", "alert");
+          }
+        },
+      });
+      items.push({ sep: true });
+    }
+    items.push({
+      label: "RENAME",
+      onClick: () => {
+        this.inlineRename(info.labelEl, info.name, async (newName) => {
+          const newPath = `${info.parent}/${newName}`;
+          if (await this.fileOp("ce.rename", { path: info.path, to: newPath })) {
+            this.syncTabsRename(info.path, newPath);
+            info.rerender();
+          } else {
+            this.flash("RENAME FAILED", "alert");
+          }
+        });
+      },
+    });
+    items.push({
+      label: "DUPLICATE",
+      onClick: async () => {
+        const nm = await this.dupTargetName(info.parent, info.name);
+        if (await this.fileOp("ce.copy", { path: info.path, to: `${info.parent}/${nm}` })) {
+          info.rerender();
+        } else {
+          this.flash("DUPLICATE FAILED", "alert");
+        }
+      },
+    });
+    items.push({ sep: true });
+    items.push({
+      label: "COPY PATH",
+      onClick: () => this.fileOp("ce.clip", { text: info.path }),
+    });
+    items.push({
+      label: "COPY NAME",
+      onClick: () => this.fileOp("ce.clip", { text: info.name }),
+    });
+    items.push({
+      label: "REVEAL IN FINDER",
+      onClick: () => this.fileOp("ce.reveal", { path: info.path }),
+    });
+    items.push({ sep: true });
+    items.push({
+      label: "MOVE TO TRASH",
+      onClick: async () => {
+        if (await this.fileOp("ce.trash", { path: info.path })) {
+          this.syncTabsDelete(info.path);
+          this.flash(`TRASHED ${info.name}`, "ok");
+          info.rerender();
+        } else {
+          this.flash("TRASH FAILED", "alert");
+        }
+      },
+    });
+    OmniOS.ctxMenu(items, e.clientX, e.clientY);
   },
 
   ensureCM() {
