@@ -41,14 +41,75 @@ static BOOL OmniOwnerAuthorized(void) {
 // a custom scheme gives the page a real origin, so fetch()/XHR work and the
 // Human/TensorFlow.js model loader can pull its model files.
 @interface OmniSchemeHandler : NSObject <WKURLSchemeHandler>
+// CODE EDITOR가 열어둔 폴더들 — 이 안의 미디어 파일만 /__media__로 서빙
+@property (strong) NSMutableSet<NSString *> *mediaRoots;
 @end
 
 @implementation OmniSchemeHandler
+
+- (instancetype)init {
+    if ((self = [super init])) {
+        _mediaRoots = [NSMutableSet set];
+    }
+    return self;
+}
+
+static NSString *MediaMime(NSString *ext) {
+    static NSDictionary *map;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        map = @{
+            @"png" : @"image/png", @"jpg" : @"image/jpeg", @"jpeg" : @"image/jpeg",
+            @"gif" : @"image/gif", @"webp" : @"image/webp", @"bmp" : @"image/bmp",
+            @"svg" : @"image/svg+xml", @"ico" : @"image/x-icon",
+            @"mp3" : @"audio/mpeg", @"wav" : @"audio/wav", @"m4a" : @"audio/mp4",
+            @"aac" : @"audio/aac", @"flac" : @"audio/flac", @"ogg" : @"audio/ogg",
+            @"mp4" : @"video/mp4", @"mov" : @"video/quicktime",
+            @"m4v" : @"video/x-m4v", @"webm" : @"video/webm",
+        };
+    });
+    return map[ext.lowercaseString] ?: @"application/octet-stream";
+}
 
 - (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
     NSURL *url = task.request.URL;
     NSString *path = url.path.length ? url.path : @"/index.html";
     if ([path isEqualToString:@"/"]) path = @"/index.html";
+
+    // 로컬 미디어 뷰어: omni://local/__media__?p=<절대경로> (열어둔 폴더 한정)
+    if ([path isEqualToString:@"/__media__"]) {
+        NSURLComponents *comps = [NSURLComponents componentsWithURL:url
+                                            resolvingAgainstBaseURL:NO];
+        NSString *req = nil;
+        for (NSURLQueryItem *q in comps.queryItems) {
+            if ([q.name isEqualToString:@"p"]) req = q.value;
+        }
+        NSString *std = req.stringByStandardizingPath;
+        BOOL inside = NO;
+        for (NSString *root in self.mediaRoots) {
+            if ([std hasPrefix:[root stringByAppendingString:@"/"]]) { inside = YES; break; }
+        }
+        NSData *media = inside ? [NSData dataWithContentsOfFile:std] : nil;
+        if (media == nil) {
+            [task didFailWithError:[NSError errorWithDomain:NSURLErrorDomain
+                                                       code:NSURLErrorFileDoesNotExist
+                                                   userInfo:nil]];
+            return;
+        }
+        NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc]
+             initWithURL:url
+              statusCode:200
+             HTTPVersion:@"HTTP/1.1"
+            headerFields:@{
+                @"Content-Type" : MediaMime(std.pathExtension),
+                @"Content-Length" : [NSString stringWithFormat:@"%lu",
+                                     (unsigned long)media.length],
+            }];
+        [task didReceiveResponse:resp];
+        [task didReceiveData:media];
+        [task didFinish];
+        return;
+    }
 
     NSString *webRoot = [[NSBundle mainBundle].resourcePath stringByAppendingPathComponent:@"web"];
     NSString *filePath = [[webRoot stringByAppendingPathComponent:path] stringByStandardizingPath];
@@ -175,6 +236,7 @@ static NSString *ArcSavesDir(void) {
     config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
     [config.userContentController addScriptMessageHandler:self name:@"omni"];
     self.schemeHandler = [OmniSchemeHandler new];
+    self.ceRoots = self.schemeHandler.mediaRoots; // ce.* 검증과 미디어 서빙이 같은 집합
     [config setURLSchemeHandler:self.schemeHandler forURLScheme:@"omni"];
 
     WKWebView *webView = [[WKWebView alloc] initWithFrame:window.contentView.bounds

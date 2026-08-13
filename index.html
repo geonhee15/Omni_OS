@@ -568,6 +568,7 @@
         <span class="ts-item" id="ce-root">NO FOLDER</span>
         <span class="ts-spacer"></span>
         <span class="ts-item" id="ce-msg"></span>
+        <button class="ig-tab" id="ce-newfile" disabled>+ NEW FILE</button>
         <button class="ig-tab" id="ce-open">OPEN FOLDER</button>
       </div>
       <div class="ce-body">
@@ -579,6 +580,7 @@
         <div class="ce-main">
           <div class="r3d-tabs ce-tabs" id="ce-tabs" hidden></div>
           <div class="ce-editor ino-editor" id="ce-editor">
+            <div class="ce-viewer" id="ce-viewer" hidden></div>
             <div class="ino-editor-empty" id="ce-editor-empty">
               <div class="r3d-drop-title">CODE EDITOR</div>
               <div class="r3d-drop-sub">SELECT A FILE FROM THE TREE &mdash; CMD+S SAVES</div>
@@ -593,6 +595,65 @@
               <button class="ig-tab" id="ce-term-toggle">&#9662;</button>
             </div>
             <div class="ce-termhost" id="ce-termhost" hidden></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- new file dialog -->
+      <div class="pj-modal" id="ce-modal" hidden>
+        <div class="pj-form">
+          <div class="pj-form-title">NEW FILE</div>
+          <label class="pj-label">FILE NAME <span id="ce-nf-dir" class="ce-nf-dir"></span></label>
+          <input class="ino-input" id="ce-nf-name" maxlength="64" spellcheck="false"
+            placeholder="UNTITLED (BLANK = Untitled.txt)" />
+          <label class="pj-label">EXTENSION (USED WHEN NAME HAS NONE)</label>
+          <select class="ino-select ce-nf-ext" id="ce-nf-ext">
+            <optgroup label="TEXT">
+              <option value="txt" selected>.txt</option>
+              <option value="md">.md</option>
+              <option value="json">.json</option>
+              <option value="yaml">.yaml</option>
+              <option value="toml">.toml</option>
+              <option value="xml">.xml</option>
+              <option value="csv">.csv</option>
+            </optgroup>
+            <optgroup label="CODE">
+              <option value="js">.js</option>
+              <option value="ts">.ts</option>
+              <option value="py">.py</option>
+              <option value="sh">.sh</option>
+              <option value="html">.html</option>
+              <option value="css">.css</option>
+              <option value="c">.c</option>
+              <option value="cpp">.cpp</option>
+              <option value="h">.h</option>
+              <option value="m">.m</option>
+              <option value="swift">.swift</option>
+              <option value="rs">.rs</option>
+              <option value="go">.go</option>
+              <option value="java">.java</option>
+              <option value="ino">.ino</option>
+            </optgroup>
+            <optgroup label="IMAGE">
+              <option value="png">.png</option>
+              <option value="jpg">.jpg</option>
+              <option value="svg">.svg</option>
+              <option value="gif">.gif</option>
+            </optgroup>
+            <optgroup label="AUDIO">
+              <option value="mp3">.mp3</option>
+              <option value="wav">.wav</option>
+              <option value="m4a">.m4a</option>
+            </optgroup>
+            <optgroup label="VIDEO">
+              <option value="mp4">.mp4</option>
+              <option value="mov">.mov</option>
+              <option value="webm">.webm</option>
+            </optgroup>
+          </select>
+          <div class="pj-form-actions">
+            <button class="ig-tab" id="ce-nf-cancel">CANCEL</button>
+            <button class="ig-tab active" id="ce-nf-create">CREATE</button>
           </div>
         </div>
       </div>
@@ -693,7 +754,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE</span>
       <span class="divider">|</span>
-      <span>v0.26.0</span>
+      <span>v0.27.0</span>
     </footer>
   </div>
 

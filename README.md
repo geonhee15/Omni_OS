@@ -114,7 +114,12 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   구문 강조 13종: C/C++/Obj-C/Java·JS/TS·JSON·HTML·CSS·XML·Python·Shell·Markdown·
   YAML·Rust·Go·Swift·TOML. **진짜 PTY 터미널**(forkpty + zsh + xterm.js) — + TERM으로
   얼마든지 생성, 터미널 탭 전환·닫기·접기, 열린 폴더에서 시작, 256색·리사이즈 지원.
-  파일 접근은 열어둔 폴더 내부로 제한, 바이너리/5MB 초과 가드. 앱 종료 시 셸 세션 정리.
+  **+ NEW FILE**: 이름을 안 넣으면 `Untitled.txt`(중복 시 자동 넘버링), 넣으면
+  `이름.선택확장자` — 확장자 그룹 선택(TEXT/CODE/IMAGE/AUDIO/VIDEO 30여 종), 트리에서
+  선택한 폴더에 생성되고 텍스트 계열은 바로 편집 탭으로 열림. **미디어 뷰어**: 이미지
+  (체커보드 배경)·오디오·비디오 파일은 탭에서 뷰어로 열림 — omni:// 스킴 핸들러가
+  열어둔 폴더 안의 파일만 서빙(MIME 매핑). 파일 접근은 열어둔 폴더 내부로 제한,
+  바이너리/5MB 초과 가드(텍스트). 앱 종료 시 셸 세션 정리.
   PROJECTS 에디터 모드의 도구(RENDER_3D · ARDUINO IDE · CODE EDITOR)로도 이식 가능.
 - **ARDUINO IDE** — Arduino IDE.app에 번들된 arduino-cli를 백엔드로 쓰는 임베디드 툴체인 패널.
   스케치북(~/Documents/Arduino) 목록·임의 .ino 선택, 보드 포트 스캔(FQBN 자동 감지 + ESP32/UNO/NANO/MEGA 칩),

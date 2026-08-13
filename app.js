@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.26.0",
+  version: "0.27.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -2940,6 +2940,13 @@ OmniOS.register("ce", {
   _termN: 0,
   _booted: false,
 
+  MEDIA: {
+    png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image",
+    bmp: "image", svg: "image", ico: "image",
+    mp3: "audio", wav: "audio", m4a: "audio", aac: "audio", flac: "audio", ogg: "audio",
+    mp4: "video", mov: "video", m4v: "video", webm: "video",
+  },
+
   MODES: {
     js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
     ts: "text/typescript", tsx: "text/typescript",
@@ -2967,7 +2974,19 @@ OmniOS.register("ce", {
       termwrap: $("ce-termwrap"), termtabs: $("ce-termtabs"),
       termNew: $("ce-term-new"), termToggle: $("ce-term-toggle"),
       termhost: $("ce-termhost"),
+      viewer: $("ce-viewer"), newFile: $("ce-newfile"),
+      nfModal: $("ce-modal"), nfName: $("ce-nf-name"), nfExt: $("ce-nf-ext"),
+      nfDir: $("ce-nf-dir"), nfCancel: $("ce-nf-cancel"), nfCreate: $("ce-nf-create"),
     };
+    this.els.newFile.addEventListener("click", () => this.openNewFile());
+    this.els.nfCancel.addEventListener("click", () => { this.els.nfModal.hidden = true; });
+    this.els.nfCreate.addEventListener("click", () => this.createFile());
+    this.els.nfName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.createFile();
+    });
+    this.els.nfModal.addEventListener("mousedown", (e) => {
+      if (e.target === this.els.nfModal) this.els.nfModal.hidden = true;
+    });
     this.els.open.addEventListener("click", () => this.openFolder());
     this.els.termNew.addEventListener("click", () => this.newTerm());
     this.els.termToggle.addEventListener("click", () => this.toggleTerms());
@@ -3043,6 +3062,8 @@ OmniOS.register("ce", {
 
   setRoot(path) {
     this._root = path;
+    this._selDir = null; // {path, kidsEl, depth}
+    this.els.newFile.disabled = false;
     this.els.root.textContent = path.replace(/^\/Users\/[^/]+/, "~").toUpperCase();
     this.els.treeEmpty.hidden = true;
     this.els.tree.querySelectorAll(".ce-node, .ce-kids").forEach((n) => n.remove());
@@ -3076,6 +3097,7 @@ OmniOS.register("ce", {
         node.addEventListener("click", () => {
           const open = kids.classList.toggle("open");
           glyph.textContent = open ? "\u25BE" : "\u25B8";
+          this._selDir = open ? { path: full, kidsEl: kids, depth: depth + 1 } : null;
           if (open && !kids.dataset.loaded) {
             kids.dataset.loaded = "1";
             this.expandDir(full, kids, depth + 1);
@@ -3089,6 +3111,73 @@ OmniOS.register("ce", {
           this.openFile(full);
         });
       }
+    }
+  },
+
+  // ── 새 파일: 이름 없으면 Untitled.txt(자동 넘버링), 있으면 이름.선택확장자 ──
+  newFileTarget() {
+    return this._selDir ? this._selDir.path : this._root;
+  },
+
+  openNewFile() {
+    if (!this._root) return;
+    this.els.nfName.value = "";
+    this.els.nfExt.value = "txt";
+    this.els.nfDir.textContent =
+      `IN ${this.newFileTarget().replace(/^\/Users\/[^/]+/, "~")}`;
+    this.els.nfModal.hidden = false;
+    this.els.nfName.focus();
+  },
+
+  async createFile() {
+    const dir = this.newFileTarget();
+    if (!dir) return;
+    let name = this.els.nfName.value.trim().replace(/[\/\\:]/g, "");
+    const ext = this.els.nfExt.value;
+    let existing = [];
+    try {
+      const t = await OmniNative.request("ce.tree", JSON.stringify({ path: dir }), 10000);
+      existing = ((t && t.entries) || []).map((e) => e.name);
+    } catch (e) {}
+    if (!name) {
+      // Untitled.txt → Untitled-2.txt → …
+      name = `Untitled.${ext}`;
+      let n = 2;
+      while (existing.includes(name)) name = `Untitled-${n++}.${ext}`;
+    } else if (!/\.[A-Za-z0-9]+$/.test(name)) {
+      name = `${name}.${ext}`;
+    }
+    if (existing.includes(name)) {
+      this.flash(`${name} ALREADY EXISTS`, "alert");
+      return;
+    }
+    const path = `${dir}/${name}`;
+    try {
+      const r = await OmniNative.request("ce.write",
+        JSON.stringify({ path, data: "" }), 10000);
+      if (!r || !r.ok) throw new Error("write failed");
+    } catch (e) {
+      this.flash("CREATE FAILED", "alert");
+      return;
+    }
+    this.els.nfModal.hidden = true;
+    this.flash(`CREATED ${name}`, "ok");
+    this.refreshDir();
+    const kind = this.MEDIA[name.split(".").pop().toLowerCase()];
+    if (!kind) this.openFile(path); // 텍스트 계열은 바로 편집
+  },
+
+  // 새 파일이 생긴 디렉토리만 다시 그린다 (트리 전체 접힘 방지)
+  refreshDir() {
+    if (this._selDir) {
+      const { path, kidsEl, depth } = this._selDir;
+      kidsEl.textContent = "";
+      this.expandDir(path, kidsEl, depth);
+    } else {
+      const root = this._root;
+      this.els.tree.querySelectorAll(":scope > .ce-node, :scope > .ce-kids")
+        .forEach((n) => n.remove());
+      this.expandDir(root, this.els.tree, 0);
     }
   },
 
@@ -3107,7 +3196,7 @@ OmniOS.register("ce", {
     });
     this._cm.on("change", () => {
       const f = this._files[this._active];
-      if (f && !f.dirty) {
+      if (f && f.doc && !f.dirty) {
         f.dirty = true;
         this.renderTabs();
       }
@@ -3124,6 +3213,13 @@ OmniOS.register("ce", {
     const existing = this._files.findIndex((f) => f.path === path);
     if (existing >= 0) {
       this.switchTab(existing);
+      return;
+    }
+    const name0 = path.split("/").pop();
+    const kind = this.MEDIA[name0.split(".").pop().toLowerCase()];
+    if (kind) {
+      this._files.push({ path, name: name0, media: kind, dirty: false });
+      this.switchTab(this._files.length - 1);
       return;
     }
     let r;
@@ -3150,12 +3246,63 @@ OmniOS.register("ce", {
     const f = this._files[i];
     if (!f) return;
     this._active = i;
-    const cm = this.ensureCM();
-    cm.swapDoc(f.doc);
     this.els.editorEmpty.hidden = true;
+    if (f.media) {
+      this.showViewer(f);
+    } else {
+      this.els.viewer.hidden = true;
+      this.els.viewer.textContent = "";
+      const cm = this.ensureCM();
+      cm.swapDoc(f.doc);
+      setTimeout(() => cm.refresh(), 0);
+      cm.focus();
+    }
     this.renderTabs();
-    setTimeout(() => cm.refresh(), 0);
-    cm.focus();
+  },
+
+  // 이미지/오디오/비디오 뷰어 — omni://local/__media__ 로 열린 폴더 안 파일 서빙
+  showViewer(f) {
+    const v = this.els.viewer;
+    v.textContent = "";
+    v.hidden = false;
+    if (!OmniNative.available) {
+      const note = document.createElement("div");
+      note.className = "r3d-drop-sub";
+      note.textContent = "MEDIA VIEWER REQUIRES THE NATIVE APP";
+      v.appendChild(note);
+      return;
+    }
+    const src = `omni://local/__media__?p=${encodeURIComponent(f.path)}`;
+    let el;
+    if (f.media === "image") {
+      el = document.createElement("img");
+      el.src = src;
+      el.alt = f.name;
+    } else if (f.media === "audio") {
+      el = document.createElement("audio");
+      el.controls = true;
+      el.src = src;
+    } else {
+      el = document.createElement("video");
+      el.controls = true;
+      el.src = src;
+    }
+    el.addEventListener("error", () => {
+      v.textContent = "";
+      const note = document.createElement("div");
+      note.className = "r3d-drop-sub";
+      note.textContent = "CANNOT PREVIEW THIS FILE (EMPTY OR UNSUPPORTED CODEC)";
+      v.appendChild(note);
+      v.appendChild(meta());
+    });
+    const meta = () => {
+      const m = document.createElement("div");
+      m.className = "ce-viewer-meta";
+      m.textContent = `${f.media.toUpperCase()} \u00b7 ${f.name}`;
+      return m;
+    };
+    v.appendChild(el);
+    v.appendChild(meta());
   },
 
   closeTab(i) {
@@ -3163,6 +3310,8 @@ OmniOS.register("ce", {
     if (this._files.length === 0) {
       this._active = -1;
       this.els.editorEmpty.hidden = false;
+      this.els.viewer.hidden = true;
+      this.els.viewer.textContent = "";
       if (this._cm) this._cm.swapDoc(window.CodeMirror.Doc("", "text/plain"));
       this.renderTabs();
       return;
@@ -3196,7 +3345,7 @@ OmniOS.register("ce", {
 
   async saveActive() {
     const f = this._files[this._active];
-    if (!f) return;
+    if (!f || !f.doc) return; // 미디어 탭은 저장 대상 아님
     try {
       const r = await OmniNative.request("ce.write",
         JSON.stringify({ path: f.path, data: f.doc.getValue() }), 15000);
