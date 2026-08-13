@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.23.2",
+  version: "0.24.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -85,6 +85,257 @@ OmniOS.register("clock", {
 
     const up = Math.floor((Date.now() - OmniOS.bootTime) / 1000);
     this.uptimeEl.textContent = `UPTIME ${pad(Math.floor(up / 3600))}:${pad(Math.floor((up % 3600) / 60))}:${pad(up % 60)}`;
+  },
+});
+
+// ---------- module: PROJECTS (in-app project registry) ----------
+OmniOS.register("proj", {
+  els: null,
+  _items: [],
+  _loaded: false,
+  STATUS_CYCLE: ["planning", "active", "paused", "done"],
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      summary: $("pj-summary"), newBtn: $("pj-new"),
+      empty: $("pj-empty"), list: $("pj-list"),
+      modal: $("pj-modal"),
+      fName: $("pjf-name"), fType: $("pjf-type"), fPriority: $("pjf-priority"),
+      fDesc: $("pjf-desc"), fTags: $("pjf-tags"), fTarget: $("pjf-target"),
+      fLink: $("pjf-link"), fCancel: $("pjf-cancel"), fCreate: $("pjf-create"),
+    };
+    this.els.newBtn.addEventListener("click", () => this.openForm());
+    this.els.fCancel.addEventListener("click", () => this.closeForm());
+    this.els.fCreate.addEventListener("click", () => this.create());
+    this.els.fName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.create();
+    });
+    this.els.modal.addEventListener("mousedown", (e) => {
+      if (e.target === this.els.modal) this.closeForm();
+    });
+    for (const group of [this.els.fType, this.els.fPriority]) {
+      group.querySelectorAll("button").forEach((b) =>
+        b.addEventListener("click", () => {
+          group.querySelectorAll("button").forEach((x) =>
+            x.classList.toggle("active", x === b));
+        }));
+    }
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "proj" && !this._loaded) this.load();
+    });
+  },
+
+  async load() {
+    this._loaded = true;
+    try {
+      if (OmniNative.available) {
+        const r = await OmniNative.request("store.read",
+          JSON.stringify({ name: "projects" }), 8000);
+        this._items = r && r.data ? JSON.parse(r.data) : [];
+      } else {
+        this._items = JSON.parse(localStorage.getItem("omni.projects") || "[]");
+      }
+    } catch (e) {
+      this._items = [];
+    }
+    this.render();
+  },
+
+  async persist() {
+    const data = JSON.stringify(this._items);
+    try {
+      if (OmniNative.available) {
+        await OmniNative.request("store.write",
+          JSON.stringify({ name: "projects", data }), 8000);
+      } else {
+        localStorage.setItem("omni.projects", data);
+      }
+    } catch (e) {}
+  },
+
+  openForm() {
+    const E = this.els;
+    E.fName.value = "";
+    E.fDesc.value = "";
+    E.fTags.value = "";
+    E.fTarget.value = "";
+    E.fLink.value = "";
+    const pick = (group, v) => group.querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.v === v));
+    pick(E.fType, "software");
+    pick(E.fPriority, "med");
+    E.modal.hidden = false;
+    E.fName.focus();
+  },
+
+  closeForm() {
+    this.els.modal.hidden = true;
+  },
+
+  picked(group) {
+    const b = group.querySelector("button.active");
+    return b ? b.dataset.v : null;
+  },
+
+  create() {
+    const E = this.els;
+    const name = E.fName.value.trim();
+    if (!name) {
+      E.fName.focus();
+      E.fName.style.borderColor = "var(--alert)";
+      setTimeout(() => { E.fName.style.borderColor = ""; }, 900);
+      return;
+    }
+    const link = E.fLink.value.trim();
+    this._items.unshift({
+      id: `p${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
+      name,
+      type: this.picked(E.fType) || "software",
+      priority: this.picked(E.fPriority) || "med",
+      desc: E.fDesc.value.trim(),
+      tags: E.fTags.value.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 6),
+      target: E.fTarget.value || null,
+      link: /^https?:\/\//i.test(link) ? link : null,
+      status: "planning",
+      createdAt: Date.now(),
+    });
+    this.persist();
+    this.render();
+    this.closeForm();
+  },
+
+  cycleStatus(item) {
+    const i = this.STATUS_CYCLE.indexOf(item.status);
+    item.status = this.STATUS_CYCLE[(i + 1) % this.STATUS_CYCLE.length];
+    this.persist();
+    this.render();
+  },
+
+  remove(id) {
+    this._items = this._items.filter((p) => p.id !== id);
+    this.persist();
+    this.render();
+  },
+
+  fmtDate(ms) {
+    const d = new Date(ms);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  },
+
+  dday(target) {
+    const t = new Date(`${target}T00:00:00`);
+    const days = Math.ceil((t - new Date().setHours(0, 0, 0, 0)) / 86400000);
+    if (days > 0) return { label: `D-${days}`, cls: days <= 7 ? "soon" : "" };
+    if (days === 0) return { label: "D-DAY", cls: "soon" };
+    return { label: `D+${-days}`, cls: "over" };
+  },
+
+  render() {
+    const E = this.els;
+    const items = this._items;
+    E.empty.hidden = items.length > 0;
+    E.list.hidden = items.length === 0;
+    const active = items.filter((p) => p.status === "active").length;
+    const done = items.filter((p) => p.status === "done").length;
+    E.summary.textContent = items.length
+      ? `${items.length} PROJECTS \u00b7 ${active} ACTIVE \u00b7 ${done} DONE`
+      : "\u2014";
+
+    const TYPE_LABEL = { software: "SW", hardware: "HW", hybrid: "SW+HW" };
+    E.list.textContent = "";
+    for (const p of items) {
+      const row = document.createElement("div");
+      row.className = `pj-row${p.status === "done" ? " done" : ""}`;
+
+      const type = document.createElement("span");
+      type.className = `pj-type ${p.type}`;
+      type.textContent = TYPE_LABEL[p.type] || "SW";
+      row.appendChild(type);
+
+      const name = document.createElement("span");
+      name.className = "pj-name";
+      if (p.link) {
+        const a = document.createElement("a");
+        a.href = "#";
+        a.textContent = p.name.toUpperCase();
+        a.title = p.link;
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          if (OmniNative.available) {
+            OmniNative.request("open.url",
+              JSON.stringify({ url: p.link })).catch(() => {});
+          } else {
+            window.open(p.link, "_blank");
+          }
+        });
+        name.appendChild(a);
+      } else {
+        name.textContent = p.name.toUpperCase();
+      }
+      row.appendChild(name);
+
+      const desc = document.createElement("span");
+      desc.className = "pj-desc";
+      desc.textContent = p.desc || "";
+      row.appendChild(desc);
+
+      const tags = document.createElement("span");
+      tags.className = "pj-tags";
+      (p.tags || []).slice(0, 3).forEach((t) => {
+        const tag = document.createElement("span");
+        tag.className = "pj-tag";
+        tag.textContent = t.toUpperCase();
+        tags.appendChild(tag);
+      });
+      row.appendChild(tags);
+
+      const prio = document.createElement("span");
+      prio.className = `pj-prio ${p.priority}`;
+      prio.textContent = { low: "\u25BD LOW", med: "\u25C7 MED",
+        high: "\u25B3 HIGH", crit: "\u25B2 CRIT" }[p.priority] || "";
+      row.appendChild(prio);
+
+      const status = document.createElement("button");
+      status.className = `pj-status-btn ${p.status}`;
+      status.textContent = p.status.toUpperCase();
+      status.title = "Click to change status";
+      status.addEventListener("click", () => this.cycleStatus(p));
+      row.appendChild(status);
+
+      const dates = document.createElement("span");
+      dates.className = "pj-dates";
+      let dt = this.fmtDate(p.createdAt);
+      dates.textContent = dt;
+      if (p.target && p.status !== "done") {
+        const dd = this.dday(p.target);
+        const s = document.createElement("span");
+        s.className = `dday ${dd.cls}`;
+        s.textContent = ` \u00b7 ${dd.label}`;
+        dates.appendChild(s);
+      }
+      row.appendChild(dates);
+
+      const del = document.createElement("button");
+      del.className = "pj-del";
+      del.textContent = "\u2715";
+      del.addEventListener("click", () => {
+        if (del.classList.contains("confirm")) {
+          this.remove(p.id);
+        } else {
+          del.classList.add("confirm");
+          del.textContent = "SURE?";
+          setTimeout(() => {
+            del.classList.remove("confirm");
+            del.textContent = "\u2715";
+          }, 2000);
+        }
+      });
+      row.appendChild(del);
+
+      E.list.appendChild(row);
+    }
   },
 });
 

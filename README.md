@@ -47,6 +47,14 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   양손 주먹을 세게 당기며 놓으면 분해가 관성으로 끝까지 진행.
   랜드마크 지수평활 + 60fps 보간 스켈레톤. 켜는 동안 Security-Protocol-1 워처를 깨끗하게 종료
   (launchctl bootout)해 카메라를 해제하고, 끄거나 앱 종료 시 자동 재기동
+- **PROJECTS** — 앱 안에서 직접 관리하는 프로젝트 등록부. **+ NEW PROJECT** 버튼으로 HUD
+  다이얼로그를 열어 이름 / 형식(SOFTWARE·HARDWARE·HYBRID) / 우선순위(LOW~CRIT) /
+  설명 / 태그 / 목표일 / 링크를 입력해 등록. 목록에는 이름과 만든 날짜가 나란히 표시되고,
+  형식 배지(색 구분)·태그·우선순위·**상태 칩**(클릭할 때마다 PLANNING → ACTIVE → PAUSED →
+  DONE 순환, DONE은 흐리게)·목표일 **D-day 카운트다운**(임박 앰버, 초과 레드)이 함께 보인다.
+  삭제는 오클릭 방지 2단계(✕ → SURE?). 링크는 기본 브라우저로 열림(http/https만).
+  데이터는 `~/.omni/store/projects.json`에 저장 — 범용 store.read/write 브리지
+  (이름 검증 + 폴더 한정)라 다른 패널 영속화에도 재사용 가능.
 - **SYSTEM MONITOR** — 아이언맨 미션 컨트롤 스타일 실시간 시스템 대시보드 (1초 갱신, 패널이
   보일 때만 폴링). 네이티브 수집기(`macos/sysmon.m`, mach/sysctl/IOKit — 루트 불필요):
   **CPU** 전체·코어별 사용률(원호 게이지 + 코어 바, 부하별 색), **GPU** 사용률(IOAccelerator),

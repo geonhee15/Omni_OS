@@ -363,7 +363,60 @@ static NSString *ArcSavesDir(void) {
     NSString *arg = [body[@"arg"] isKindOfClass:[NSString class]] ? body[@"arg"] : nil;
     if (msgId == nil || cmd == nil) return;
 
-    if ([cmd isEqualToString:@"sys.stats"]) {
+    if ([cmd isEqualToString:@"open.url"]) {
+        // 기본 브라우저로 링크 열기 — http(s)만 허용
+        NSString *urlStr = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]
+                && [parsed[@"url"] isKindOfClass:[NSString class]]) {
+                urlStr = parsed[@"url"];
+            }
+        }
+        NSURL *url = urlStr ? [NSURL URLWithString:urlStr] : nil;
+        BOOL ok = NO;
+        if (url != nil && ([url.scheme isEqualToString:@"https"]
+                           || [url.scheme isEqualToString:@"http"])) {
+            ok = [[NSWorkspace sharedWorkspace] openURL:url];
+        }
+        [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+    } else if ([cmd isEqualToString:@"store.read"] || [cmd isEqualToString:@"store.write"]) {
+        // 패널 데이터 영속화용 미니 스토어 — ~/.omni/store/<name>.json 한정
+        NSDictionary *a = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+        }
+        NSString *name = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : nil;
+        NSRegularExpression *re = [NSRegularExpression
+            regularExpressionWithPattern:@"^[A-Za-z0-9_-]{1,64}$" options:0 error:nil];
+        BOOL valid = name != nil && [re numberOfMatchesInString:name options:0
+            range:NSMakeRange(0, name.length)] == 1;
+        if (!valid) {
+            [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
+        } else {
+            NSString *dir = [NSHomeDirectory()
+                stringByAppendingPathComponent:@".omni/store"];
+            [NSFileManager.defaultManager createDirectoryAtPath:dir
+                withIntermediateDirectories:YES attributes:nil error:nil];
+            NSString *path = [dir stringByAppendingPathComponent:
+                [name stringByAppendingPathExtension:@"json"]];
+            if ([cmd isEqualToString:@"store.read"]) {
+                NSString *data = [NSString stringWithContentsOfFile:path
+                    encoding:NSUTF8StringEncoding error:nil];
+                [self deliverPayload:@{ @"ok" : @YES,
+                                        @"data" : data ?: [NSNull null] } forId:msgId];
+            } else {
+                NSString *data = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
+                BOOL ok = data != nil
+                    && [data writeToFile:path atomically:YES
+                                encoding:NSUTF8StringEncoding error:nil];
+                [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+            }
+        }
+    } else if ([cmd isEqualToString:@"sys.stats"]) {
         // 시스템 지표는 전용 직렬 큐에서 — 델타 static이 경쟁하지 않게
         static dispatch_queue_t sysQ;
         static dispatch_once_t once;
