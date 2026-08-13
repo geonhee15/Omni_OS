@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.30.0",
+  version: "0.30.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -65,6 +65,8 @@ OmniOS.projectKeep = async function (dir, name, data) {
   if (!dir || !window.OmniNative || !OmniNative.available) return false;
   const safe = String(name).split("/").pop();
   try {
+    await OmniNative.request("ce.mkdir",
+      JSON.stringify({ path: dir }), 8000).catch(() => {});
     if (typeof data === "string") {
       const r = await OmniNative.request("ce.write",
         JSON.stringify({ path: `${dir}/${safe}`, data }), 30000);
@@ -458,16 +460,27 @@ OmniOS.register("proj", {
 
   openEditor(p) {
     this._edProject = p;
-    if (!p.dir && OmniNative.available) {
-      OmniNative.request("proj.scaffold", JSON.stringify({ name: p.name }), 10000)
-        .then((r) => {
-          if (r && r.ok) {
-            p.dir = r.path;
-            this.persist();
-          }
-        })
-        .catch(() => {});
-    }
+    // 프로젝트 폴더 준비: 재시작 후엔 루트 재등록이 필요하고(ce.addRoot),
+    // 폴더가 없으면(구버전 프로젝트/삭제됨) 스캐폴드로 생성한다.
+    this._dirReady = !OmniNative.available ? Promise.resolve(null) : (async () => {
+      if (p.dir) {
+        try {
+          const r = await OmniNative.request("ce.addRoot",
+            JSON.stringify({ path: p.dir }), 8000);
+          if (r && r.ok) return p.dir;
+        } catch (e) {}
+      }
+      try {
+        const s = await OmniNative.request("proj.scaffold",
+          JSON.stringify({ name: p.name }), 10000);
+        if (s && s.ok) {
+          p.dir = s.path;
+          this.persist();
+          return s.path;
+        }
+      } catch (e) {}
+      return null;
+    })();
     this.els.edName.textContent = p.name.toUpperCase();
     this.els.editor.hidden = false;
     this.els.list.hidden = true;
@@ -481,7 +494,7 @@ OmniOS.register("proj", {
       b.classList.toggle("active", b.dataset.tool === key));
   },
 
-  mountPanel(key) {
+  async mountPanel(key) {
     const panel = document.getElementById(`panel-${key}`);
     if (!panel) return;
     if (panel.classList.contains("pj-embedded")) return; // 이미 이 도구
@@ -496,19 +509,25 @@ OmniOS.register("proj", {
     panel.classList.add("active", "pj-embedded");
     this.els.edHint.hidden = true;
     this.syncToolChips(key);
-    const mod = OmniOS.modules[key];
+    // 패널 키 → 모듈 등록명 (아두이노는 panel-ino / modules.ide)
+    const MODKEY = { r3d: "r3d", ino: "ide", ce: "ce", notes: "notes" };
+    const mod = OmniOS.modules[MODKEY[key] || key];
     if (mod && mod.resize) mod.resize();
-    // 프로젝트 폴더가 있으면 도구를 해당 하위 폴더로 자동 연결하고,
-    // 도구에서 불러온/저장한 파일이 그 폴더에 계속 보관되게 저장 폴더를 지정
+    // 프로젝트 폴더 준비(루트 등록/스캐폴드)를 기다렸다가 도구를 연결한다 —
+    // 등록 전에 보관 쓰기가 나가면 루트 검증에 막혀 조용히 실패한다
     const p = this._edProject;
-    if (p && p.dir && OmniNative.available) {
+    if (p && OmniNative.available) {
+      const dir = this._dirReady ? await this._dirReady : p.dir;
+      // 기다리는 사이 다른 도구로 바뀌었으면 중단
+      if (!dir || this._edProject !== p
+          || !panel.classList.contains("pj-embedded")) return;
       const SUB = { r3d: "3d", ino: "arduino", ce: "code", notes: "notes" };
-      if (mod && SUB[key]) mod._projectSaveDir = `${p.dir}/${SUB[key]}`;
+      if (mod && SUB[key]) mod._projectSaveDir = `${dir}/${SUB[key]}`;
       if (key === "ce" && OmniOS.modules.ce.openPath) {
-        OmniOS.modules.ce.openPath(`${p.dir}/code`);
+        OmniOS.modules.ce.openPath(`${dir}/code`);
       } else if (key === "notes" && OmniOS.modules.notes.openVault) {
         OmniOS.modules.notes._booted = true; // 기본 볼트 부팅 건너뛰고
-        OmniOS.modules.notes.openVault(`${p.dir}/notes`);
+        OmniOS.modules.notes.openVault(`${dir}/notes`);
       }
     }
   },
@@ -516,7 +535,9 @@ OmniOS.register("proj", {
   unmountPanel() {
     const panel = document.querySelector(".pj-ed-host .panel.pj-embedded");
     if (!panel) return;
-    const mod = OmniOS.modules[panel.id.replace("panel-", "")];
+    const MODKEY = { r3d: "r3d", ino: "ide", ce: "ce", notes: "notes" };
+    const pkey = panel.id.replace("panel-", "");
+    const mod = OmniOS.modules[MODKEY[pkey] || pkey];
     if (mod) mod._projectSaveDir = null;
     const home = this._homes[panel.id];
     panel.classList.remove("pj-embedded");
