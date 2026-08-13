@@ -10,6 +10,8 @@ usr_choice = input("당신의 선택: ")
 cpt_choice = rd.choice(choices)
 result = ""
 
+
+
 if usr_choice == "가위" and cpt_choice == "보":
   result = "승리"
 elif usr_choice == "가위" and cpt_choice == "바위":

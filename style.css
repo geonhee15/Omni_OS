@@ -2555,29 +2555,122 @@ select.ce-nf-ext { width: 140px; }
   color: var(--text-dim);
 }
 
-/* CODE EDITOR: VSCode Dark+ 팔레트 (ino HUD 테마를 ce에서만 오버라이드) */
-.ce-editor .CodeMirror { background: #071019; }
-.ce-editor .cm-keyword { color: #c586c0; }
-.ce-editor .cm-atom { color: #569cd6; }
-.ce-editor .cm-def { color: #dcdcaa; }
-.ce-editor .cm-variable { color: #9cdcfe; }
-.ce-editor .cm-variable-2 { color: #9cdcfe; }
-.ce-editor .cm-variable-3, .ce-editor .cm-type { color: #4ec9b0; }
-.ce-editor .cm-builtin { color: #dcdcaa; }
-.ce-editor .cm-property { color: #9cdcfe; }
-.ce-editor .cm-qualifier { color: #d7ba7d; }
-.ce-editor .cm-number { color: #b5cea8; }
-.ce-editor .cm-string { color: #ce9178; }
-.ce-editor .cm-string-2 { color: #d16969; }
-.ce-editor .cm-comment { color: #6a9955; font-style: italic; }
-.ce-editor .cm-meta { color: #d7ba7d; }
-.ce-editor .cm-operator { color: #d4d4d4; }
-.ce-editor .cm-tag { color: #569cd6; }
-.ce-editor .cm-attribute { color: #9cdcfe; }
-.ce-editor .cm-header { color: #569cd6; font-weight: 700; }
-.ce-editor .cm-link { color: #ce9178; text-decoration: underline; }
-.ce-editor .cm-error { color: #f44747; }
-.ce-editor .CodeMirror-linenumber { color: rgba(133, 133, 133, 0.6); }
+/* CODE EDITOR 하이라이팅 테마 (data-theme 스위칭) */
+select.ce-theme { width: 110px; }
+
+/* VSCODE — Dark+ */
+.ce-editor[data-theme="vscode"] .CodeMirror { background: #071019; }
+.ce-editor[data-theme="vscode"] .cm-keyword { color: #c586c0; }
+.ce-editor[data-theme="vscode"] .cm-atom { color: #569cd6; }
+.ce-editor[data-theme="vscode"] .cm-def { color: #dcdcaa; }
+.ce-editor[data-theme="vscode"] .cm-variable,
+.ce-editor[data-theme="vscode"] .cm-variable-2,
+.ce-editor[data-theme="vscode"] .cm-property,
+.ce-editor[data-theme="vscode"] .cm-attribute { color: #9cdcfe; }
+.ce-editor[data-theme="vscode"] .cm-variable-3,
+.ce-editor[data-theme="vscode"] .cm-type { color: #4ec9b0; }
+.ce-editor[data-theme="vscode"] .cm-builtin { color: #dcdcaa; }
+.ce-editor[data-theme="vscode"] .cm-qualifier,
+.ce-editor[data-theme="vscode"] .cm-meta { color: #d7ba7d; }
+.ce-editor[data-theme="vscode"] .cm-number { color: #b5cea8; }
+.ce-editor[data-theme="vscode"] .cm-string { color: #ce9178; }
+.ce-editor[data-theme="vscode"] .cm-string-2 { color: #d16969; }
+.ce-editor[data-theme="vscode"] .cm-comment { color: #6a9955; font-style: italic; }
+.ce-editor[data-theme="vscode"] .cm-operator { color: #d4d4d4; }
+.ce-editor[data-theme="vscode"] .cm-tag { color: #569cd6; }
+.ce-editor[data-theme="vscode"] .cm-header { color: #569cd6; font-weight: 700; }
+.ce-editor[data-theme="vscode"] .cm-link { color: #ce9178; text-decoration: underline; }
+.ce-editor[data-theme="vscode"] .cm-error { color: #f44747; }
+.ce-editor[data-theme="vscode"] .CodeMirror-linenumber { color: rgba(133, 133, 133, 0.6); }
+
+/* HUD — Omni 시안 (ino 테마 그대로) — 오버라이드 없음, 기본 .ino-editor 스타일 사용 */
+
+/* HACKER — 그린 포스퍼 매트릭스 */
+.ce-editor[data-theme="hacker"] .CodeMirror {
+  background: #010401;
+  color: #33dd66;
+}
+.ce-editor[data-theme="hacker"] .cm-keyword { color: #00ff66; font-weight: 700; }
+.ce-editor[data-theme="hacker"] .cm-atom { color: #66ffaa; }
+.ce-editor[data-theme="hacker"] .cm-def { color: #00ff88; }
+.ce-editor[data-theme="hacker"] .cm-variable,
+.ce-editor[data-theme="hacker"] .cm-variable-2,
+.ce-editor[data-theme="hacker"] .cm-property,
+.ce-editor[data-theme="hacker"] .cm-attribute { color: #33dd66; }
+.ce-editor[data-theme="hacker"] .cm-variable-3,
+.ce-editor[data-theme="hacker"] .cm-type { color: #88ffbb; }
+.ce-editor[data-theme="hacker"] .cm-builtin { color: #66ff99; }
+.ce-editor[data-theme="hacker"] .cm-number { color: #aaffcc; }
+.ce-editor[data-theme="hacker"] .cm-string { color: #66ff99; }
+.ce-editor[data-theme="hacker"] .cm-string-2 { color: #44cc77; }
+.ce-editor[data-theme="hacker"] .cm-comment { color: #007733; font-style: italic; }
+.ce-editor[data-theme="hacker"] .cm-meta { color: #00cc55; }
+.ce-editor[data-theme="hacker"] .cm-operator { color: #00ee55; }
+.ce-editor[data-theme="hacker"] .cm-tag { color: #00ff66; }
+.ce-editor[data-theme="hacker"] .cm-error { color: #ff5555; }
+.ce-editor[data-theme="hacker"] .CodeMirror-linenumber { color: rgba(0, 200, 80, 0.4); }
+.ce-editor[data-theme="hacker"] .CodeMirror-gutters {
+  background: #010401;
+  border-right: 1px solid rgba(0, 255, 100, 0.15);
+}
+.ce-editor[data-theme="hacker"] .CodeMirror-cursor { border-left: 2px solid #00ff66; }
+.ce-editor[data-theme="hacker"] .CodeMirror-selected { background: rgba(0, 255, 100, 0.15); }
+
+/* MONOKAI */
+.ce-editor[data-theme="monokai"] .CodeMirror { background: #1d1e19; color: #f8f8f2; }
+.ce-editor[data-theme="monokai"] .cm-keyword { color: #f92672; }
+.ce-editor[data-theme="monokai"] .cm-atom { color: #ae81ff; }
+.ce-editor[data-theme="monokai"] .cm-def { color: #a6e22e; }
+.ce-editor[data-theme="monokai"] .cm-variable,
+.ce-editor[data-theme="monokai"] .cm-variable-2 { color: #f8f8f2; }
+.ce-editor[data-theme="monokai"] .cm-variable-3,
+.ce-editor[data-theme="monokai"] .cm-type { color: #66d9ef; font-style: italic; }
+.ce-editor[data-theme="monokai"] .cm-builtin { color: #66d9ef; }
+.ce-editor[data-theme="monokai"] .cm-property,
+.ce-editor[data-theme="monokai"] .cm-attribute { color: #a6e22e; }
+.ce-editor[data-theme="monokai"] .cm-number { color: #ae81ff; }
+.ce-editor[data-theme="monokai"] .cm-string,
+.ce-editor[data-theme="monokai"] .cm-string-2 { color: #e6db74; }
+.ce-editor[data-theme="monokai"] .cm-comment { color: #75715e; font-style: italic; }
+.ce-editor[data-theme="monokai"] .cm-meta { color: #fd971f; }
+.ce-editor[data-theme="monokai"] .cm-operator { color: #f92672; }
+.ce-editor[data-theme="monokai"] .cm-tag { color: #f92672; }
+.ce-editor[data-theme="monokai"] .cm-error { color: #f44747; }
+.ce-editor[data-theme="monokai"] .CodeMirror-linenumber { color: rgba(144, 144, 138, 0.6); }
+.ce-editor[data-theme="monokai"] .CodeMirror-gutters {
+  background: #1d1e19;
+  border-right: 1px solid rgba(248, 248, 242, 0.1);
+}
+.ce-editor[data-theme="monokai"] .CodeMirror-cursor { border-left: 2px solid #f8f8f0; }
+.ce-editor[data-theme="monokai"] .CodeMirror-selected { background: rgba(73, 72, 62, 0.99); }
+
+/* DRACULA */
+.ce-editor[data-theme="dracula"] .CodeMirror { background: #1e1f29; color: #f8f8f2; }
+.ce-editor[data-theme="dracula"] .cm-keyword { color: #ff79c6; }
+.ce-editor[data-theme="dracula"] .cm-atom { color: #bd93f9; }
+.ce-editor[data-theme="dracula"] .cm-def { color: #50fa7b; }
+.ce-editor[data-theme="dracula"] .cm-variable,
+.ce-editor[data-theme="dracula"] .cm-variable-2 { color: #f8f8f2; }
+.ce-editor[data-theme="dracula"] .cm-variable-3,
+.ce-editor[data-theme="dracula"] .cm-type { color: #8be9fd; }
+.ce-editor[data-theme="dracula"] .cm-builtin { color: #8be9fd; }
+.ce-editor[data-theme="dracula"] .cm-property,
+.ce-editor[data-theme="dracula"] .cm-attribute { color: #50fa7b; }
+.ce-editor[data-theme="dracula"] .cm-number { color: #bd93f9; }
+.ce-editor[data-theme="dracula"] .cm-string,
+.ce-editor[data-theme="dracula"] .cm-string-2 { color: #f1fa8c; }
+.ce-editor[data-theme="dracula"] .cm-comment { color: #6272a4; font-style: italic; }
+.ce-editor[data-theme="dracula"] .cm-meta { color: #ffb86c; }
+.ce-editor[data-theme="dracula"] .cm-operator { color: #ff79c6; }
+.ce-editor[data-theme="dracula"] .cm-tag { color: #ff79c6; }
+.ce-editor[data-theme="dracula"] .cm-error { color: #ff5555; }
+.ce-editor[data-theme="dracula"] .CodeMirror-linenumber { color: rgba(98, 114, 164, 0.8); }
+.ce-editor[data-theme="dracula"] .CodeMirror-gutters {
+  background: #1e1f29;
+  border-right: 1px solid rgba(98, 114, 164, 0.3);
+}
+.ce-editor[data-theme="dracula"] .CodeMirror-cursor { border-left: 2px solid #f8f8f2; }
+.ce-editor[data-theme="dracula"] .CodeMirror-selected { background: rgba(68, 71, 90, 0.99); }
 
 /* 자동완성 팝업 (VSCode 스타일 다크) */
 .CodeMirror-hints {

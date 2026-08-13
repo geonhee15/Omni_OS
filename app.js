@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.28.0",
+  version: "0.28.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -2975,10 +2975,19 @@ OmniOS.register("ce", {
       termNew: $("ce-term-new"), termToggle: $("ce-term-toggle"),
       termhost: $("ce-termhost"),
       viewer: $("ce-viewer"), newFile: $("ce-newfile"), run: $("ce-run"),
+      theme: $("ce-theme"),
       nfModal: $("ce-modal"), nfName: $("ce-nf-name"), nfExt: $("ce-nf-ext"),
       nfDir: $("ce-nf-dir"), nfCancel: $("ce-nf-cancel"), nfCreate: $("ce-nf-create"),
     };
     this.els.run.addEventListener("click", () => this.runActive());
+    const savedTheme = localStorage.getItem("omni.ce.theme") || "vscode";
+    this.els.theme.value = savedTheme;
+    this.els.editor.dataset.theme = savedTheme;
+    this.els.theme.addEventListener("change", () => {
+      const t = this.els.theme.value;
+      this.els.editor.dataset.theme = t;
+      localStorage.setItem("omni.ce.theme", t);
+    });
     this.els.newFile.addEventListener("click", () => this.openNewFile());
     this.els.nfCancel.addEventListener("click", () => { this.els.nfModal.hidden = true; });
     this.els.nfCreate.addEventListener("click", () => this.createFile());
@@ -3356,6 +3365,26 @@ OmniOS.register("ce", {
     return [...words];
   },
 
+  // import X as Y / const Y = X 별칭을 수집해 멤버 완성에 반영
+  aliasMap(cm, lang) {
+    const map = {};
+    const text = cm.getValue();
+    if (lang === "python") {
+      for (const m of text.matchAll(/^[ \t]*import[ \t]+([^\n#]+)/gm)) {
+        for (const part of m[1].split(",")) {
+          const am = part.trim().match(/^([A-Za-z_][\w.]*)[ \t]+as[ \t]+([A-Za-z_]\w*)$/);
+          if (am) map[am[2]] = am[1];
+        }
+      }
+    } else if (lang === "js") {
+      for (const m of text.matchAll(
+        /(?:const|let|var)[ \t]+([A-Za-z_$]\w*)[ \t]*=[ \t]*([A-Za-z_$]\w*)[ \t]*;?(?:\n|$)/g)) {
+        map[m[1]] = m[2];
+      }
+    }
+    return map;
+  },
+
   hintFn(cm) {
     const CM = window.CodeMirror;
     const cur = cm.getCursor();
@@ -3373,9 +3402,14 @@ OmniOS.register("ce", {
     if (dot) {
       const partial = dot[2];
       from = CM.Pos(cur.line, cur.ch - partial.length);
-      const members = D.members[dot[1]];
+      let recv = dot[1];
+      if (!D.members[recv]) {
+        const alias = this.aliasMap(cm, lang)[recv];
+        if (alias && D.members[alias]) recv = alias; // rd. → random.
+      }
+      const members = D.members[recv];
       const pool = members
-        ? members.map((t) => ({ text: t, kind: dot[1] }))
+        ? members.map((t) => ({ text: t, kind: recv }))
         : D.generic.map((t) => ({ text: t, kind: "method" }));
       cands = pool.filter((c) => c.text.startsWith(partial));
     } else {
@@ -3386,6 +3420,7 @@ OmniOS.register("ce", {
       const pool = [
         ...D.keywords.map((t) => ({ text: t, kind: "keyword" })),
         ...D.builtins.map((t) => ({ text: t, kind: "builtin" })),
+        ...Object.keys(this.aliasMap(cm, lang)).map((t) => ({ text: t, kind: "alias" })),
         ...this.bufferWords(cm, prefix).map((t) => ({ text: t, kind: "word" })),
       ];
       const seen = new Set();
