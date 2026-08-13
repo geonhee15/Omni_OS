@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.24.0",
+  version: "0.24.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -102,6 +102,7 @@ OmniOS.register("proj", {
       empty: $("pj-empty"), list: $("pj-list"),
       modal: $("pj-modal"),
       fName: $("pjf-name"), fType: $("pjf-type"), fPriority: $("pjf-priority"),
+      fStatus: $("pjf-status"),
       fDesc: $("pjf-desc"), fTags: $("pjf-tags"), fTarget: $("pjf-target"),
       fLink: $("pjf-link"), fCancel: $("pjf-cancel"), fCreate: $("pjf-create"),
     };
@@ -114,7 +115,7 @@ OmniOS.register("proj", {
     this.els.modal.addEventListener("mousedown", (e) => {
       if (e.target === this.els.modal) this.closeForm();
     });
-    for (const group of [this.els.fType, this.els.fPriority]) {
+    for (const group of [this.els.fType, this.els.fPriority, this.els.fStatus]) {
       group.querySelectorAll("button").forEach((b) =>
         b.addEventListener("click", () => {
           group.querySelectorAll("button").forEach((x) =>
@@ -165,6 +166,7 @@ OmniOS.register("proj", {
       b.classList.toggle("active", b.dataset.v === v));
     pick(E.fType, "software");
     pick(E.fPriority, "med");
+    pick(E.fStatus, "planning");
     E.modal.hidden = false;
     E.fName.focus();
   },
@@ -197,7 +199,7 @@ OmniOS.register("proj", {
       tags: E.fTags.value.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 6),
       target: E.fTarget.value || null,
       link: /^https?:\/\//i.test(link) ? link : null,
-      status: "planning",
+      status: this.picked(E.fStatus) || "planning",
       createdAt: Date.now(),
     });
     this.persist();

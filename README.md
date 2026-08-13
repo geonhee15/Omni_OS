@@ -49,6 +49,7 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   (launchctl bootout)해 카메라를 해제하고, 끄거나 앱 종료 시 자동 재기동
 - **PROJECTS** — 앱 안에서 직접 관리하는 프로젝트 등록부. **+ NEW PROJECT** 버튼으로 HUD
   다이얼로그를 열어 이름 / 형식(SOFTWARE·HARDWARE·HYBRID) / 우선순위(LOW~CRIT) /
+  **시작 상태(PLANNING·ACTIVE·PAUSED·DONE — 끝난 프로젝트도 바로 등록)** /
   설명 / 태그 / 목표일 / 링크를 입력해 등록. 목록에는 이름과 만든 날짜가 나란히 표시되고,
   형식 배지(색 구분)·태그·우선순위·**상태 칩**(클릭할 때마다 PLANNING → ACTIVE → PAUSED →
   DONE 순환, DONE은 흐리게)·목표일 **D-day 카운트다운**(임박 앰버, 초과 레드)이 함께 보인다.
