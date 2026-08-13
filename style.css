@@ -2554,3 +2554,64 @@ select.ce-nf-ext { width: 140px; }
   letter-spacing: 1.5px;
   color: var(--text-dim);
 }
+
+/* CODE EDITOR: VSCode Dark+ 팔레트 (ino HUD 테마를 ce에서만 오버라이드) */
+.ce-editor .CodeMirror { background: #071019; }
+.ce-editor .cm-keyword { color: #c586c0; }
+.ce-editor .cm-atom { color: #569cd6; }
+.ce-editor .cm-def { color: #dcdcaa; }
+.ce-editor .cm-variable { color: #9cdcfe; }
+.ce-editor .cm-variable-2 { color: #9cdcfe; }
+.ce-editor .cm-variable-3, .ce-editor .cm-type { color: #4ec9b0; }
+.ce-editor .cm-builtin { color: #dcdcaa; }
+.ce-editor .cm-property { color: #9cdcfe; }
+.ce-editor .cm-qualifier { color: #d7ba7d; }
+.ce-editor .cm-number { color: #b5cea8; }
+.ce-editor .cm-string { color: #ce9178; }
+.ce-editor .cm-string-2 { color: #d16969; }
+.ce-editor .cm-comment { color: #6a9955; font-style: italic; }
+.ce-editor .cm-meta { color: #d7ba7d; }
+.ce-editor .cm-operator { color: #d4d4d4; }
+.ce-editor .cm-tag { color: #569cd6; }
+.ce-editor .cm-attribute { color: #9cdcfe; }
+.ce-editor .cm-header { color: #569cd6; font-weight: 700; }
+.ce-editor .cm-link { color: #ce9178; text-decoration: underline; }
+.ce-editor .cm-error { color: #f44747; }
+.ce-editor .CodeMirror-linenumber { color: rgba(133, 133, 133, 0.6); }
+
+/* 자동완성 팝업 (VSCode 스타일 다크) */
+.CodeMirror-hints {
+  /* 애드온이 상황에 따라 인라인 height를 박아 1줄로 접히는 문제 무력화 —
+     max-height + overflow-y가 화면 경계를 이미 처리한다 */
+  height: auto !important;
+  background: #0b1622;
+  border: 1px solid var(--cyan-soft);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+  border-radius: 0;
+  padding: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-height: 240px;
+  z-index: 100;
+}
+
+.CodeMirror-hint {
+  color: #bfe9f7;
+  padding: 3px 8px;
+  border-radius: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.CodeMirror-hint .hint-kind {
+  color: rgba(111, 168, 201, 0.6);
+  font-size: 8px;
+  letter-spacing: 1px;
+  align-self: center;
+}
+
+li.CodeMirror-hint-active {
+  background: rgba(53, 214, 255, 0.18);
+  color: #eafcff;
+}

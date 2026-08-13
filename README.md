@@ -114,6 +114,13 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   구문 강조 13종: C/C++/Obj-C/Java·JS/TS·JSON·HTML·CSS·XML·Python·Shell·Markdown·
   YAML·Rust·Go·Swift·TOML. **진짜 PTY 터미널**(forkpty + zsh + xterm.js) — + TERM으로
   얼마든지 생성, 터미널 탭 전환·닫기·접기, 열린 폴더에서 시작, 256색·리사이즈 지원.
+  **VSCode Dark+ 하이라이팅**: CODE EDITOR 전용 팔레트 — 키워드 퍼플, 임포트 모듈명·변수
+  라이트블루, 함수 정의 옐로, 타입 틸, 문자열 오렌지, 숫자 연두, 주석 그린 등 토큰 전면 채색.
+  **자동완성(IntelliSense 근사)**: 타이핑하면 커서 옆에 완성 팝업 — `p` → print/pass/pow…
+  (키워드+내장함수+버퍼의 내 변수·함수, 접두사 우선 + 포함 매칭), `random.` → choice/choices/
+  sample/shuffle… (파이썬 random/math/os/sys/json/re/datetime 등 + JS console/Math/JSON/
+  document 등 모듈 멤버 사전, 미지의 객체엔 제네릭 메서드), 항목마다 출처 태그 표시,
+  ↑↓/Enter/Tab 선택, Ctrl+Space 수동 호출. 전부 오프라인 내장 사전.
   **RUN 버튼**: 활성 파일을 자동 저장 후 터미널(없으면 자동 생성)에서 실행 —
   py/js/ts/sh/swift/go/rs/c/cpp/objc(-framework Foundation)/java/rb/php/pl/lua 러너 내장,
   html은 기본 브라우저로. 경로 공백·따옴표 셸 이스케이프 처리.

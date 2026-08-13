@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.27.1",
+  version: "0.28.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -3250,6 +3250,175 @@ OmniOS.register("ce", {
     }
   },
 
+  // 언어별 완성 사전 — keywords/builtins + 모듈 멤버 (VSCode식 IntelliSense 근사)
+  DICTS: {
+    python: {
+      keywords: ("and as assert async await break class continue def del elif else except finally "
+        + "for from global if import in is lambda nonlocal not or pass raise return try while with yield "
+        + "True False None self").split(" "),
+      builtins: ("print len range open input str int float bool list dict set tuple enumerate zip map "
+        + "filter sorted reversed sum min max abs round pow divmod type isinstance issubclass super "
+        + "hasattr getattr setattr delattr callable repr format vars dir id hash iter next any all "
+        + "exec eval compile globals locals bytes bytearray frozenset slice staticmethod classmethod "
+        + "property Exception ValueError TypeError KeyError IndexError RuntimeError StopIteration "
+        + "random math os sys time json re string datetime collections itertools functools pathlib "
+        + "subprocess threading argparse typing").split(" "),
+      members: {
+        random: "choice choices sample shuffle randint random uniform randrange seed gauss betavariate triangular".split(" "),
+        math: "pi e tau inf nan sqrt floor ceil sin cos tan asin acos atan atan2 log log2 log10 exp pow fabs factorial gcd degrees radians hypot trunc isclose".split(" "),
+        os: "path getcwd chdir listdir mkdir makedirs remove rmdir rename environ system popen sep linesep name cpu_count".split(" "),
+        sys: "argv exit path stdin stdout stderr platform version maxsize executable".split(" "),
+        time: "time sleep monotonic perf_counter strftime strptime localtime gmtime ctime time_ns".split(" "),
+        json: "dumps loads dump load JSONDecodeError".split(" "),
+        re: "match search findall finditer sub subn split compile fullmatch escape IGNORECASE MULTILINE DOTALL".split(" "),
+        string: "ascii_letters ascii_lowercase ascii_uppercase digits punctuation whitespace hexdigits".split(" "),
+        datetime: "datetime date time timedelta timezone now today utcnow fromtimestamp strftime strptime".split(" "),
+        collections: "Counter defaultdict deque namedtuple OrderedDict ChainMap".split(" "),
+        itertools: "count cycle repeat chain product permutations combinations groupby islice zip_longest".split(" "),
+        functools: "reduce partial lru_cache wraps cache cmp_to_key".split(" "),
+        subprocess: "run Popen call check_output check_call PIPE DEVNULL".split(" "),
+      },
+      generic: ("append extend insert remove pop clear index count sort reverse copy keys values items "
+        + "get update setdefault add discard union intersection join split strip lstrip rstrip replace "
+        + "startswith endswith find rfind upper lower title capitalize format encode decode isdigit "
+        + "isalpha isalnum splitlines zfill ljust rjust center read write readlines close").split(" "),
+    },
+    js: {
+      keywords: ("const let var function return if else for while do switch case default break continue "
+        + "class extends constructor new this super import export from async await try catch finally "
+        + "throw typeof instanceof in of delete void yield static get set null undefined true false").split(" "),
+      builtins: ("console Math JSON Object Array String Number Boolean Promise Date RegExp Map Set "
+        + "WeakMap Symbol Error TypeError parseInt parseFloat isNaN isFinite fetch setTimeout "
+        + "setInterval clearTimeout clearInterval requestAnimationFrame document window navigator "
+        + "localStorage sessionStorage location history alert confirm prompt structuredClone "
+        + "encodeURIComponent decodeURIComponent btoa atob").split(" "),
+      members: {
+        console: "log error warn info debug table trace time timeEnd group groupEnd assert count dir".split(" "),
+        Math: "floor ceil round random abs max min sqrt cbrt pow hypot sin cos tan atan2 log log2 log10 exp sign trunc PI E".split(" "),
+        JSON: "parse stringify".split(" "),
+        Object: "keys values entries assign freeze create defineProperty getPrototypeOf fromEntries hasOwn".split(" "),
+        Array: "isArray from of".split(" "),
+        Promise: "all allSettled race any resolve reject".split(" "),
+        Number: "parseInt parseFloat isInteger isFinite isNaN MAX_SAFE_INTEGER EPSILON".split(" "),
+        String: "fromCharCode fromCodePoint raw".split(" "),
+        Date: "now parse UTC".split(" "),
+        document: "getElementById querySelector querySelectorAll createElement createTextNode addEventListener body head title".split(" "),
+        window: "addEventListener removeEventListener requestAnimationFrame innerWidth innerHeight devicePixelRatio open close scrollTo".split(" "),
+        localStorage: "getItem setItem removeItem clear key length".split(" "),
+      },
+      generic: ("map filter reduce forEach find findIndex some every includes indexOf lastIndexOf push "
+        + "pop shift unshift slice splice concat join reverse sort flat flatMap fill keys values entries "
+        + "length split replace replaceAll trim trimStart trimEnd toUpperCase toLowerCase padStart "
+        + "padEnd startsWith endsWith charAt charCodeAt codePointAt repeat substring at then catch "
+        + "finally addEventListener removeEventListener appendChild removeChild classList style dataset "
+        + "textContent innerHTML value checked disabled hidden getAttribute setAttribute toString "
+        + "toFixed hasOwnProperty").split(" "),
+    },
+    c: {
+      keywords: ("auto break case char const continue default do double else enum extern float for goto "
+        + "if inline int long register return short signed sizeof static struct switch typedef union "
+        + "unsigned void volatile while bool true false class public private protected virtual override "
+        + "namespace using new delete template typename nullptr NULL NSString NSArray NSDictionary "
+        + "NSNumber NSData NSObject BOOL YES NO id instancetype").split(" "),
+      builtins: ("printf sprintf snprintf fprintf scanf sscanf malloc calloc realloc free memcpy memset "
+        + "memcmp strlen strcpy strncpy strcmp strncmp strcat strstr strchr fopen fclose fread fwrite "
+        + "fgets fputs fseek ftell exit abs rand srand atoi atof qsort main NSLog "
+        + "dispatch_async dispatch_get_main_queue").split(" "),
+      members: {},
+      generic: [],
+    },
+    shell: {
+      keywords: "if then else elif fi for while do done case esac function in return local export".split(" "),
+      builtins: ("echo cd ls pwd cat grep sed awk cut sort uniq head tail find xargs chmod chown mkdir "
+        + "rmdir rm cp mv touch which curl wget tar zip unzip ssh scp git python3 node npm brew open "
+        + "kill ps top df du date sleep read printf source alias history clear env set unset").split(" "),
+      members: { git: "add commit push pull clone status log diff branch checkout merge rebase stash reset fetch remote tag".split(" ") },
+      generic: [],
+    },
+  },
+
+  langOf(name) {
+    const ext = (name || "").split(".").pop().toLowerCase();
+    if (ext === "py") return "python";
+    if (["js", "mjs", "cjs", "jsx", "ts", "tsx", "json", "html", "htm"].includes(ext)) return "js";
+    if (["c", "cpp", "cc", "h", "hpp", "ino", "m", "mm", "java", "swift", "rs", "go"].includes(ext)) return "c";
+    if (["sh", "zsh", "bash"].includes(ext)) return "shell";
+    return null;
+  },
+
+  bufferWords(cm, exclude) {
+    const words = new Set();
+    const re = /[A-Za-z_][A-Za-z0-9_]{2,}/g;
+    const text = cm.getValue();
+    let m;
+    while ((m = re.exec(text)) !== null && words.size < 400) words.add(m[0]);
+    words.delete(exclude);
+    return [...words];
+  },
+
+  hintFn(cm) {
+    const CM = window.CodeMirror;
+    const cur = cm.getCursor();
+    const tok = cm.getTokenAt(cur);
+    if (/\b(comment|string)\b/.test(tok.type || "")) return null;
+    const line = cm.getLine(cur.line).slice(0, cur.ch);
+    const f = this._files[this._active];
+    const lang = this.langOf(f && f.name) || "js";
+    const D = this.DICTS[lang];
+
+    // receiver.partial — 모듈/객체 멤버 완성
+    const dot = line.match(/([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z0-9_]*)$/);
+    let cands = [];
+    let from, to = CM.Pos(cur.line, cur.ch);
+    if (dot) {
+      const partial = dot[2];
+      from = CM.Pos(cur.line, cur.ch - partial.length);
+      const members = D.members[dot[1]];
+      const pool = members
+        ? members.map((t) => ({ text: t, kind: dot[1] }))
+        : D.generic.map((t) => ({ text: t, kind: "method" }));
+      cands = pool.filter((c) => c.text.startsWith(partial));
+    } else {
+      const word = line.match(/([A-Za-z_][A-Za-z0-9_]*)$/);
+      if (!word) return null;
+      const prefix = word[1];
+      from = CM.Pos(cur.line, cur.ch - prefix.length);
+      const pool = [
+        ...D.keywords.map((t) => ({ text: t, kind: "keyword" })),
+        ...D.builtins.map((t) => ({ text: t, kind: "builtin" })),
+        ...this.bufferWords(cm, prefix).map((t) => ({ text: t, kind: "word" })),
+      ];
+      const seen = new Set();
+      const starts = [];
+      const contains = [];
+      for (const c of pool) {
+        if (seen.has(c.text)) continue;
+        seen.add(c.text);
+        const lower = c.text.toLowerCase();
+        const p = prefix.toLowerCase();
+        if (lower.startsWith(p)) starts.push(c);
+        else if (lower.includes(p)) contains.push(c);
+      }
+      cands = [...starts, ...contains];
+    }
+    if (!cands.length) return null;
+    return {
+      list: cands.slice(0, 60).map((c) => ({
+        text: c.text,
+        render: (el, data, item) => {
+          const name = document.createElement("span");
+          name.textContent = c.text;
+          const kind = document.createElement("span");
+          kind.className = "hint-kind";
+          kind.textContent = c.kind.toUpperCase();
+          el.append(name, kind);
+        },
+      })),
+      from,
+      to,
+    };
+  },
+
   ensureCM() {
     if (this._cm) return this._cm;
     if (typeof window.CodeMirror === "undefined") return null;
@@ -3261,7 +3430,13 @@ OmniOS.register("ce", {
       extraKeys: {
         "Cmd-S": () => this.saveActive(),
         "Ctrl-S": () => this.saveActive(),
+        "Ctrl-Space": (cm) => this.showHints(cm),
       },
+    });
+    // VSCode처럼 타이핑하는 동안 자동으로 완성 팝업
+    this._cm.on("inputRead", (cm, change) => {
+      const ch = change.text[change.text.length - 1];
+      if (/[A-Za-z_.]$/.test(ch)) this.showHints(cm);
     });
     this._cm.on("change", () => {
       const f = this._files[this._active];
@@ -3271,6 +3446,15 @@ OmniOS.register("ce", {
       }
     });
     return this._cm;
+  },
+
+  showHints(cm) {
+    if (cm.state.completionActive) return; // 이미 열려 있으면 필터링은 애드온이 처리
+    cm.showHint({
+      hint: (c) => this.hintFn(c),
+      completeSingle: false,
+      alignWithWord: true,
+    });
   },
 
   modeFor(name) {
