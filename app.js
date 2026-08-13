@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.25.0",
+  version: "0.26.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -106,10 +106,11 @@ OmniOS.register("proj", {
       fDesc: $("pjf-desc"), fTags: $("pjf-tags"), fTarget: $("pjf-target"),
       fLink: $("pjf-link"), fCancel: $("pjf-cancel"), fCreate: $("pjf-create"),
       editor: $("pj-editor"), edName: $("pj-ed-name"), edHost: $("pj-ed-host"),
-      edHint: $("pj-ed-hint"), edR3d: $("pj-ed-r3d"), edClose: $("pj-ed-close"),
+      edHint: $("pj-ed-hint"), edTools: $("pj-ed-tools"), edClose: $("pj-ed-close"),
     };
     this.els.edClose.addEventListener("click", () => this.closeEditor());
-    this.els.edR3d.addEventListener("click", () => this.mountPanel("r3d"));
+    this.els.edTools.querySelectorAll("button[data-tool]").forEach((b) =>
+      b.addEventListener("click", () => this.mountPanel(b.dataset.tool)));
     window.addEventListener("mousedown", (e) => {
       if (this._ctx && !this._ctx.contains(e.target)) this.hideMenu();
     });
@@ -361,8 +362,9 @@ OmniOS.register("proj", {
     if (px + r.width + 180 > window.innerWidth) sub.classList.add("flip-left");
   },
 
-  // ── project editor: 기존 패널을 도구로 이식 ──
+  // ── project editor: 기존 패널을 도구로 이식 (도구 여러 개, 홈 위치 기억) ──
   _edProject: null,
+  _homes: {},
 
   openEditor(p) {
     this._edProject = p;
@@ -371,29 +373,44 @@ OmniOS.register("proj", {
     this.els.list.hidden = true;
     this.els.empty.hidden = true;
     this.els.edHint.hidden = false;
+    this.syncToolChips(null);
+  },
+
+  syncToolChips(key) {
+    this.els.edTools.querySelectorAll("button[data-tool]").forEach((b) =>
+      b.classList.toggle("active", b.dataset.tool === key));
   },
 
   mountPanel(key) {
     const panel = document.getElementById(`panel-${key}`);
-    if (!panel || panel.classList.contains("pj-embedded")) return;
-    if (!this._r3dHome) {
-      this._r3dHome = { parent: panel.parentElement, next: panel.nextElementSibling };
+    if (!panel) return;
+    if (panel.classList.contains("pj-embedded")) return; // 이미 이 도구
+    this.unmountPanel(); // 다른 도구가 올라와 있으면 먼저 원위치
+    if (!this._homes[panel.id]) {
+      this._homes[panel.id] = {
+        parent: panel.parentElement,
+        next: panel.nextElementSibling,
+      };
     }
     this.els.edHost.appendChild(panel);
     panel.classList.add("active", "pj-embedded");
     this.els.edHint.hidden = true;
-    if (OmniOS.modules[key] && OmniOS.modules[key].resize) OmniOS.modules[key].resize();
+    this.syncToolChips(key);
+    const mod = OmniOS.modules[key];
+    if (mod && mod.resize) mod.resize();
   },
 
   unmountPanel() {
     const panel = document.querySelector(".pj-ed-host .panel.pj-embedded");
-    if (!panel || !this._r3dHome) return;
+    if (!panel) return;
+    const home = this._homes[panel.id];
     panel.classList.remove("pj-embedded");
-    this._r3dHome.parent.insertBefore(panel, this._r3dHome.next);
+    if (home) home.parent.insertBefore(panel, home.next);
     // 사이드바에서 그 패널이 선택돼 있을 때만 계속 표시
     const cur = document.querySelector(".nav-item.active");
     panel.classList.toggle("active",
       !!cur && `panel-${cur.dataset.panel}` === panel.id);
+    this.syncToolChips(null);
   },
 
   closeEditor() {
@@ -2908,6 +2925,418 @@ OmniOS.register("r3d", {
         ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
       }
     }
+  },
+});
+
+// ---------- module: CODE EDITOR (files + CodeMirror + PTY terminals) ----------
+OmniOS.register("ce", {
+  els: null,
+  _cm: null,
+  _files: [],       // {path, name, doc, dirty, mode}
+  _active: -1,
+  _root: null,
+  _terms: [],       // {tid, term, fit, el, tab, dead, n}
+  _termActive: -1,
+  _termN: 0,
+  _booted: false,
+
+  MODES: {
+    js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
+    ts: "text/typescript", tsx: "text/typescript",
+    json: { name: "javascript", json: true },
+    html: "htmlmixed", htm: "htmlmixed",
+    xml: "xml", svg: "xml", plist: "xml",
+    css: "css",
+    py: "python",
+    sh: "shell", zsh: "shell", bash: "shell",
+    md: "markdown", markdown: "markdown",
+    yml: "yaml", yaml: "yaml",
+    rs: "rust", go: "go", swift: "swift", toml: "toml",
+    c: "text/x-csrc", h: "text/x-c++src", cpp: "text/x-c++src",
+    hpp: "text/x-c++src", cc: "text/x-c++src", ino: "text/x-c++src",
+    m: "text/x-objectivec", mm: "text/x-objectivec", java: "text/x-java",
+  },
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      panel: $("panel-ce"),
+      root: $("ce-root"), msg: $("ce-msg"), open: $("ce-open"),
+      tree: $("ce-tree"), treeEmpty: $("ce-tree-empty"),
+      tabs: $("ce-tabs"), editor: $("ce-editor"), editorEmpty: $("ce-editor-empty"),
+      termwrap: $("ce-termwrap"), termtabs: $("ce-termtabs"),
+      termNew: $("ce-term-new"), termToggle: $("ce-term-toggle"),
+      termhost: $("ce-termhost"),
+    };
+    this.els.open.addEventListener("click", () => this.openFolder());
+    this.els.termNew.addEventListener("click", () => this.newTerm());
+    this.els.termToggle.addEventListener("click", () => this.toggleTerms());
+    window.addEventListener("resize", () => this.fitTerms());
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "ce") {
+        this.boot();
+        setTimeout(() => {
+          if (this._cm) this._cm.refresh();
+          this.fitTerms();
+        }, 50);
+      }
+    });
+    // 터미널 출력 푸시 수신 (네이티브 → JS)
+    window.OmniCE = {
+      _data: (tid, b64) => {
+        const t = this._terms.find((x) => x.tid === tid);
+        if (!t) return;
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        t.term.write(bytes);
+      },
+      _exit: (tid) => {
+        const t = this._terms.find((x) => x.tid === tid);
+        if (!t || t.dead) return;
+        t.dead = true;
+        t.term.write("\r\n\x1b[38;5;110m[PROCESS EXITED]\x1b[0m\r\n");
+        this.renderTermTabs();
+      },
+    };
+  },
+
+  boot() {
+    if (this._booted) return;
+    this._booted = true;
+    if (!OmniNative.available) {
+      this.flash("BROWSER DEV \u2014 FILES & TERMINAL NEED THE NATIVE APP");
+      this.els.open.disabled = true;
+      this.els.termNew.disabled = true;
+      return;
+    }
+    // 최근 폴더 자동 재오픈
+    const last = localStorage.getItem("omni.ce.root");
+    if (last) {
+      OmniNative.request("ce.addRoot", JSON.stringify({ path: last }), 8000)
+        .then((r) => {
+          if (r && r.ok) this.setRoot(r.path);
+        })
+        .catch(() => {});
+    }
+  },
+
+  flash(text, tone) {
+    const el = this.els.msg;
+    el.textContent = text;
+    el.className = `ts-item${tone ? " " + tone : ""}`;
+    clearTimeout(this._msgT);
+    if (tone === "ok") {
+      this._msgT = setTimeout(() => { el.textContent = ""; }, 2500);
+    }
+  },
+
+  async openFolder() {
+    try {
+      const r = await OmniNative.request("ce.pickFolder", null, 120000);
+      if (r && r.ok) {
+        localStorage.setItem("omni.ce.root", r.path);
+        this.setRoot(r.path);
+      }
+    } catch (e) {}
+  },
+
+  setRoot(path) {
+    this._root = path;
+    this.els.root.textContent = path.replace(/^\/Users\/[^/]+/, "~").toUpperCase();
+    this.els.treeEmpty.hidden = true;
+    this.els.tree.querySelectorAll(".ce-node, .ce-kids").forEach((n) => n.remove());
+    this.expandDir(path, this.els.tree, 0);
+  },
+
+  async expandDir(path, container, depth) {
+    let r;
+    try {
+      r = await OmniNative.request("ce.tree", JSON.stringify({ path }), 10000);
+    } catch (e) {
+      return;
+    }
+    if (!r || !r.ok) return;
+    for (const ent of r.entries) {
+      const node = document.createElement("div");
+      node.className = `ce-node${ent.dir ? " dir" : ""}`;
+      node.style.paddingLeft = `${6 + depth * 12}px`;
+      const glyph = document.createElement("span");
+      glyph.className = "glyph";
+      glyph.textContent = ent.dir ? "\u25B8" : "\u00B7";
+      const label = document.createElement("span");
+      label.textContent = ent.name;
+      node.append(glyph, label);
+      container.appendChild(node);
+      const full = `${path}/${ent.name}`;
+      if (ent.dir) {
+        const kids = document.createElement("div");
+        kids.className = "ce-kids";
+        container.appendChild(kids);
+        node.addEventListener("click", () => {
+          const open = kids.classList.toggle("open");
+          glyph.textContent = open ? "\u25BE" : "\u25B8";
+          if (open && !kids.dataset.loaded) {
+            kids.dataset.loaded = "1";
+            this.expandDir(full, kids, depth + 1);
+          }
+        });
+      } else {
+        node.addEventListener("click", () => {
+          this.els.tree.querySelectorAll(".ce-node.active")
+            .forEach((n) => n.classList.remove("active"));
+          node.classList.add("active");
+          this.openFile(full);
+        });
+      }
+    }
+  },
+
+  ensureCM() {
+    if (this._cm) return this._cm;
+    if (typeof window.CodeMirror === "undefined") return null;
+    this._cm = window.CodeMirror(this.els.editor, {
+      mode: "text/plain",
+      lineNumbers: true,
+      indentUnit: 2,
+      tabSize: 4,
+      extraKeys: {
+        "Cmd-S": () => this.saveActive(),
+        "Ctrl-S": () => this.saveActive(),
+      },
+    });
+    this._cm.on("change", () => {
+      const f = this._files[this._active];
+      if (f && !f.dirty) {
+        f.dirty = true;
+        this.renderTabs();
+      }
+    });
+    return this._cm;
+  },
+
+  modeFor(name) {
+    const ext = name.split(".").pop().toLowerCase();
+    return this.MODES[ext] || "text/plain";
+  },
+
+  async openFile(path) {
+    const existing = this._files.findIndex((f) => f.path === path);
+    if (existing >= 0) {
+      this.switchTab(existing);
+      return;
+    }
+    let r;
+    try {
+      r = await OmniNative.request("ce.read", JSON.stringify({ path }), 15000);
+    } catch (e) {
+      return;
+    }
+    if (!r || !r.ok) {
+      this.flash(r && r.binary ? "BINARY FILE \u2014 NOT EDITABLE"
+        : r && r.tooBig ? "FILE OVER 5MB" : "READ FAILED", "alert");
+      return;
+    }
+    const cm = this.ensureCM();
+    if (!cm) return;
+    const name = path.split("/").pop();
+    const mode = this.modeFor(name);
+    const doc = window.CodeMirror.Doc(r.text, mode);
+    this._files.push({ path, name, doc, dirty: false });
+    this.switchTab(this._files.length - 1);
+  },
+
+  switchTab(i) {
+    const f = this._files[i];
+    if (!f) return;
+    this._active = i;
+    const cm = this.ensureCM();
+    cm.swapDoc(f.doc);
+    this.els.editorEmpty.hidden = true;
+    this.renderTabs();
+    setTimeout(() => cm.refresh(), 0);
+    cm.focus();
+  },
+
+  closeTab(i) {
+    this._files.splice(i, 1);
+    if (this._files.length === 0) {
+      this._active = -1;
+      this.els.editorEmpty.hidden = false;
+      if (this._cm) this._cm.swapDoc(window.CodeMirror.Doc("", "text/plain"));
+      this.renderTabs();
+      return;
+    }
+    this.switchTab(Math.min(i, this._files.length - 1));
+  },
+
+  renderTabs() {
+    const bar = this.els.tabs;
+    bar.hidden = this._files.length === 0;
+    bar.textContent = "";
+    this._files.forEach((f, i) => {
+      const tab = document.createElement("div");
+      tab.className = `r3d-tab${i === this._active ? " active" : ""}`;
+      const label = document.createElement("span");
+      label.className = "r3d-tab-label";
+      label.textContent = (f.dirty ? "\u25CF " : "") + f.name;
+      label.title = f.path;
+      const x = document.createElement("span");
+      x.className = "r3d-tab-x";
+      x.textContent = "\u2715";
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.closeTab(i);
+      });
+      tab.append(label, x);
+      tab.addEventListener("click", () => this.switchTab(i));
+      bar.appendChild(tab);
+    });
+  },
+
+  async saveActive() {
+    const f = this._files[this._active];
+    if (!f) return;
+    try {
+      const r = await OmniNative.request("ce.write",
+        JSON.stringify({ path: f.path, data: f.doc.getValue() }), 15000);
+      if (r && r.ok) {
+        f.dirty = false;
+        this.renderTabs();
+        this.flash(`SAVED ${f.name}`, "ok");
+      } else {
+        this.flash("SAVE FAILED", "alert");
+      }
+    } catch (e) {
+      this.flash("SAVE FAILED", "alert");
+    }
+  },
+
+  // ── 터미널 (xterm.js + 네이티브 PTY) ──
+  async newTerm() {
+    if (typeof window.Terminal === "undefined") return;
+    this.els.termhost.hidden = false;
+    this.els.termToggle.textContent = "\u25BE";
+    const el = document.createElement("div");
+    el.className = "ce-terminal";
+    this.els.termhost.appendChild(el);
+    const term = new window.Terminal({
+      fontFamily: "'Share Tech Mono', Menlo, monospace",
+      fontSize: 12,
+      cursorBlink: true,
+      theme: {
+        background: "#020813",
+        foreground: "#bfe9f7",
+        cursor: "#35d6ff",
+        selectionBackground: "rgba(53, 214, 255, 0.3)",
+      },
+    });
+    const fit = new window.FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(el);
+    const entry = { tid: null, term, fit, el, dead: false, n: ++this._termN };
+    this._terms.push(entry);
+    this.switchTerm(this._terms.length - 1);
+    fit.fit();
+    try {
+      const r = await OmniNative.request("ce.termOpen", JSON.stringify({
+        path: this._root || "", cols: term.cols, rows: term.rows,
+      }), 10000);
+      if (!r || !r.ok) throw new Error("term open failed");
+      entry.tid = r.tid;
+      term.onData((d) => {
+        const bytes = new TextEncoder().encode(d);
+        let bin = "";
+        bytes.forEach((b) => { bin += String.fromCharCode(b); });
+        OmniNative.request("ce.termWrite", JSON.stringify({
+          tid: entry.tid, data: btoa(bin),
+        })).catch(() => {});
+      });
+      term.onResize(({ cols, rows }) => {
+        OmniNative.request("ce.termResize", JSON.stringify({
+          tid: entry.tid, cols, rows,
+        })).catch(() => {});
+      });
+      term.focus();
+    } catch (e) {
+      entry.dead = true;
+      term.write("\x1b[38;5;203mTERMINAL UNAVAILABLE (NATIVE APP ONLY)\x1b[0m");
+    }
+    this.renderTermTabs();
+  },
+
+  switchTerm(i) {
+    this._termActive = i;
+    this._terms.forEach((t, k) => t.el.classList.toggle("active", k === i));
+    this.renderTermTabs();
+    const t = this._terms[i];
+    if (t) {
+      setTimeout(() => {
+        t.fit.fit();
+        t.term.focus();
+      }, 0);
+    }
+  },
+
+  closeTerm(i) {
+    const t = this._terms[i];
+    if (!t) return;
+    if (t.tid != null) {
+      OmniNative.request("ce.termClose", JSON.stringify({ tid: t.tid }))
+        .catch(() => {});
+    }
+    t.term.dispose();
+    t.el.remove();
+    this._terms.splice(i, 1);
+    if (this._terms.length === 0) {
+      this._termActive = -1;
+      this.els.termhost.hidden = true;
+      this.els.termToggle.textContent = "\u25B4";
+    } else {
+      this.switchTerm(Math.min(i, this._terms.length - 1));
+    }
+    this.renderTermTabs();
+  },
+
+  renderTermTabs() {
+    const bar = this.els.termtabs;
+    bar.textContent = "";
+    this._terms.forEach((t, i) => {
+      const tab = document.createElement("span");
+      tab.className = `ce-termtab${i === this._termActive ? " active" : ""}`
+        + (t.dead ? " dead" : "");
+      const label = document.createElement("span");
+      label.textContent = `TERM ${t.n}`;
+      const x = document.createElement("span");
+      x.className = "x";
+      x.textContent = "\u2715";
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.closeTerm(i);
+      });
+      tab.append(label, x);
+      tab.addEventListener("click", () => this.switchTerm(i));
+      bar.appendChild(tab);
+    });
+  },
+
+  toggleTerms() {
+    const host = this.els.termhost;
+    host.hidden = !host.hidden;
+    this.els.termToggle.textContent = host.hidden ? "\u25B4" : "\u25BE";
+    if (!host.hidden) this.fitTerms();
+  },
+
+  fitTerms() {
+    const t = this._terms[this._termActive];
+    if (t && !this.els.termhost.hidden) {
+      try { t.fit.fit(); } catch (e) {}
+    }
+  },
+
+  resize() {
+    if (this._cm) this._cm.refresh();
+    this.fitTerms();
   },
 });
 

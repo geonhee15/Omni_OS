@@ -11,6 +11,7 @@
     rel="stylesheet"
   />
   <link rel="stylesheet" href="vendor/codemirror/codemirror.css" />
+  <link rel="stylesheet" href="vendor/xterm/xterm.css" />
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
     {
@@ -55,6 +56,10 @@
       <button class="nav-item" data-panel="ino">
         <span class="nav-icon">&#8734;</span>
         <span class="nav-label">ARDUINO IDE</span>
+      </button>
+      <button class="nav-item" data-panel="ce">
+        <span class="nav-icon">&#10216;&#10217;</span>
+        <span class="nav-label">CODE EDITOR</span>
       </button>
       <button class="nav-item" data-panel="arc">
         <span class="nav-icon">&#9678;</span>
@@ -102,8 +107,10 @@
       <div class="pj-editor" id="pj-editor" hidden>
         <div class="pj-ed-bar">
           <span class="pj-ed-title">EDITOR // <span id="pj-ed-name">&mdash;</span></span>
-          <div class="pj-ed-tools">
-            <button class="ig-tab" id="pj-ed-r3d">RENDER_3D</button>
+          <div class="pj-ed-tools" id="pj-ed-tools">
+            <button class="ig-tab" data-tool="r3d">RENDER_3D</button>
+            <button class="ig-tab" data-tool="ino">ARDUINO IDE</button>
+            <button class="ig-tab" data-tool="ce">CODE EDITOR</button>
           </div>
           <span class="ts-spacer"></span>
           <button class="ig-tab" id="pj-ed-close">&#10005; CLOSE</button>
@@ -554,6 +561,43 @@
       </div>
     </section>
 
+    <!-- panel: CODE EDITOR (files + CodeMirror + PTY terminals) -->
+    <section class="panel panel-ce" id="panel-ce">
+      <div class="sp1-topstrip">
+        <span class="sp1-title">CODE EDITOR</span>
+        <span class="ts-item" id="ce-root">NO FOLDER</span>
+        <span class="ts-spacer"></span>
+        <span class="ts-item" id="ce-msg"></span>
+        <button class="ig-tab" id="ce-open">OPEN FOLDER</button>
+      </div>
+      <div class="ce-body">
+        <div class="ce-tree" id="ce-tree">
+          <div class="ce-tree-empty" id="ce-tree-empty">
+            OPEN A FOLDER<br />TO BROWSE FILES
+          </div>
+        </div>
+        <div class="ce-main">
+          <div class="r3d-tabs ce-tabs" id="ce-tabs" hidden></div>
+          <div class="ce-editor ino-editor" id="ce-editor">
+            <div class="ino-editor-empty" id="ce-editor-empty">
+              <div class="r3d-drop-title">CODE EDITOR</div>
+              <div class="r3d-drop-sub">SELECT A FILE FROM THE TREE &mdash; CMD+S SAVES</div>
+            </div>
+          </div>
+          <div class="ce-termwrap" id="ce-termwrap">
+            <div class="ce-termbar">
+              <span class="r3l-label">TERMINAL</span>
+              <div class="ce-termtabs" id="ce-termtabs"></div>
+              <button class="ig-tab" id="ce-term-new">+ TERM</button>
+              <span class="ts-spacer"></span>
+              <button class="ig-tab" id="ce-term-toggle">&#9662;</button>
+            </div>
+            <div class="ce-termhost" id="ce-termhost" hidden></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- panel 4: ARC-SCAN (room lidar point cloud) -->
     <section class="panel panel-arc" id="panel-arc">
       <div class="sp1-topstrip">
@@ -647,9 +691,9 @@
     <footer class="bottombar">
       <span id="uptime">UPTIME 00:00:00</span>
       <span class="divider">|</span>
-      <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
+      <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE</span>
       <span class="divider">|</span>
-      <span>v0.25.0</span>
+      <span>v0.26.0</span>
     </footer>
   </div>
 
@@ -667,6 +711,21 @@
 
   <script src="vendor/codemirror/codemirror.min.js"></script>
   <script src="vendor/codemirror/clike.js"></script>
+  <script src="vendor/codemirror/modes/javascript.js"></script>
+  <script src="vendor/codemirror/modes/xml.js"></script>
+  <script src="vendor/codemirror/modes/css.js"></script>
+  <script src="vendor/codemirror/modes/htmlmixed.js"></script>
+  <script src="vendor/codemirror/modes/python.js"></script>
+  <script src="vendor/codemirror/modes/shell.js"></script>
+  <script src="vendor/codemirror/modes/markdown.js"></script>
+  <script src="vendor/codemirror/modes/yaml.js"></script>
+  <script src="vendor/codemirror/modes/simple.js"></script>
+  <script src="vendor/codemirror/modes/rust.js"></script>
+  <script src="vendor/codemirror/modes/go.js"></script>
+  <script src="vendor/codemirror/modes/swift.js"></script>
+  <script src="vendor/codemirror/modes/toml.js"></script>
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="vendor/xterm/xterm-addon-fit.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

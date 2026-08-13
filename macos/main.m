@@ -3,6 +3,7 @@
 #import <signal.h>
 #import "sp1_status.h"
 #import "sysmon.h"
+#import "code_editor.h"
 #import <CommonCrypto/CommonDigest.h>
 
 // ── 오너 잠금 ──
@@ -113,6 +114,8 @@ static NSString *ArcSavesDir(void) {
 @property (strong) OmniSchemeHandler *schemeHandler;
 @property (strong) NSURLSessionWebSocketTask *arcTask;
 @property (strong) ArduinoBridge *arduino;
+@property (strong) OmniTermManager *terms;
+@property (strong) NSMutableSet<NSString *> *ceRoots; // CODE EDITOR가 열어둔 폴더들
 @end
 
 @implementation AppDelegate
@@ -203,7 +206,21 @@ static NSString *ArcSavesDir(void) {
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self.terms closeAll]; // 좀비 zsh 방지
     SP1ResumeWatcher();
+}
+
+// CODE EDITOR: 경로가 열어둔 폴더 안인지 검증
+- (NSString *)ceValidatePath:(NSString *)path {
+    NSString *std = path.stringByStandardizingPath;
+    if (std == nil) return nil;
+    for (NSString *root in self.ceRoots) {
+        if ([std isEqualToString:root]
+            || [std hasPrefix:[root stringByAppendingString:@"/"]]) {
+            return std;
+        }
+    }
+    return nil;
 }
 
 // grant camera access for hand-gesture control (macOS still shows its own
@@ -363,7 +380,87 @@ static NSString *ArcSavesDir(void) {
     NSString *arg = [body[@"arg"] isKindOfClass:[NSString class]] ? body[@"arg"] : nil;
     if (msgId == nil || cmd == nil) return;
 
-    if ([cmd isEqualToString:@"open.url"]) {
+    if ([cmd hasPrefix:@"ce."]) {
+        NSDictionary *a = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+        }
+        if (self.ceRoots == nil) self.ceRoots = [NSMutableSet set];
+        if (self.terms == nil) {
+            __weak AppDelegate *weakSelf = self;
+            self.terms = [[OmniTermManager alloc] initWithEmit:^(NSString *js) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf.webView evaluateJavaScript:js completionHandler:nil];
+                });
+            }];
+        }
+        NSString *argPath = [a[@"path"] isKindOfClass:[NSString class]] ? a[@"path"] : nil;
+
+        if ([cmd isEqualToString:@"ce.pickFolder"]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSOpenPanel *panel = [NSOpenPanel openPanel];
+                panel.canChooseFiles = NO;
+                panel.canChooseDirectories = YES;
+                panel.allowsMultipleSelection = NO;
+                panel.prompt = @"Open";
+                [panel beginSheetModalForWindow:self.window
+                              completionHandler:^(NSModalResponse result) {
+                    if (result == NSModalResponseOK && panel.URL != nil) {
+                        NSString *p = panel.URL.path.stringByStandardizingPath;
+                        [self.ceRoots addObject:p];
+                        [self deliverPayload:@{ @"ok" : @YES, @"path" : p } forId:msgId];
+                    } else {
+                        [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
+                    }
+                }];
+            });
+        } else if ([cmd isEqualToString:@"ce.addRoot"]) {
+            // 최근 폴더 재오픈용 — 존재하는 디렉토리만
+            BOOL isDir = NO;
+            NSString *std = argPath.stringByStandardizingPath;
+            BOOL ok = std != nil
+                && [NSFileManager.defaultManager fileExistsAtPath:std isDirectory:&isDir]
+                && isDir;
+            if (ok) [self.ceRoots addObject:std];
+            [self deliverPayload:@{ @"ok" : @(ok), @"path" : ok ? std : @"" } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.tree"]) {
+            NSString *std = [self ceValidatePath:argPath];
+            [self deliverPayload:(std ? CETree(std) : @{ @"ok" : @NO }) forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.read"]) {
+            NSString *std = [self ceValidatePath:argPath];
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                [self deliverPayload:(std ? CERead(std) : @{ @"ok" : @NO }) forId:msgId];
+            });
+        } else if ([cmd isEqualToString:@"ce.write"]) {
+            NSString *std = [self ceValidatePath:argPath];
+            NSString *text = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
+            BOOL ok = std != nil && text != nil && CEWrite(std, text);
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.termOpen"]) {
+            NSString *cwd = [self ceValidatePath:argPath] ?: NSHomeDirectory();
+            int cols = [a[@"cols"] intValue] ?: 80;
+            int rows = [a[@"rows"] intValue] ?: 24;
+            [self deliverPayload:[self.terms openWithCwd:cwd cols:cols rows:rows]
+                           forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.termWrite"]) {
+            NSString *b64 = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
+            NSData *data = b64 ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
+            BOOL ok = data != nil && [self.terms writeTid:[a[@"tid"] integerValue] data:data];
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.termResize"]) {
+            BOOL ok = [self.terms resizeTid:[a[@"tid"] integerValue]
+                                       cols:[a[@"cols"] intValue]
+                                       rows:[a[@"rows"] intValue]];
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        } else if ([cmd isEqualToString:@"ce.termClose"]) {
+            [self.terms closeTid:[a[@"tid"] integerValue]];
+            [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+        } else {
+            [self deliverPayload:@{ @"ok" : @NO, @"err" : @"unknown ce command" } forId:msgId];
+        }
+    } else if ([cmd isEqualToString:@"open.url"]) {
         // 기본 브라우저로 링크 열기 — http(s)만 허용
         NSString *urlStr = nil;
         if (arg != nil) {

@@ -109,6 +109,13 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   더블클릭으로 기본 크기 복원, 크기는 localStorage에 저장되어 재시작 후에도 유지.
   앱에서는 네이티브 WebSocket 릴레이(NSURLSessionWebSocketTask) 사용 — omni:// 보안 컨텍스트에서
   평문 ws://가 차단되는 문제 회피. 브라우저 개발 모드는 JS WebSocket 폴백
+- **CODE EDITOR** — VSCode 감성의 미니 코드 IDE. **OPEN FOLDER**(최근 폴더 자동 재오픈)로
+  파일 트리(지연 로딩)를 열고, 파일 탭 + CodeMirror 에디터로 편집(Cmd+S 저장, 수정 표시 ●).
+  구문 강조 13종: C/C++/Obj-C/Java·JS/TS·JSON·HTML·CSS·XML·Python·Shell·Markdown·
+  YAML·Rust·Go·Swift·TOML. **진짜 PTY 터미널**(forkpty + zsh + xterm.js) — + TERM으로
+  얼마든지 생성, 터미널 탭 전환·닫기·접기, 열린 폴더에서 시작, 256색·리사이즈 지원.
+  파일 접근은 열어둔 폴더 내부로 제한, 바이너리/5MB 초과 가드. 앱 종료 시 셸 세션 정리.
+  PROJECTS 에디터 모드의 도구(RENDER_3D · ARDUINO IDE · CODE EDITOR)로도 이식 가능.
 - **ARDUINO IDE** — Arduino IDE.app에 번들된 arduino-cli를 백엔드로 쓰는 임베디드 툴체인 패널.
   스케치북(~/Documents/Arduino) 목록·임의 .ino 선택, 보드 포트 스캔(FQBN 자동 감지 + ESP32/UNO/NANO/MEGA 칩),
   VERIFY(컴파일)/UPLOAD(컴파일+플래시) 스트리밍 출력 터미널, 라이브러리 검색·설치·설치 목록,
