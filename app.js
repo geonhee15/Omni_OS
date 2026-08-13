@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.24.1",
+  version: "0.25.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -105,7 +105,18 @@ OmniOS.register("proj", {
       fStatus: $("pjf-status"),
       fDesc: $("pjf-desc"), fTags: $("pjf-tags"), fTarget: $("pjf-target"),
       fLink: $("pjf-link"), fCancel: $("pjf-cancel"), fCreate: $("pjf-create"),
+      editor: $("pj-editor"), edName: $("pj-ed-name"), edHost: $("pj-ed-host"),
+      edHint: $("pj-ed-hint"), edR3d: $("pj-ed-r3d"), edClose: $("pj-ed-close"),
     };
+    this.els.edClose.addEventListener("click", () => this.closeEditor());
+    this.els.edR3d.addEventListener("click", () => this.mountPanel("r3d"));
+    window.addEventListener("mousedown", (e) => {
+      if (this._ctx && !this._ctx.contains(e.target)) this.hideMenu();
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this.hideMenu();
+    });
+    window.addEventListener("blur", () => this.hideMenu());
     this.els.newBtn.addEventListener("click", () => this.openForm());
     this.els.fCancel.addEventListener("click", () => this.closeForm());
     this.els.fCreate.addEventListener("click", () => this.create());
@@ -124,6 +135,10 @@ OmniOS.register("proj", {
     }
     document.addEventListener("omni:panel", (e) => {
       if (e.detail === "proj" && !this._loaded) this.load();
+      if (e.detail !== "proj") {
+        this.hideMenu();
+        if (!this.els.editor.hidden) this.closeEditor();
+      }
     });
   },
 
@@ -234,11 +249,166 @@ OmniOS.register("proj", {
     return { label: `D+${-days}`, cls: "over" };
   },
 
+  // ── row context menu: Reload / Link With Panel / Go To Connected / Editor ──
+  _ctx: null,
+  _r3dHome: null,
+
+  panelChoices() {
+    const out = [];
+    document.querySelectorAll(".nav-item").forEach((btn) => {
+      const key = btn.dataset.panel;
+      if (key === "proj") return;
+      out.push({ key, label: btn.querySelector(".nav-label").textContent });
+    });
+    return out;
+  },
+
+  hideMenu() {
+    if (this._ctx) {
+      this._ctx.remove();
+      this._ctx = null;
+    }
+  },
+
+  showMenu(p, x, y) {
+    this.hideMenu();
+    const menu = document.createElement("div");
+    menu.className = "pj-ctx";
+    const mkItem = (label, opts = {}) => {
+      const it = document.createElement("div");
+      it.className = `pj-ctx-item${opts.disabled ? " disabled" : ""}`;
+      const span = document.createElement("span");
+      span.textContent = label;
+      it.appendChild(span);
+      if (opts.hint) {
+        const h = document.createElement("span");
+        h.textContent = opts.hint;
+        h.style.color = "rgba(111, 168, 201, 0.7)";
+        it.appendChild(h);
+      }
+      if (opts.onClick) {
+        it.addEventListener("click", () => {
+          this.hideMenu();
+          opts.onClick();
+        });
+      }
+      menu.appendChild(it);
+      return it;
+    };
+    const sep = () => {
+      const s = document.createElement("div");
+      s.className = "pj-ctx-sep";
+      menu.appendChild(s);
+    };
+
+    mkItem("RELOAD", { onClick: () => window.location.reload() });
+    sep();
+
+    // Link With Panel — 사이드바 패널 서브메뉴
+    const linkItem = mkItem("LINK WITH PANEL", { hint: "\u25B8" });
+    const sub = document.createElement("div");
+    sub.className = "pj-ctx-sub";
+    for (const c of this.panelChoices()) {
+      const it = document.createElement("div");
+      it.className = "pj-ctx-item";
+      it.textContent = (p.linkedPanel === c.key ? "\u25C6 " : "") + c.label;
+      it.addEventListener("click", () => {
+        p.linkedPanel = c.key;
+        this.persist();
+        this.render();
+        this.hideMenu();
+      });
+      sub.appendChild(it);
+    }
+    if (p.linkedPanel) {
+      const s2 = document.createElement("div");
+      s2.className = "pj-ctx-sep";
+      sub.appendChild(s2);
+      const un = document.createElement("div");
+      un.className = "pj-ctx-item";
+      un.textContent = "UNLINK";
+      un.addEventListener("click", () => {
+        delete p.linkedPanel;
+        this.persist();
+        this.render();
+        this.hideMenu();
+      });
+      sub.appendChild(un);
+    }
+    linkItem.appendChild(sub);
+
+    const linkedLabel = p.linkedPanel
+      ? (this.panelChoices().find((c) => c.key === p.linkedPanel) || {}).label
+      : null;
+    mkItem("GO TO CONNECTED PANEL", {
+      disabled: !linkedLabel,
+      hint: linkedLabel || "",
+      onClick: linkedLabel
+        ? () => OmniOS.modules.nav.show(p.linkedPanel)
+        : null,
+    });
+    sep();
+    mkItem("EDITOR", { onClick: () => this.openEditor(p) });
+
+    document.body.appendChild(menu);
+    this._ctx = menu;
+    // 화면 밖으로 나가지 않게 클램프 + 서브메뉴 방향 결정
+    const r = menu.getBoundingClientRect();
+    const px = Math.min(x, window.innerWidth - r.width - 8);
+    const py = Math.min(y, window.innerHeight - r.height - 8);
+    menu.style.left = `${Math.max(4, px)}px`;
+    menu.style.top = `${Math.max(4, py)}px`;
+    if (px + r.width + 180 > window.innerWidth) sub.classList.add("flip-left");
+  },
+
+  // ── project editor: 기존 패널을 도구로 이식 ──
+  _edProject: null,
+
+  openEditor(p) {
+    this._edProject = p;
+    this.els.edName.textContent = p.name.toUpperCase();
+    this.els.editor.hidden = false;
+    this.els.list.hidden = true;
+    this.els.empty.hidden = true;
+    this.els.edHint.hidden = false;
+  },
+
+  mountPanel(key) {
+    const panel = document.getElementById(`panel-${key}`);
+    if (!panel || panel.classList.contains("pj-embedded")) return;
+    if (!this._r3dHome) {
+      this._r3dHome = { parent: panel.parentElement, next: panel.nextElementSibling };
+    }
+    this.els.edHost.appendChild(panel);
+    panel.classList.add("active", "pj-embedded");
+    this.els.edHint.hidden = true;
+    if (OmniOS.modules[key] && OmniOS.modules[key].resize) OmniOS.modules[key].resize();
+  },
+
+  unmountPanel() {
+    const panel = document.querySelector(".pj-ed-host .panel.pj-embedded");
+    if (!panel || !this._r3dHome) return;
+    panel.classList.remove("pj-embedded");
+    this._r3dHome.parent.insertBefore(panel, this._r3dHome.next);
+    // 사이드바에서 그 패널이 선택돼 있을 때만 계속 표시
+    const cur = document.querySelector(".nav-item.active");
+    panel.classList.toggle("active",
+      !!cur && `panel-${cur.dataset.panel}` === panel.id);
+  },
+
+  closeEditor() {
+    this.unmountPanel();
+    this._edProject = null;
+    this.els.editor.hidden = true;
+    this.render();
+  },
+
   render() {
     const E = this.els;
     const items = this._items;
-    E.empty.hidden = items.length > 0;
-    E.list.hidden = items.length === 0;
+    const inEditor = !E.editor.hidden;
+    E.empty.hidden = inEditor || items.length > 0;
+    E.list.hidden = inEditor || items.length === 0;
     const active = items.filter((p) => p.status === "active").length;
     const done = items.filter((p) => p.status === "done").length;
     E.summary.textContent = items.length
@@ -291,6 +461,14 @@ OmniOS.register("proj", {
         tag.textContent = t.toUpperCase();
         tags.appendChild(tag);
       });
+      if (p.linkedPanel) {
+        const lk = document.createElement("span");
+        lk.className = "pj-tag linked";
+        const c = this.panelChoices().find((x) => x.key === p.linkedPanel);
+        lk.textContent = `\u21C4 ${c ? c.label : p.linkedPanel}`;
+        lk.title = "Linked panel";
+        tags.appendChild(lk);
+      }
       row.appendChild(tags);
 
       const prio = document.createElement("span");
@@ -335,6 +513,11 @@ OmniOS.register("proj", {
         }
       });
       row.appendChild(del);
+
+      row.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        this.showMenu(p, e.clientX, e.clientY);
+      });
 
       E.list.appendChild(row);
     }

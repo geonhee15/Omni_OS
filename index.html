@@ -98,6 +98,24 @@
       </div>
       <div class="pj-list" id="pj-list"></div>
 
+      <!-- project editor (panels mount here as tools) -->
+      <div class="pj-editor" id="pj-editor" hidden>
+        <div class="pj-ed-bar">
+          <span class="pj-ed-title">EDITOR // <span id="pj-ed-name">&mdash;</span></span>
+          <div class="pj-ed-tools">
+            <button class="ig-tab" id="pj-ed-r3d">RENDER_3D</button>
+          </div>
+          <span class="ts-spacer"></span>
+          <button class="ig-tab" id="pj-ed-close">&#10005; CLOSE</button>
+        </div>
+        <div class="pj-ed-host" id="pj-ed-host">
+          <div class="pj-ed-hint" id="pj-ed-hint">
+            <div class="r3d-drop-title">PROJECT EDITOR</div>
+            <div class="r3d-drop-sub">SELECT A TOOL ABOVE &mdash; RENDER_3D OPENS THE 3D EDITOR HERE</div>
+          </div>
+        </div>
+      </div>
+
       <!-- new project dialog -->
       <div class="pj-modal" id="pj-modal" hidden>
         <div class="pj-form">
@@ -631,7 +649,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO</span>
       <span class="divider">|</span>
-      <span>v0.24.1</span>
+      <span>v0.25.0</span>
     </footer>
   </div>
 

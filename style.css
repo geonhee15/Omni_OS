@@ -2223,3 +2223,123 @@ input.arc-paint[hidden] { display: none; }
   gap: 8px;
   margin-top: 14px;
 }
+
+/* project row context menu */
+.pj-ctx {
+  position: fixed;
+  z-index: 50;
+  min-width: 190px;
+  border: 1px solid var(--cyan-soft);
+  background: rgba(3, 12, 24, 0.97);
+  box-shadow: 0 0 24px rgba(53, 214, 255, 0.18);
+  padding: 4px;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+}
+
+.pj-ctx[hidden] { display: none; }
+
+.pj-ctx-item {
+  position: relative;
+  padding: 7px 10px;
+  color: #bfe9f7;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  white-space: nowrap;
+}
+
+.pj-ctx-item:hover { background: rgba(53, 214, 255, 0.12); color: #eafcff; }
+
+.pj-ctx-item.disabled {
+  color: rgba(111, 168, 201, 0.35);
+  pointer-events: none;
+}
+
+.pj-ctx-sep {
+  height: 1px;
+  margin: 3px 6px;
+  background: rgba(53, 214, 255, 0.18);
+}
+
+.pj-ctx-sub {
+  position: absolute;
+  left: 100%;
+  top: -5px;
+  display: none;
+  min-width: 170px;
+  border: 1px solid var(--cyan-soft);
+  background: rgba(3, 12, 24, 0.97);
+  box-shadow: 0 0 24px rgba(53, 214, 255, 0.18);
+  padding: 4px;
+}
+
+.pj-ctx-item:hover > .pj-ctx-sub { display: block; }
+
+.pj-ctx-sub.flip-left {
+  left: auto;
+  right: 100%;
+}
+
+.pj-tag.linked {
+  color: var(--cyan);
+  border-color: rgba(53, 214, 255, 0.45);
+}
+
+/* project editor */
+.pj-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pj-editor[hidden] { display: none; }
+
+.pj-ed-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--cyan-faint);
+  background: rgba(5, 18, 36, 0.5);
+  padding: 8px 14px;
+  flex-shrink: 0;
+}
+
+.pj-ed-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: #eafcff;
+  white-space: nowrap;
+}
+
+.pj-ed-tools {
+  display: flex;
+  gap: 6px;
+}
+
+.pj-ed-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  border: 1px solid var(--cyan-faint);
+  background: rgba(2, 8, 19, 0.4);
+}
+
+.pj-ed-hint {
+  margin: auto;
+  text-align: center;
+}
+
+.pj-ed-hint[hidden] { display: none; }
+
+.pj-ed-host .panel.pj-embedded {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
