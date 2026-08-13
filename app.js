@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.30.1",
+  version: "0.31.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -251,18 +251,23 @@ OmniOS.register("proj", {
     } catch (e) {}
   },
 
-  openForm() {
+  openForm(editItem) {
     const E = this.els;
-    E.fName.value = "";
-    E.fDesc.value = "";
-    E.fTags.value = "";
-    E.fTarget.value = "";
-    E.fLink.value = "";
+    this._editItem = editItem || null;
+    const p = editItem;
+    E.fName.value = p ? p.name : "";
+    E.fDesc.value = p ? (p.desc || "") : "";
+    E.fTags.value = p ? (p.tags || []).join(", ") : "";
+    E.fTarget.value = p ? (p.target || "") : "";
+    E.fLink.value = p ? (p.link || "") : "";
     const pick = (group, v) => group.querySelectorAll("button").forEach((b) =>
       b.classList.toggle("active", b.dataset.v === v));
-    pick(E.fType, "software");
-    pick(E.fPriority, "med");
-    pick(E.fStatus, "planning");
+    pick(E.fType, p ? p.type : "software");
+    pick(E.fPriority, p ? p.priority : "med");
+    pick(E.fStatus, p ? p.status : "planning");
+    E.modal.querySelector(".pj-form-title").textContent =
+      p ? "PROJECT CONFIG" : "NEW PROJECT";
+    E.fCreate.textContent = p ? "SAVE" : "CREATE";
     E.modal.hidden = false;
     E.fName.focus();
   },
@@ -286,6 +291,23 @@ OmniOS.register("proj", {
       return;
     }
     const link = E.fLink.value.trim();
+    if (this._editItem) {
+      // PROJECT CONFIG: 기존 항목 갱신 (id/생성일/폴더/패널 연결은 유지)
+      const it = this._editItem;
+      it.name = name;
+      it.type = this.picked(E.fType) || it.type;
+      it.priority = this.picked(E.fPriority) || it.priority;
+      it.status = this.picked(E.fStatus) || it.status;
+      it.desc = E.fDesc.value.trim();
+      it.tags = E.fTags.value.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 6);
+      it.target = E.fTarget.value || null;
+      it.link = /^https?:\/\//i.test(link) ? link : null;
+      this._editItem = null;
+      this.persist();
+      this.render();
+      this.closeForm();
+      return;
+    }
     const item = {
       id: `p${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`,
       name,
@@ -396,6 +418,7 @@ OmniOS.register("proj", {
 
     mkItem("RELOAD", { onClick: () => window.location.reload() });
     sep();
+    mkItem("PROJECT CONFIG", { onClick: () => this.openForm(p) });
 
     // Link With Panel — 사이드바 패널 서브메뉴
     const linkItem = mkItem("LINK WITH PANEL", { hint: "\u25B8" });
