@@ -7,3 +7,4 @@ Projects/
 Notes/
 Voice/
 voice_engine/venv/
+voice_engine/*.log
