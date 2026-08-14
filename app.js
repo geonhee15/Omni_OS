@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.36.0",
+  version: "0.37.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -6382,7 +6382,10 @@ OmniOS.register("ce", {
 OmniOS.register("arc", {
   TILTS: [30, 20, 10, 0, -10, -20, -30],
   CH_SHADES: [0xeafcff, 0xbfeaff, 0x8fdcff, 0x35d6ff, 0x2fa8d8, 0x2b86b8, 0x275f8e],
-  CH_HEIGHTS: [0.19, 0.16, 0.14, 0.11, 0.09, 0.06, 0.03], // sensor z on mast (m)
+  // 실측 조립 지오메트리 (assembly_layout.scad):
+  // level_z(i) = 26*(7-i) - 4 + horn_top_z(50) [mm] → ch0(+30°) 상단 228mm … ch6(-30°) 72mm
+  CH_HEIGHTS: [0.228, 0.202, 0.176, 0.150, 0.124, 0.098, 0.072], // sensor z on mast (m)
+  SENSOR_FWD: 0.020, // 마스트 회전축 → 센서 발광면 전방 오프셋 (장착면 9.6 + 스페이서 10mm)
   MAX_POINTS: 300000,
   MIN_MM: 40,
   MAX_MM: 4000,
@@ -6601,13 +6604,29 @@ OmniOS.register("arc", {
     grid.material.opacity = 0.3;
     scene.add(grid);
 
-    // scanner mast marker at the origin
-    const mast = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03, 0.05, 0.24, 12),
-      new THREE.MeshBasicMaterial({ color: 0x35d6ff })
-    );
-    mast.position.y = 0.12;
-    scene.add(mast);
+    // 실제 조립 형상 마커 (assembly_layout.scad 실측): 스탠드 + 기둥 + 7개 틸트 스페이서
+    const mastMat = new THREE.MeshBasicMaterial({
+      color: 0x35d6ff, transparent: true, opacity: 0.85 });
+    const mastGrp = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.008, 0.07), mastMat);
+    base.position.y = 0.004;
+    mastGrp.add(base);
+    const servo = new THREE.Mesh(new THREE.BoxGeometry(0.030, 0.042, 0.045), mastMat);
+    servo.position.y = 0.029;
+    mastGrp.add(servo);
+    const column = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.236, 0.0254), mastMat);
+    column.position.y = 0.05 + 0.118;
+    mastGrp.add(column);
+    for (let ch = 0; ch < 7; ch++) {
+      const sp = new THREE.Group();
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.010, 0.016, 0.0285), mastMat);
+      plate.position.x = 0.005;
+      sp.add(plate);
+      sp.position.set(0.0146, this.CH_HEIGHTS[ch], 0);
+      sp.rotation.z = (this.TILTS[ch] * Math.PI) / 180;
+      mastGrp.add(sp);
+    }
+    scene.add(mastGrp);
 
     // live azimuth sweep indicator
     const azGeo = new THREE.BufferGeometry().setFromPoints([
@@ -6849,7 +6868,7 @@ OmniOS.register("arc", {
     const th = (this.TILTS[ch] * Math.PI) / 180;   // elevation
     const ph = (aDeg * Math.PI) / 180;             // azimuth
     const r = mm / 1000;
-    const horiz = r * Math.cos(th);
+    const horiz = this.SENSOR_FWD + r * Math.cos(th); // 센서는 축에서 2cm 앞
     const x = horiz * Math.cos(ph);
     const z = -horiz * Math.sin(ph);
     const y = r * Math.sin(th) + this.CH_HEIGHTS[ch];
@@ -7561,7 +7580,8 @@ OmniOS.register("arc", {
     const S = ws.st;
     for (let i = 0; i < parsed.count; i++) {
       const x = parsed.P[i * 3], y = parsed.P[i * 3 + 1], z = parsed.P[i * 3 + 2];
-      const mm = Math.hypot(x, y - this.CH_HEIGHTS[3], z) * 1000;
+      const rho = Math.max(0.001, Math.hypot(x, z) - this.SENSOR_FWD);
+      const mm = Math.hypot(rho, y - this.CH_HEIGHTS[3]) * 1000;
       S.total++;
       S.n++;
       S.sum += mm;
@@ -7582,10 +7602,8 @@ OmniOS.register("arc", {
       if (deg >= -1 && deg <= 181) {
         const az = Math.max(0, Math.min(180, Math.round(deg)));
         for (let ch = 0; ch < 7; ch++) {
-          const rch = Math.hypot(x, y - this.CH_HEIGHTS[ch], z);
-          if (rch < 0.02) continue;
-          const elev = Math.asin(Math.max(-1, Math.min(1, (y - this.CH_HEIGHTS[ch]) / rch)))
-            * 180 / Math.PI;
+          // 센서 기준 상대좌표: 수평 성분에서 전방 오프셋 제거
+          const elev = Math.atan2(y - this.CH_HEIGHTS[ch], rho) * 180 / Math.PI;
           if (Math.abs(elev - this.TILTS[ch]) < 2) {
             const gi = ch * 181 + az;
             ws.grid[gi * 3] = x;
