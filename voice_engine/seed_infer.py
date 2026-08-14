@@ -40,6 +40,17 @@ def patch_torchaudio_io():
     torchaudio.load = _load
     torchaudio.save = _save
 
+    # MPS는 float64 미지원 — F0 추출(numpy float64) 결과가 .to(mps)에서
+    # 죽는 문제를 from_numpy 단계에서 float32로 강제 캐스팅해 해결
+    _orig_from_numpy = torch.from_numpy
+
+    def _from_numpy32(arr):
+        if isinstance(arr, np.ndarray) and arr.dtype == np.float64:
+            arr = arr.astype(np.float32)
+        return _orig_from_numpy(arr)
+
+    torch.from_numpy = _from_numpy32
+
 
 patch_torchaudio_io()
 os.chdir(SEEDVC)

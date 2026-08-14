@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.35.0",
+  version: "0.35.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -3526,7 +3526,8 @@ OmniOS.register("voice", {
       const inPath = await this.writeWav(`${dir}/tmp`, `${stamp}_in.wav`, this._tgt);
       const t0 = performance.now();
       const r = await OmniNative.request("voice.ultra", JSON.stringify({
-        source: inPath, ref: p.ultra, outDir: `${dir}/tmp/${stamp}_out`, steps: 30,
+        source: inPath, ref: p.ultra, outDir: `${dir}/tmp/${stamp}_out`,
+        steps: 50, f0: true, cfg: 0.3, // F0 조건 + 50스텝 + CFG 0.3: 피치 워블 억제
       }), 900000);
       if (!r || !r.ok) throw new Error(r && r.error || "ultra failed");
       const ms = Math.round(performance.now() - t0);

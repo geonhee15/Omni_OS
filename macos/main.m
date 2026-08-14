@@ -577,9 +577,20 @@ static NSString *ArcSavesDir(void) {
                 withIntermediateDirectories:YES attributes:nil error:nil];
             NSTask *task = [[NSTask alloc] init];
             task.executableURL = [NSURL fileURLWithPath:py];
-            task.arguments = @[ [eng stringByAppendingPathComponent:@"seed_infer.py"],
+            BOOL f0 = a[@"f0"] == nil ? YES : [a[@"f0"] boolValue];
+            double cfg = a[@"cfg"] != nil ? [a[@"cfg"] doubleValue] : 0.3;
+            NSMutableArray *ta = [@[
+                [eng stringByAppendingPathComponent:@"seed_infer.py"],
                 @"--source", source, @"--target", ref, @"--output", outDir,
-                @"--diffusion-steps", [NSString stringWithFormat:@"%d", steps] ];
+                @"--diffusion-steps", [NSString stringWithFormat:@"%d", steps],
+                @"--inference-cfg-rate", [NSString stringWithFormat:@"%.2f", cfg],
+                @"--fp16", @"False" ] mutableCopy];
+            if (f0) {
+                // F0 조건 모델: 소스 피치 윤곽을 그대로 따라가 워블(오토튠 언덕) 제거
+                [ta addObjectsFromArray:@[ @"--f0-condition", @"True",
+                                           @"--auto-f0-adjust", @"True" ]];
+            }
+            task.arguments = ta;
             NSPipe *errPipe = [NSPipe pipe];
             task.standardOutput = [NSPipe pipe];
             task.standardError = errPipe;
