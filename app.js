@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.35.2",
+  version: "0.35.3",
   bootTime: Date.now(),
   modules: {},
 
@@ -592,13 +592,28 @@ OmniOS.register("proj", {
     // 다른 스케치를 편집 중이면(미저장 변경) 덮지 않는다
     if (ide._files && ide._files.some((f) => f.dirty)) return;
     try {
+      const base = `${dir}/arduino`;
       const t = await OmniNative.request("ce.tree",
-        JSON.stringify({ path: `${dir}/arduino` }), 10000);
-      const hasIno = ((t && t.entries) || [])
-        .some((e) => !e.dir && /\.ino$/i.test(e.name));
-      if (!hasIno) return;
+        JSON.stringify({ path: base }), 10000);
+      const entries = (t && t.entries) || [];
+      let sketchDir = null;
+      if (entries.some((e) => !e.dir && /\.ino$/i.test(e.name))) {
+        sketchDir = base; // arduino/ 직속에 .ino
+      } else {
+        // 표준 구조: arduino/<이름>/<이름>.ino — 한 단계 하위까지 탐색
+        for (const e of entries.filter((x) => x.dir)) {
+          const sub = await OmniNative.request("ce.tree",
+            JSON.stringify({ path: `${base}/${e.name}` }), 10000);
+          if (((sub && sub.entries) || []).some(
+              (f) => !f.dir && /\.ino$/i.test(f.name))) {
+            sketchDir = `${base}/${e.name}`;
+            break;
+          }
+        }
+      }
+      if (!sketchDir) return;
       this._preloaded.ino.add(p.id);
-      await ide.openCode(`${dir}/arduino`);
+      await ide.openCode(sketchDir);
     } catch (e) {}
   },
 
