@@ -150,7 +150,9 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   이름 변경/삭제 시 열린 탭 경로 자동 동기화.
 - **PROJECTS 폴더 골격**: 프로젝트를 만들면 `Projects/<이름>/{3d, arduino, code, notes}`
   폴더가 실제로 생성되고, 에디터 모드 도구가 자동 연결 — CODE EDITOR는 `code/`를 루트로,
-  NOTES는 `notes/`를 볼트로 엶 (`3d/`, `arduino/`는 해당 산출물 보관용). 기존 프로젝트도
+  NOTES는 `notes/`를 볼트로 열고, **RENDER_3D는 `3d/`의 모델들을 자동 로드**(여러 파트면
+  자동 조립), **ARDUINO IDE는 `arduino/`의 스케치를 자동 오픈**(다른 스케치 편집 중이면
+  보호, 세션당 프로젝트별 1회) (`3d/`, `arduino/`는 해당 산출물 보관용). 기존 프로젝트도
   에디터를 열면 골격이 생김. 에디터 도구 바: RENDER_3D · ARDUINO IDE · CODE EDITOR · NOTES.
 - **CODE EDITOR** — 미니 코드 IDE. **OPEN FOLDER**(최근 폴더 자동 재오픈)로
   파일 트리(지연 로딩)를 열고, 파일 탭 + CodeMirror 에디터로 편집(Cmd+S 저장, 수정 표시 ●).

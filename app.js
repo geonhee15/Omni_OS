@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.35.1",
+  version: "0.35.2",
   bootTime: Date.now(),
   modules: {},
 
@@ -550,8 +550,56 @@ OmniOS.register("proj", {
         OmniOS.modules.ce.openPath(`${dir}/code`);
       } else if (key === "notes" && OmniOS.modules.notes.openVault) {
         OmniOS.modules.notes.openVault(`${dir}/notes`);
+      } else if (key === "r3d") {
+        this.preloadR3d(p, dir);
+      } else if (key === "ino") {
+        this.preloadIno(p, dir);
       }
     }
+  },
+
+  // ── 도구 프리로드: 프로젝트 폴더에 보관된 내용물을 자동으로 열기 ──
+  _preloaded: { r3d: new Set(), ino: new Set() }, // 세션당 프로젝트별 1회
+
+  async preloadR3d(p, dir) {
+    if (this._preloaded.r3d.has(p.id)) return;
+    this._preloaded.r3d.add(p.id);
+    try {
+      const t = await OmniNative.request("ce.tree",
+        JSON.stringify({ path: `${dir}/3d` }), 10000);
+      const MODEL = /\.(stl|obj|mtl|gltf|glb|fbx|ply|3mf|dae|step|stp|iges|igs|brep|bin|png|jpe?g|tga|webp)$/i;
+      const entries = ((t && t.entries) || [])
+        .filter((e) => !e.dir && MODEL.test(e.name));
+      if (!entries.length) return;
+      const files = [];
+      for (const e of entries) {
+        try {
+          const res = await fetch(
+            `omni://local/__media__?p=${encodeURIComponent(`${dir}/3d/${e.name}`)}`);
+          if (!res.ok) continue;
+          const blob = await res.blob();
+          if (blob.size > 200 * 1024 * 1024) continue;
+          files.push(new File([blob], e.name));
+        } catch (err) {}
+      }
+      if (files.length) await OmniOS.modules.r3d.loadFiles(files);
+    } catch (e) {}
+  },
+
+  async preloadIno(p, dir) {
+    if (this._preloaded.ino.has(p.id)) return;
+    const ide = OmniOS.modules.ide;
+    // 다른 스케치를 편집 중이면(미저장 변경) 덮지 않는다
+    if (ide._files && ide._files.some((f) => f.dirty)) return;
+    try {
+      const t = await OmniNative.request("ce.tree",
+        JSON.stringify({ path: `${dir}/arduino` }), 10000);
+      const hasIno = ((t && t.entries) || [])
+        .some((e) => !e.dir && /\.ino$/i.test(e.name));
+      if (!hasIno) return;
+      this._preloaded.ino.add(p.id);
+      await ide.openCode(`${dir}/arduino`);
+    } catch (e) {}
   },
 
   unmountPanel() {
