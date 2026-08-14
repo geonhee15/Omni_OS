@@ -66,6 +66,10 @@
         <span class="nav-icon">&#9998;</span>
         <span class="nav-label">NOTES</span>
       </button>
+      <button class="nav-item" data-panel="voice">
+        <span class="nav-icon">&#9835;</span>
+        <span class="nav-label">VOICE CHANGER</span>
+      </button>
       <button class="nav-item" data-panel="arc">
         <span class="nav-icon">&#9678;</span>
         <span class="nav-label">ARC-SCAN</span>
@@ -728,6 +732,111 @@
       </div>
     </section>
 
+    <!-- panel: VOICE CHANGER (voice profile learning + transfer) -->
+    <section class="panel panel-sp1 panel-voice" id="panel-voice">
+      <div class="sp1-topstrip">
+        <span class="sp1-title">VOICE CHANGER</span>
+        <span class="ts-item">PROFILE LEARNING &middot; TIMBRE TRANSFER</span>
+        <span class="ts-spacer"></span>
+        <span class="ts-item" id="vc-msg"></span>
+      </div>
+
+      <div class="sp1-grid vc-grid">
+        <!-- left: profiles -->
+        <div class="sp1-col">
+          <div class="mod vc-mod">
+            <div class="mod-title">VOICE PROFILES <span class="mod-note" id="vc-prof-count"></span></div>
+            <div class="vc-list" id="vc-profiles">
+              <div class="vc-empty">NO PROFILES &mdash; LEARN ONE FROM A VOICE SAMPLE</div>
+            </div>
+          </div>
+          <div class="mod vc-mod">
+            <div class="mod-title">PROFILE DETAIL</div>
+            <canvas class="vc-spec" id="vc-spec" width="210" height="80"></canvas>
+            <div class="kv"><span>BASE PITCH</span><span id="vc-d-pitch">&mdash;</span></div>
+            <div class="kv"><span>BRIGHTNESS</span><span id="vc-d-bright">&mdash;</span></div>
+            <div class="kv"><span>TRAINED ON</span><span id="vc-d-dur">&mdash;</span></div>
+          </div>
+        </div>
+
+        <!-- center: learn + convert -->
+        <div class="sp1-col sp1-col-center">
+          <div class="mod vc-mod">
+            <div class="mod-title">1 &middot; LEARN VOICE <span class="mod-note">60S RECOMMENDED</span></div>
+            <div class="vc-row">
+              <button class="ig-tab" id="vc-rec-ref">&#9679; RECORD</button>
+              <button class="ig-tab" id="vc-file-ref">&#8613; LOAD AUDIO</button>
+              <input type="file" id="vc-ref-input" accept="audio/*" hidden />
+              <span class="vc-stat" id="vc-ref-stat">NO SAMPLE</span>
+            </div>
+            <canvas class="vc-wave" id="vc-ref-wave" width="420" height="54"></canvas>
+            <div class="vc-row">
+              <input class="ino-input vc-name" id="vc-prof-name" maxlength="28"
+                spellcheck="false" placeholder="PROFILE NAME" />
+              <button class="ig-tab active" id="vc-learn" disabled>LEARN PROFILE</button>
+            </div>
+          </div>
+
+          <div class="mod vc-mod">
+            <div class="mod-title">2 &middot; TARGET AUDIO</div>
+            <div class="vc-row">
+              <button class="ig-tab" id="vc-rec-tgt">&#9679; RECORD</button>
+              <button class="ig-tab" id="vc-file-tgt">&#8613; LOAD AUDIO</button>
+              <input type="file" id="vc-tgt-input" accept="audio/*" hidden />
+              <span class="vc-stat" id="vc-tgt-stat">NO AUDIO</span>
+              <button class="ig-tab" id="vc-play-tgt" disabled>&#9655; PLAY</button>
+            </div>
+            <canvas class="vc-wave" id="vc-tgt-wave" width="420" height="54"></canvas>
+          </div>
+
+          <div class="mod vc-mod">
+            <div class="mod-title">3 &middot; CONVERT</div>
+            <div class="vc-row">
+              <span class="r3l-label">STRENGTH</span>
+              <input type="range" class="r3l-slider" id="vc-strength" min="0" max="100" step="5" value="100" />
+              <span class="vc-val" id="vc-strength-v">100%</span>
+            </div>
+            <div class="vc-row">
+              <div class="r3d-modes" id="vc-opts">
+                <button class="ig-tab active" data-o="pitch">PITCH</button>
+                <button class="ig-tab active" data-o="timbre">TIMBRE</button>
+              </div>
+              <span class="ts-spacer"></span>
+              <button class="ig-tab active" id="vc-convert" disabled>CONVERT</button>
+            </div>
+            <canvas class="vc-wave" id="vc-out-wave" width="420" height="54"></canvas>
+            <div class="vc-row">
+              <button class="ig-tab" id="vc-play-out" disabled>&#9655; PLAY RESULT</button>
+              <button class="ig-tab" id="vc-save" disabled>&#8615; SAVE WAV</button>
+              <span class="vc-stat" id="vc-out-stat"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- right: readout -->
+        <div class="sp1-col">
+          <div class="mod vc-mod">
+            <div class="mod-title">TRANSFER READOUT</div>
+            <div class="kv"><span>SOURCE PITCH</span><span id="vc-r-src">&mdash;</span></div>
+            <div class="kv"><span>TARGET PITCH</span><span id="vc-r-dst">&mdash;</span></div>
+            <div class="kv"><span>SHIFT</span><span id="vc-r-shift">&mdash;</span></div>
+            <div class="kv"><span>ENGINE</span><span>PHASE VOCODER</span></div>
+            <div class="kv"><span>MODE</span><span id="vc-r-mode">PITCH + TIMBRE</span></div>
+          </div>
+          <div class="mod vc-mod">
+            <div class="mod-title">HOW IT WORKS</div>
+            <div class="vc-help">
+              A VOICE PROFILE STORES THE SPEAKER&rsquo;S BASE PITCH AND LONG-TERM
+              SPECTRAL ENVELOPE (TIMBRE FINGERPRINT). CONVERSION SHIFTS THE TARGET
+              TO THAT PITCH WITH A PHASE VOCODER, THEN RESHAPES ITS SPECTRUM TOWARD
+              THE PROFILE. LONGER SAMPLES GIVE A STEADIER FINGERPRINT &mdash; 60S IS IDEAL.
+              ALL PROCESSING RUNS LOCALLY.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- panel 4: ARC-SCAN (room lidar point cloud) -->
     <section class="panel panel-arc" id="panel-arc">
       <div class="sp1-topstrip">
@@ -821,9 +930,9 @@
     <footer class="bottombar">
       <span id="uptime">UPTIME 00:00:00</span>
       <span class="divider">|</span>
-      <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES</span>
+      <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.31.1</span>
+      <span>v0.32.0</span>
     </footer>
   </div>
 
@@ -857,6 +966,7 @@
   <script src="vendor/codemirror/modes/swift.js"></script>
   <script src="vendor/codemirror/modes/toml.js"></script>
   <script src="vendor/marked/marked.umd.js"></script>
+  <script src="vendor/dsp/voice_dsp.js"></script>
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/xterm-addon-fit.js"></script>
   <script src="app.js"></script>

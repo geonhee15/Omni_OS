@@ -24,6 +24,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera is used for 3D hand gesture control in the RENDER_3D panel.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone is used to record voice samples in the VOICE CHANGER panel.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

@@ -453,7 +453,15 @@ static NSString *ArcSavesDir(void) {
     NSString *arg = [body[@"arg"] isKindOfClass:[NSString class]] ? body[@"arg"] : nil;
     if (msgId == nil || cmd == nil) return;
 
-    if ([cmd isEqualToString:@"proj.scaffold"] || [cmd isEqualToString:@"notes.vault"]) {
+    if ([cmd isEqualToString:@"voice.dir"]) {
+        // 음성 산출물 폴더 (Omni_OS/Voice) 생성 + 쓰기 루트 등록
+        if (self.ceRoots == nil) self.ceRoots = [NSMutableSet set];
+        NSString *dir = [OmniBaseDir() stringByAppendingPathComponent:@"Voice"];
+        [NSFileManager.defaultManager createDirectoryAtPath:dir
+            withIntermediateDirectories:YES attributes:nil error:nil];
+        [self.ceRoots addObject:dir.stringByStandardizingPath];
+        [self deliverPayload:@{ @"ok" : @YES, @"path" : dir } forId:msgId];
+    } else if ([cmd isEqualToString:@"proj.scaffold"] || [cmd isEqualToString:@"notes.vault"]) {
         // 프로젝트 폴더 골격 생성 / 기본 노트 볼트 — 만들고 ce 루트로 등록
         if (self.ceRoots == nil) self.ceRoots = [NSMutableSet set];
         NSFileManager *fm = NSFileManager.defaultManager;

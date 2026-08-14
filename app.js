@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.31.1",
+  version: "0.32.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -3090,6 +3090,483 @@ OmniOS.register("r3d", {
         ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
       }
     }
+  },
+});
+
+// ---------- module: VOICE CHANGER (profile learning + timbre transfer) ----------
+OmniOS.register("voice", {
+  els: null,
+  SR: 16000,          // 분석·변환 표본화 주파수 (음성 대역에 충분)
+  _profiles: [],      // {id, name, pitch, centroid, duration, ltas:[...]}
+  _active: -1,
+  _ref: null,         // Float32Array (학습용 샘플)
+  _tgt: null,         // Float32Array (변환 대상)
+  _out: null,         // Float32Array (변환 결과)
+  _rec: null,         // {stream, recorder, chunks, kind, t0, timer}
+  _loaded: false,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      msg: $("vc-msg"), profiles: $("vc-profiles"), profCount: $("vc-prof-count"),
+      spec: $("vc-spec"), dPitch: $("vc-d-pitch"), dBright: $("vc-d-bright"),
+      dDur: $("vc-d-dur"),
+      recRef: $("vc-rec-ref"), fileRef: $("vc-file-ref"), refInput: $("vc-ref-input"),
+      refStat: $("vc-ref-stat"), refWave: $("vc-ref-wave"),
+      profName: $("vc-prof-name"), learn: $("vc-learn"),
+      recTgt: $("vc-rec-tgt"), fileTgt: $("vc-file-tgt"), tgtInput: $("vc-tgt-input"),
+      tgtStat: $("vc-tgt-stat"), tgtWave: $("vc-tgt-wave"), playTgt: $("vc-play-tgt"),
+      strength: $("vc-strength"), strengthV: $("vc-strength-v"), opts: $("vc-opts"),
+      convert: $("vc-convert"), outWave: $("vc-out-wave"),
+      playOut: $("vc-play-out"), save: $("vc-save"), outStat: $("vc-out-stat"),
+      rSrc: $("vc-r-src"), rDst: $("vc-r-dst"), rShift: $("vc-r-shift"), rMode: $("vc-r-mode"),
+    };
+    const E = this.els;
+    E.recRef.addEventListener("click", () => this.toggleRec("ref"));
+    E.recTgt.addEventListener("click", () => this.toggleRec("tgt"));
+    E.fileRef.addEventListener("click", () => E.refInput.click());
+    E.fileTgt.addEventListener("click", () => E.tgtInput.click());
+    E.refInput.addEventListener("change", () => this.loadFile("ref", E.refInput));
+    E.tgtInput.addEventListener("change", () => this.loadFile("tgt", E.tgtInput));
+    E.learn.addEventListener("click", () => this.learnProfile());
+    E.convert.addEventListener("click", () => this.convert());
+    E.playTgt.addEventListener("click", () => this.play(this._tgt));
+    E.playOut.addEventListener("click", () => this.play(this._out));
+    E.save.addEventListener("click", () => this.saveWav());
+    E.strength.addEventListener("input", () => {
+      E.strengthV.textContent = `${E.strength.value}%`;
+    });
+    E.opts.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => {
+        b.classList.toggle("active");
+        this.syncMode();
+      }));
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "voice") this.load();
+      else this.stopRec(true);
+    });
+  },
+
+  flash(text, tone) {
+    const el = this.els.msg;
+    el.textContent = text;
+    el.className = `ts-item${tone ? " " + tone : ""}`;
+    clearTimeout(this._msgT);
+    if (tone === "ok") this._msgT = setTimeout(() => { el.textContent = ""; }, 3000);
+  },
+
+  async load() {
+    if (this._loaded) return;
+    this._loaded = true;
+    try {
+      if (OmniNative.available) {
+        const r = await OmniNative.request("store.read",
+          JSON.stringify({ name: "voiceprofiles" }), 8000);
+        this._profiles = r && r.data ? JSON.parse(r.data) : [];
+      } else {
+        this._profiles = JSON.parse(localStorage.getItem("omni.voice") || "[]");
+      }
+    } catch (e) {
+      this._profiles = [];
+    }
+    this.renderProfiles();
+  },
+
+  async persist() {
+    const data = JSON.stringify(this._profiles);
+    try {
+      if (OmniNative.available) {
+        await OmniNative.request("store.write",
+          JSON.stringify({ name: "voiceprofiles", data }), 10000);
+      } else {
+        localStorage.setItem("omni.voice", data);
+      }
+    } catch (e) {}
+  },
+
+  // ── 오디오 입력: 마이크 녹음 / 파일 ──
+  audioCtx() {
+    if (!this._ac) this._ac = new (window.AudioContext || window.webkitAudioContext)();
+    return this._ac;
+  },
+
+  async toggleRec(kind) {
+    if (this._rec) {
+      this.stopRec();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+      recorder.ondataavailable = (e) => chunks.push(e.data);
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        await this.ingest(kind, await blob.arrayBuffer(), "RECORDING");
+      };
+      recorder.start();
+      const btn = kind === "ref" ? this.els.recRef : this.els.recTgt;
+      const stat = kind === "ref" ? this.els.refStat : this.els.tgtStat;
+      btn.textContent = "\u25A0 STOP";
+      btn.classList.add("active");
+      const t0 = Date.now();
+      const timer = setInterval(() => {
+        const s = (Date.now() - t0) / 1000;
+        stat.textContent = `RECORDING ${s.toFixed(1)}S`;
+        stat.className = "vc-stat rec";
+      }, 100);
+      this._rec = { stream, recorder, chunks, kind, t0, timer, btn };
+    } catch (e) {
+      this.flash("MIC ACCESS DENIED", "alert");
+    }
+  },
+
+  stopRec(silent) {
+    const rec = this._rec;
+    if (!rec) return;
+    this._rec = null;
+    clearInterval(rec.timer);
+    rec.btn.textContent = "\u25CF RECORD";
+    rec.btn.classList.remove("active");
+    try {
+      if (silent) {
+        rec.recorder.onstop = null;
+        rec.stream.getTracks().forEach((t) => t.stop());
+      }
+      if (rec.recorder.state !== "inactive") rec.recorder.stop();
+    } catch (e) {}
+  },
+
+  async loadFile(kind, input) {
+    const f = input.files && input.files[0];
+    input.value = "";
+    if (!f) return;
+    await this.ingest(kind, await f.arrayBuffer(), f.name.toUpperCase());
+  },
+
+  // 디코드 → 모노 → SR 리샘플
+  async ingest(kind, arrayBuffer, label) {
+    this.flash("DECODING\u2026");
+    let buf;
+    try {
+      buf = await this.audioCtx().decodeAudioData(arrayBuffer.slice(0));
+    } catch (e) {
+      this.flash("UNSUPPORTED AUDIO FORMAT", "alert");
+      return;
+    }
+    const D = window.OmniVoiceDSP;
+    const ch0 = buf.getChannelData(0);
+    let mono = new Float32Array(ch0.length);
+    if (buf.numberOfChannels > 1) {
+      const ch1 = buf.getChannelData(1);
+      for (let i = 0; i < mono.length; i++) mono[i] = (ch0[i] + ch1[i]) / 2;
+    } else {
+      mono.set(ch0);
+    }
+    const audio = buf.sampleRate === this.SR
+      ? mono
+      : D.resample(mono, this.SR / buf.sampleRate);
+    const secs = audio.length / this.SR;
+    if (kind === "ref") {
+      this._ref = audio;
+      this.els.refStat.textContent = `${label} \u00b7 ${secs.toFixed(1)}S`;
+      this.els.refStat.className = `vc-stat${secs >= 20 ? " ok" : ""}`;
+      this.drawWave(this.els.refWave, audio);
+      this.els.learn.disabled = false;
+      if (secs < 20) this.flash("SHORT SAMPLE \u2014 60S GIVES A BETTER PROFILE");
+      else this.flash("SAMPLE READY", "ok");
+    } else {
+      this._tgt = audio;
+      this.els.tgtStat.textContent = `${label} \u00b7 ${secs.toFixed(1)}S`;
+      this.els.tgtStat.className = "vc-stat ok";
+      this.drawWave(this.els.tgtWave, audio);
+      this.els.playTgt.disabled = false;
+      this.syncConvert();
+      this.flash("TARGET READY", "ok");
+    }
+  },
+
+  // ── 프로파일 학습 ──
+  learnProfile() {
+    if (!this._ref) return;
+    const D = window.OmniVoiceDSP;
+    this.flash("LEARNING\u2026");
+    const p = D.analyzeProfile(this._ref, this.SR);
+    if (!p.pitch) {
+      this.flash("NO VOICED SPEECH DETECTED IN SAMPLE", "alert");
+      return;
+    }
+    const name = (this.els.profName.value.trim()
+      || `VOICE ${this._profiles.length + 1}`).toUpperCase();
+    this._profiles.unshift({
+      id: `v${Date.now().toString(36)}`,
+      name,
+      pitch: p.pitch,
+      centroid: p.centroid,
+      duration: p.duration,
+      ltas: Array.from(p.ltas),
+    });
+    this.els.profName.value = "";
+    this.persist();
+    this.renderProfiles();
+    this.selectProfile(0);
+    this.flash(`LEARNED ${name} \u00b7 ${p.pitch.toFixed(0)}HZ`, "ok");
+  },
+
+  renderProfiles() {
+    const box = this.els.profiles;
+    box.textContent = "";
+    this.els.profCount.textContent = this._profiles.length
+      ? `${this._profiles.length}` : "";
+    if (!this._profiles.length) {
+      const e = document.createElement("div");
+      e.className = "vc-empty";
+      e.textContent = "NO PROFILES — LEARN ONE FROM A VOICE SAMPLE";
+      box.appendChild(e);
+      this.syncConvert();
+      return;
+    }
+    this._profiles.forEach((p, i) => {
+      const it = document.createElement("div");
+      it.className = `vc-item${i === this._active ? " active" : ""}`;
+      const nm = document.createElement("span");
+      nm.textContent = p.name;
+      const hz = document.createElement("span");
+      hz.className = "vc-hz";
+      hz.textContent = `${p.pitch.toFixed(0)} HZ`;
+      const x = document.createElement("span");
+      x.className = "vc-x";
+      x.textContent = "\u2715";
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._profiles.splice(i, 1);
+        if (this._active === i) this._active = -1;
+        else if (this._active > i) this._active--;
+        this.persist();
+        this.renderProfiles();
+      });
+      it.append(nm, hz, x);
+      it.addEventListener("click", () => this.selectProfile(i));
+      box.appendChild(it);
+    });
+    this.syncConvert();
+  },
+
+  selectProfile(i) {
+    this._active = i;
+    const p = this._profiles[i];
+    this.renderProfiles();
+    if (!p) return;
+    this.els.dPitch.textContent = `${p.pitch.toFixed(1)} HZ`;
+    this.els.dBright.textContent = `${Math.round(p.centroid)} HZ`;
+    this.els.dDur.textContent = `${p.duration.toFixed(1)} S`;
+    this.drawSpectrum(this.els.spec, p.ltas);
+  },
+
+  syncMode() {
+    const on = (k) => !!this.els.opts.querySelector(`[data-o="${k}"].active`);
+    this.els.rMode.textContent = on("pitch") && on("timbre") ? "PITCH + TIMBRE"
+      : on("pitch") ? "PITCH ONLY" : on("timbre") ? "TIMBRE ONLY" : "PASSTHROUGH";
+  },
+
+  syncConvert() {
+    this.els.convert.disabled = !(this._tgt && this._profiles.length);
+  },
+
+  // ── 변환 ──
+  convert() {
+    const D = window.OmniVoiceDSP;
+    const idx = this._active >= 0 ? this._active : 0;
+    const p = this._profiles[idx];
+    if (!p || !this._tgt) return;
+    if (this._active < 0) this.selectProfile(0);
+    this.flash("CONVERTING\u2026");
+    // 무거운 DSP — 상태 메시지가 먼저 그려지도록 다음 프레임에 실행
+    setTimeout(() => {
+      const t0 = performance.now();
+      const on = (k) => !!this.els.opts.querySelector(`[data-o="${k}"].active`);
+      const res = D.applyProfile(this._tgt, this.SR, {
+        pitch: p.pitch,
+        ltas: Float32Array.from(p.ltas),
+        centroid: p.centroid,
+      }, {
+        pitch: on("pitch"),
+        timbre: on("timbre"),
+        strength: parseInt(this.els.strength.value, 10) / 100,
+      });
+      const ms = Math.round(performance.now() - t0);
+      this._out = res.audio;
+      this.drawWave(this.els.outWave, res.audio);
+      this.els.playOut.disabled = false;
+      this.els.save.disabled = false;
+      this.els.rSrc.textContent = res.tgtPitch ? `${res.tgtPitch.toFixed(1)} HZ` : "\u2014";
+      this.els.rDst.textContent = `${p.pitch.toFixed(1)} HZ`;
+      const semis = res.pitchRatio > 0 ? 12 * Math.log2(res.pitchRatio) : 0;
+      this.els.rShift.textContent = `${semis >= 0 ? "+" : ""}${semis.toFixed(1)} ST`;
+      this.els.outStat.textContent = `${(this._out.length / this.SR).toFixed(1)}S \u00b7 ${ms}MS`;
+      this.flash(`CONVERTED WITH ${p.name}`, "ok");
+    }, 30);
+  },
+
+  play(audio) {
+    if (!audio) return;
+    const ac = this.audioCtx();
+    const buf = ac.createBuffer(1, audio.length, this.SR);
+    buf.getChannelData(0).set(audio);
+    if (this._src) {
+      try { this._src.stop(); } catch (e) {}
+    }
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    src.connect(ac.destination);
+    src.start();
+    this._src = src;
+  },
+
+  // 16-bit PCM WAV 인코딩
+  wavBlob(audio) {
+    const n = audio.length;
+    const buf = new ArrayBuffer(44 + n * 2);
+    const dv = new DataView(buf);
+    const str = (o, s) => {
+      for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i));
+    };
+    str(0, "RIFF");
+    dv.setUint32(4, 36 + n * 2, true);
+    str(8, "WAVEfmt ");
+    dv.setUint32(16, 16, true);
+    dv.setUint16(20, 1, true);
+    dv.setUint16(22, 1, true);
+    dv.setUint32(24, this.SR, true);
+    dv.setUint32(28, this.SR * 2, true);
+    dv.setUint16(32, 2, true);
+    dv.setUint16(34, 16, true);
+    str(36, "data");
+    dv.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) {
+      const s = Math.max(-1, Math.min(1, audio[i]));
+      dv.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([buf], { type: "audio/wav" });
+  },
+
+  async saveWav() {
+    if (!this._out) return;
+    const p = this._profiles[this._active >= 0 ? this._active : 0];
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const name = `voice_${(p ? p.name : "out").toLowerCase().replace(/\s+/g, "-")}_${stamp}.wav`;
+    const blob = this.wavBlob(this._out);
+    if (!OmniNative.available) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      return;
+    }
+    try {
+      const dirRes = await OmniNative.request("voice.dir", null, 8000);
+      if (!dirRes || !dirRes.ok) throw new Error("no dir");
+      // 프로젝트 에디터에 이식된 상태면 프로젝트 폴더에도 함께 보관
+      const dir = this._projectSaveDir || dirRes.path;
+      const ok = await OmniOS.projectKeep(dir, name, await blob.arrayBuffer());
+      this.flash(ok ? `SAVED ${name}` : "SAVE FAILED", ok ? "ok" : "alert");
+    } catch (e) {
+      this.flash("SAVE FAILED", "alert");
+    }
+  },
+
+  // ── 시각화 ──
+  fitCanvas(cv) {
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth || cv.width, H = cv.clientHeight || cv.height;
+    const bw = Math.round(W * dpr), bh = Math.round(H * dpr);
+    if (cv.width !== bw || cv.height !== bh) {
+      cv.width = bw;
+      cv.height = bh;
+    }
+    const ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    return { ctx, W, H };
+  },
+
+  drawWave(cv, audio) {
+    const { ctx, W, H } = this.fitCanvas(cv);
+    if (!audio || !audio.length) return;
+    const mid = H / 2;
+    const step = Math.max(1, Math.floor(audio.length / W));
+    // 표시용 자동 스케일 — 조용한 녹음도 파형이 보이게 (오디오 자체는 그대로)
+    let pk = 0;
+    for (let i = 0; i < audio.length; i += Math.max(1, step >> 2)) {
+      const a = Math.abs(audio[i]);
+      if (a > pk) pk = a;
+    }
+    const vs = pk > 1e-4 ? 0.95 / pk : 1;
+    ctx.strokeStyle = "rgba(53, 214, 255, 0.85)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x < W; x++) {
+      const s = x * step;
+      let min = 1, max = -1;
+      for (let i = 0; i < step && s + i < audio.length; i++) {
+        const v = audio[s + i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      ctx.moveTo(x + 0.5, mid - Math.max(-1, Math.min(1, max * vs)) * mid * 0.92);
+      ctx.lineTo(x + 0.5, mid - Math.max(-1, Math.min(1, min * vs)) * mid * 0.92);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(53, 214, 255, 0.2)";
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(W, mid);
+    ctx.stroke();
+  },
+
+  // 로그 주파수축 스펙트럼 포락선 (음색 지문)
+  drawSpectrum(cv, ltas) {
+    const { ctx, W, H } = this.fitCanvas(cv);
+    if (!ltas || !ltas.length) return;
+    const D = window.OmniVoiceDSP;
+    const sm = D.smoothLtas(Float32Array.from(ltas), 0.4);
+    let max = 0;
+    for (const v of sm) if (v > max) max = v;
+    if (max <= 0) return;
+    const nyq = this.SR / 2;
+    const fMin = 80;
+    const toX = (f) => (Math.log2(Math.max(fMin, f) / fMin) / Math.log2(nyq / fMin)) * W;
+    ctx.strokeStyle = "rgba(53, 214, 255, 0.15)";
+    for (const f of [100, 500, 1000, 2000, 4000]) {
+      const x = toX(f);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = "#35d6ff";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    let started = false;
+    for (let k = 1; k < sm.length; k++) {
+      const f = (k * this.SR) / (sm.length * 2);
+      const x = toX(f);
+      const db = 20 * Math.log10(sm[k] / max + 1e-9);
+      const y = H - Math.max(0, Math.min(1, (db + 60) / 60)) * (H - 4) - 2;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  },
+
+  resize() {
+    if (this._ref) this.drawWave(this.els.refWave, this._ref);
+    if (this._tgt) this.drawWave(this.els.tgtWave, this._tgt);
+    if (this._out) this.drawWave(this.els.outWave, this._out);
+    const p = this._profiles[this._active];
+    if (p) this.drawSpectrum(this.els.spec, p.ltas);
   },
 });
 
