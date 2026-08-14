@@ -2981,3 +2981,5 @@ input.vc-name {
   color: var(--alert);
   border-color: var(--alert);
 }
+
+.vc-wave { cursor: crosshair; }

@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.34.0",
+  version: "0.34.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -3143,9 +3143,34 @@ OmniOS.register("voice", {
     E.tgtInput.addEventListener("change", () => this.loadFile("tgt", E.tgtInput));
     E.learn.addEventListener("click", () => this.learnProfile());
     E.convert.addEventListener("click", () => this.convert());
-    E.playRef.addEventListener("click", () => this.play(this._ref));
-    E.playTgt.addEventListener("click", () => this.play(this._tgt));
-    E.playOut.addEventListener("click", () => this.play(this._out));
+    E.stopRef = document.getElementById("vc-stop-ref");
+    E.stopTgt = document.getElementById("vc-stop-tgt");
+    E.stopOut = document.getElementById("vc-stop-out");
+    E.playRef.addEventListener("click", () => this.playSlot("ref"));
+    E.playTgt.addEventListener("click", () => this.playSlot("tgt"));
+    E.playOut.addEventListener("click", () => this.playSlot("out"));
+    E.stopRef.addEventListener("click", () => this.stopSlot("ref"));
+    E.stopTgt.addEventListener("click", () => this.stopSlot("tgt"));
+    E.stopOut.addEventListener("click", () => this.stopSlot("out"));
+    // 파형 클릭/드래그로 재생 위치 탐색
+    for (const slot of ["ref", "tgt", "out"]) {
+      const cv = this.waveCanvas(slot);
+      const seekAt = (e) => {
+        const r = cv.getBoundingClientRect();
+        this.seekSlot(slot, Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+      };
+      cv.addEventListener("mousedown", (e) => {
+        if (!this.audioFor(slot)) return;
+        seekAt(e);
+        const move = (ev) => seekAt(ev);
+        const up = () => {
+          window.removeEventListener("mousemove", move);
+          window.removeEventListener("mouseup", up);
+        };
+        window.addEventListener("mousemove", move);
+        window.addEventListener("mouseup", up);
+      });
+    }
     E.save.addEventListener("click", () => this.saveWav());
     E.strength.addEventListener("input", () => {
       E.strengthV.textContent = `${E.strength.value}%`;
@@ -3354,17 +3379,23 @@ OmniOS.register("voice", {
       this._ref = audio;
       this.els.refStat.textContent = `${label} \u00b7 ${secs.toFixed(1)}S`;
       this.els.refStat.className = `vc-stat${secs >= 20 ? " ok" : ""}`;
+      this.stopSlot("ref", true);
+      this._players.ref.offset = 0;
       this.drawWave(this.els.refWave, audio);
       this.els.learn.disabled = false;
       this.els.playRef.disabled = false;
+      this.els.stopRef.disabled = false;
       if (secs < 20) this.flash("SHORT SAMPLE \u2014 60S GIVES A BETTER PROFILE");
       else this.flash("SAMPLE READY", "ok");
     } else {
       this._tgt = audio;
       this.els.tgtStat.textContent = `${label} \u00b7 ${secs.toFixed(1)}S`;
       this.els.tgtStat.className = "vc-stat ok";
+      this.stopSlot("tgt", true);
+      this._players.tgt.offset = 0;
       this.drawWave(this.els.tgtWave, audio);
       this.els.playTgt.disabled = false;
+      this.els.stopTgt.disabled = false;
       this.syncConvert();
       this.flash("TARGET READY", "ok");
     }
@@ -3477,9 +3508,12 @@ OmniOS.register("voice", {
         JSON.stringify({ args: ["convert", p.neural, inPath, outPath] }), 600000);
       if (!r || !r.ok) throw new Error(r && r.error || "convert failed");
       const ms = Math.round(performance.now() - t0);
+      this.stopSlot("out", true);
+      this._players.out.offset = 0;
       this._out = await this.readWav(outPath);
       this.drawWave(this.els.outWave, this._out);
       this.els.playOut.disabled = false;
+      this.els.stopOut.disabled = false;
       this.els.save.disabled = false;
       const D = window.OmniVoiceDSP;
       const sp = D.estimatePitch(this._tgt, this.SR);
@@ -3593,9 +3627,12 @@ OmniOS.register("voice", {
         strength: parseInt(this.els.strength.value, 10) / 100,
       });
       const ms = Math.round(performance.now() - t0);
+      this.stopSlot("out", true);
+      this._players.out.offset = 0;
       this._out = res.audio;
       this.drawWave(this.els.outWave, res.audio);
       this.els.playOut.disabled = false;
+      this.els.stopOut.disabled = false;
       this.els.save.disabled = false;
       this.els.rSrc.textContent = res.tgtPitch ? `${res.tgtPitch.toFixed(1)} HZ` : "\u2014";
       this.els.rDst.textContent = `${p.pitch.toFixed(1)} HZ`;
@@ -3606,19 +3643,131 @@ OmniOS.register("voice", {
     }, 30);
   },
 
-  play(audio) {
+  // ── 슬롯 플레이어: 재생/정지(위치 기억)/타임라인 탐색 ──
+  _players: {
+    ref: { offset: 0, playing: false, src: null, startedAt: 0 },
+    tgt: { offset: 0, playing: false, src: null, startedAt: 0 },
+    out: { offset: 0, playing: false, src: null, startedAt: 0 },
+  },
+
+  audioFor(slot) {
+    return slot === "ref" ? this._ref : slot === "tgt" ? this._tgt : this._out;
+  },
+
+  waveCanvas(slot) {
+    return slot === "ref" ? this.els.refWave
+      : slot === "tgt" ? this.els.tgtWave : this.els.outWave;
+  },
+
+  stopButton(slot) {
+    return slot === "ref" ? this.els.stopRef
+      : slot === "tgt" ? this.els.stopTgt : this.els.stopOut;
+  },
+
+  playSlot(slot) {
+    const audio = this.audioFor(slot);
     if (!audio) return;
+    // 한 번에 하나만 재생
+    for (const other of ["ref", "tgt", "out"]) {
+      if (other !== slot) this.stopSlot(other, true);
+    }
+    const P = this._players[slot];
+    if (P.playing) this.stopSlot(slot, true); // 재클릭 = 현재 위치에서 재시작
     const ac = this.audioCtx();
+    ac.resume();
+    const dur = audio.length / this.SR;
+    if (P.offset >= dur - 0.05) P.offset = 0;
     const buf = ac.createBuffer(1, audio.length, this.SR);
     buf.getChannelData(0).set(audio);
-    if (this._src) {
-      try { this._src.stop(); } catch (e) {}
-    }
     const src = ac.createBufferSource();
     src.buffer = buf;
     src.connect(ac.destination);
-    src.start();
-    this._src = src;
+    src.start(0, P.offset);
+    P.src = src;
+    P.playing = true;
+    P.startedAt = ac.currentTime - P.offset;
+    this.stopButton(slot).disabled = false;
+    src.onended = () => {
+      if (P.src !== src) return; // 다른 재생으로 대체됨
+      P.playing = false;
+      P.src = null;
+      P.offset = 0;
+      this.paintWave(slot);
+    };
+    this.tickPlayhead();
+  },
+
+  stopSlot(slot, keepUi) {
+    const P = this._players[slot];
+    if (P.src) {
+      const src = P.src;
+      P.src = null; // onended 가드
+      if (P.playing) {
+        P.offset = Math.min(
+          this.audioCtx().currentTime - P.startedAt,
+          this.audioFor(slot) ? this.audioFor(slot).length / this.SR : 0);
+      }
+      try { src.stop(); } catch (e) {}
+    }
+    P.playing = false;
+    if (!keepUi) this.paintWave(slot);
+  },
+
+  seekSlot(slot, frac) {
+    const audio = this.audioFor(slot);
+    if (!audio) return;
+    const P = this._players[slot];
+    P.offset = frac * (audio.length / this.SR);
+    if (P.playing) this.playSlot(slot); // 새 위치에서 재시작
+    else this.paintWave(slot);
+  },
+
+  // 재생 중 플레이헤드 애니메이션 (하나의 rAF 루프)
+  tickPlayhead() {
+    if (this._phRaf) return;
+    const loop = () => {
+      let any = false;
+      for (const slot of ["ref", "tgt", "out"]) {
+        if (this._players[slot].playing) {
+          any = true;
+          this.paintWave(slot);
+        }
+      }
+      if (any) this._phRaf = requestAnimationFrame(loop);
+      else this._phRaf = null;
+    };
+    this._phRaf = requestAnimationFrame(loop);
+  },
+
+  // 캐시된 파형 위에 플레이헤드만 얹어 그리기
+  paintWave(slot) {
+    const audio = this.audioFor(slot);
+    const cv = this.waveCanvas(slot);
+    if (!audio) return;
+    this.drawWave(cv, audio);
+    const P = this._players[slot];
+    const dur = audio.length / this.SR;
+    const pos = P.playing
+      ? Math.min(dur, this.audioCtx().currentTime - P.startedAt)
+      : P.offset;
+    if (pos <= 0 && !P.playing) return;
+    const ctx = cv.getContext("2d");
+    const W = cv.clientWidth || cv.width;
+    const H = cv.clientHeight || cv.height;
+    const x = (pos / dur) * W;
+    ctx.strokeStyle = "#ffc857";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+    ctx.fillStyle = "#ffc857";
+    ctx.beginPath();
+    ctx.moveTo(x - 4, 0);
+    ctx.lineTo(x + 4, 0);
+    ctx.lineTo(x, 6);
+    ctx.closePath();
+    ctx.fill();
   },
 
   // 16-bit PCM WAV 인코딩
