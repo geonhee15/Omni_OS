@@ -29,6 +29,14 @@ Xcode 없이 Command Line Tools만으로 빌드된다.
 
 UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
 
+- **COMMAND BRIDGE** — 항상 켜두는 시네마틱 상황실 + 홀로그램 작업실 (기본 홈 패널).
+  중앙 **홀로그램 스테이지**(three.js): ACTIVE 프로젝트의 `3d/` 모델(STL·PLY)을 와이어프레임
+  홀로그램으로 회전 표시, 없으면 회전하는 홀로그램 코어(다면체 + 파티클 링)로 폴백.
+  궤도 타일: **SYSTEM**(CPU/GPU/MEM 미니 게이지 + 네트워크·열 상태) · **DEFENSE // SP-1**
+  (락다운/워처/침입/ntfy) · **ACTIVE PROJECT**(형식·우선순위·목표일 D-day) · **ARC-SCAN LINK** ·
+  **MISSION OBJECTIVES**(ACTIVE 프로젝트 `notes/`의 미완료 체크박스 `- [ ]`를 자동 수집).
+  하단 **ACTIVITY 티커**: `~/Desktop/Important` 하위 git 레포들의 최근 커밋을 시간순으로 흐름
+  (git.recent 브리지). 3초 주기 폴링, 패널이 보일 때만 렌더.
 - **CLOCK** — 중앙 디지털 시계 (시간 / 날짜 / 업타임), 회전 링 HUD
 - **RENDER_3D** — three.js 기반 3D 모델 뷰어. STL·OBJ/MTL·GLTF/GLB·FBX·PLY·3MF·DAE에 더해
   **STEP/IGES/BREP**(OpenCascade WASM, 원본 CAD 색상·조립 좌표 유지)를

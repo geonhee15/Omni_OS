@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.35.3",
+  version: "0.36.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -140,6 +140,381 @@ OmniOS.ctxMenu = function (items, x, y) {
 };
 
 // ---------- module: clock ----------
+OmniOS.register("cmd", {
+  els: null,
+  _three: null,
+  _ctx: null,
+  _timer: null,
+  _raf: null,
+  _loadedModelFor: null,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      panel: $("panel-cmd"), sub: $("cmd-sub"), clock: $("cmd-clock"), up: $("cmd-up"),
+      cpu: $("cmd-cpu"), cpuV: $("cmd-cpu-v"), gpu: $("cmd-gpu"), gpuV: $("cmd-gpu-v"),
+      mem: $("cmd-mem"), memV: $("cmd-mem-v"), net: $("cmd-net"), thermal: $("cmd-thermal"),
+      defState: $("cmd-def-state"), defWatcher: $("cmd-def-watcher"),
+      defIntr: $("cmd-def-intr"), defNtfy: $("cmd-def-ntfy"),
+      stageVp: $("cmd-stage-vp"), stageLabel: $("cmd-stage-label"), stageSub: $("cmd-stage-sub"),
+      projName: $("cmd-proj-name"), projType: $("cmd-proj-type"),
+      projPrio: $("cmd-proj-prio"), projDday: $("cmd-proj-dday"),
+      arcStatus: $("cmd-arc-status"), arcPts: $("cmd-arc-pts"),
+      mission: $("cmd-mission"), missionNote: $("cmd-mission-note"),
+      ticker: $("cmd-ticker"),
+    };
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "cmd") this.activate();
+      else this.deactivate();
+    });
+    // 앱은 cmd 패널로 부팅 — nav init 이후 한 박자 뒤 활성화
+    setTimeout(() => {
+      if (this.els.panel.classList.contains("active")) this.activate();
+    }, 60);
+  },
+
+  async ensureThree() {
+    if (this._three) return this._three;
+    const THREE = await import("three");
+    let STLLoader = null, PLYLoader = null;
+    try { ({ STLLoader } = await import("./vendor/three/examples/jsm/loaders/STLLoader.js")); } catch (e) {}
+    try { ({ PLYLoader } = await import("./vendor/three/examples/jsm/loaders/PLYLoader.js")); } catch (e) {}
+    this._three = { THREE, STLLoader, PLYLoader };
+    return this._three;
+  },
+
+  async initStage() {
+    if (this._ctx) return;
+    const { THREE } = await this.ensureThree();
+    const vp = this.els.stageVp;
+    const w = vp.clientWidth || 600, h = vp.clientHeight || 400;
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(w, h);
+    vp.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.01, 100);
+    camera.position.set(0, 0.6, 3.4);
+    camera.lookAt(0, 0, 0);
+
+    // 홀로그램 코어 (기본 표시 — 프로젝트 모델 로드되면 교체)
+    const core = new THREE.Group();
+    const ico = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x35d6ff, wireframe: true,
+        transparent: true, opacity: 0.7 }));
+    core.add(ico);
+    const inner = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.55, 0),
+      new THREE.MeshBasicMaterial({ color: 0x2f7bff, wireframe: true,
+        transparent: true, opacity: 0.35 }));
+    core.add(inner);
+    // 파티클 링
+    const N = 400;
+    const pos = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      const r = 1.7 + Math.random() * 0.25;
+      pos[i * 3] = Math.cos(a) * r;
+      pos[i * 3 + 1] = (Math.random() - 0.5) * 0.5;
+      pos[i * 3 + 2] = Math.sin(a) * r;
+    }
+    const pg = new THREE.BufferGeometry();
+    pg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    const ring = new THREE.Points(pg, new THREE.PointsMaterial({
+      color: 0x8fdcff, size: 0.03, transparent: true, opacity: 0.8 }));
+    scene.add(core);
+    scene.add(ring);
+
+    const grid = new THREE.GridHelper(6, 12, 0x2f7bff, 0x123048);
+    grid.material.transparent = true;
+    grid.material.opacity = 0.25;
+    grid.position.y = -1.3;
+    scene.add(grid);
+
+    this._ctx = { renderer, scene, camera, core, ring, modelGroup: null, vp };
+    new ResizeObserver(() => this.resizeStage()).observe(vp);
+
+    const clock = new THREE.Clock();
+    const loop = () => {
+      this._raf = requestAnimationFrame(loop);
+      if (!this.els.panel.classList.contains("active")) return;
+      const t = clock.getElapsedTime();
+      const c = this._ctx;
+      const spin = c.modelGroup || c.core;
+      spin.rotation.y = t * 0.35;
+      if (!c.modelGroup) {
+        c.core.children[0].rotation.x = t * 0.2;
+        c.core.children[1].rotation.x = -t * 0.4;
+      }
+      c.ring.rotation.y = -t * 0.15;
+      renderer.render(scene, camera);
+    };
+    loop();
+  },
+
+  resizeStage() {
+    const c = this._ctx;
+    if (!c) return;
+    const w = c.vp.clientWidth || 600, h = c.vp.clientHeight || 400;
+    c.renderer.setSize(w, h);
+    c.camera.aspect = w / h;
+    c.camera.updateProjectionMatrix();
+  },
+
+  activate() {
+    this.initStage();
+    this.tick();
+    if (!this._timer) this._timer = setInterval(() => this.tick(), 3000);
+    if (!this._clockT) this._clockT = setInterval(() => this.tickClock(), 1000);
+    this.tickClock();
+    this.loadTicker();
+  },
+
+  deactivate() {
+    if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    if (this._clockT) { clearInterval(this._clockT); this._clockT = null; }
+  },
+
+  tickClock() {
+    const now = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    this.els.clock.textContent = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+  },
+
+  async tick() {
+    await Promise.all([this.pollSys(), this.pollDefense(), this.pollProject()]);
+    this.pollArc();
+  },
+
+  async pollSys() {
+    if (!OmniNative.available) {
+      this.els.net.textContent = "DEV";
+      return;
+    }
+    let d;
+    try { d = await OmniNative.request("sys.stats", null, 4000); } catch (e) { return; }
+    if (!d) return;
+    const pct = (v) => `${Math.round((v || 0) * 100)}%`;
+    this.els.cpu.style.width = pct(d.cpu);
+    this.els.cpuV.textContent = pct(d.cpu);
+    if (typeof d.gpu === "number") {
+      this.els.gpu.style.width = `${Math.round(d.gpu)}%`;
+      this.els.gpuV.textContent = `${Math.round(d.gpu)}%`;
+    }
+    const m = d.mem || {};
+    if (m.total) {
+      const used = ((m.wired || 0) + (m.compressed || 0) + (m.active || 0) + (m.inactive || 0)) / m.total;
+      this.els.mem.style.width = pct(used);
+      this.els.memV.textContent = pct(used);
+    }
+    const n = d.net || {};
+    const rate = (v) => v >= 2 ** 20 ? `${(v / 2 ** 20).toFixed(1)}M` : `${(v / 1024).toFixed(0)}K`;
+    this.els.net.textContent = `\u25BC ${rate(n.rxRate || 0)} \u25B2 ${rate(n.txRate || 0)}`;
+    const TH = ["NOMINAL", "FAIR", "SERIOUS", "CRITICAL"];
+    this.els.thermal.textContent = TH[d.thermal] || "--";
+  },
+
+  async pollDefense() {
+    if (!OmniNative.available) { this.els.defState.textContent = "DEV"; return; }
+    let s;
+    try { s = await OmniNative.request("sp1.status", null, 4000); } catch (e) { return; }
+    if (!s) return;
+    const st = (s.state || "").toUpperCase();
+    const E = this.els;
+    E.defState.textContent = st || "--";
+    E.defState.className = "cmd-state" + (st.includes("OFFLINE") ? " off"
+      : st.includes("LOCKDOWN") || (st.includes("LOCK") && !st.includes("UNLOCK")) ? " alert"
+      : "");
+    E.defWatcher.textContent = s.watcher && s.watcher.running ? `PID ${s.watcher.pid}` : "OFFLINE";
+    E.defIntr.textContent = s.intrusions != null ? `${s.intrusions}` : "--";
+    E.defNtfy.textContent = s.ntfy && s.ntfy.online ? "ONLINE" : "--";
+  },
+
+  activeProject() {
+    const proj = OmniOS.modules.proj;
+    const items = (proj && proj._items) || [];
+    return items.find((p) => p.status === "active")
+      || items.find((p) => p.status !== "done")
+      || items[0] || null;
+  },
+
+  async pollProject() {
+    const p = this.activeProject();
+    const E = this.els;
+    if (!p) {
+      E.projName.textContent = "--";
+      E.stageLabel.textContent = "NO ACTIVE PROJECT";
+      E.stageSub.textContent = "SELECT AN ACTIVE PROJECT IN PROJECTS";
+      return;
+    }
+    E.projName.textContent = p.name.toUpperCase();
+    E.projType.textContent = ({ software: "SOFTWARE", hardware: "HARDWARE", hybrid: "HYBRID" })[p.type] || "--";
+    E.projPrio.textContent = (p.priority || "--").toUpperCase();
+    E.stageLabel.textContent = p.name.toUpperCase();
+    E.stageSub.textContent = (p.desc || "").toUpperCase().slice(0, 48);
+    // D-day
+    if (p.target && OmniOS.modules.proj.dday) {
+      const dd = OmniOS.modules.proj.dday(p.target);
+      E.projDday.textContent = dd.label;
+      E.projDday.className = `cmd-dday ${dd.cls}`;
+    } else {
+      E.projDday.textContent = "";
+    }
+    // 미션 목표 + 홀로그램 모델
+    this.loadMission(p);
+    this.loadProjectModel(p);
+  },
+
+  async loadMission(p) {
+    if (!OmniNative.available || !p.dir) return;
+    const objectives = [];
+    try {
+      const notesDir = `${p.dir}/notes`;
+      const t = await OmniNative.request("ce.tree", JSON.stringify({ path: notesDir }), 8000);
+      const mds = ((t && t.entries) || []).filter((e) => !e.dir && /\.md$/i.test(e.name));
+      for (const md of mds) {
+        if (objectives.length >= 10) break;
+        const r = await OmniNative.request("ce.read",
+          JSON.stringify({ path: `${notesDir}/${md.name}` }), 8000);
+        if (!r || !r.ok) continue;
+        for (const line of (r.text || "").split("\n")) {
+          const m = line.match(/^\s*[-*]\s+\[ \]\s+(.+)$/);
+          if (m) objectives.push({ text: m[1].trim(), file: md.name.replace(/\.md$/i, "") });
+          if (objectives.length >= 10) break;
+        }
+      }
+    } catch (e) {}
+    const box = this.els.mission;
+    box.textContent = "";
+    if (!objectives.length) {
+      const li = document.createElement("li");
+      li.className = "cmd-empty";
+      li.textContent = "NO OPEN OBJECTIVES";
+      box.appendChild(li);
+      this.els.missionNote.textContent = "";
+      return;
+    }
+    this.els.missionNote.textContent = `${objectives.length}`;
+    for (const o of objectives) {
+      const li = document.createElement("li");
+      const box2 = document.createElement("span");
+      box2.className = "box";
+      const txt = document.createElement("span");
+      txt.textContent = o.text;
+      const repo = document.createElement("span");
+      repo.className = "repo";
+      repo.textContent = ` ${o.file}`;
+      li.append(box2, txt, repo);
+      box.appendChild(li);
+    }
+  },
+
+  async loadProjectModel(p) {
+    if (!this._ctx || !OmniNative.available || !p.dir) return;
+    if (this._loadedModelFor === p.id) return; // 이미 이 프로젝트 모델
+    this._loadedModelFor = p.id;
+    try {
+      const t = await OmniNative.request("ce.tree", JSON.stringify({ path: `${p.dir}/3d` }), 8000);
+      const model = ((t && t.entries) || []).find((e) => !e.dir && /\.(stl|ply)$/i.test(e.name));
+      if (!model) { this.showCore(); return; }
+      const res = await fetch(`omni://local/__media__?p=${encodeURIComponent(`${p.dir}/3d/${model.name}`)}`);
+      if (!res.ok) { this.showCore(); return; }
+      const buf = await res.arrayBuffer();
+      const { THREE, STLLoader, PLYLoader } = this._three;
+      const ext = model.name.split(".").pop().toLowerCase();
+      let geo = null;
+      if (ext === "stl" && STLLoader) geo = new STLLoader().parse(buf);
+      else if (ext === "ply" && PLYLoader) geo = new PLYLoader().parse(buf);
+      if (!geo) { this.showCore(); return; }
+      geo.computeVertexNormals && geo.computeVertexNormals();
+      geo.center();
+      geo.computeBoundingSphere();
+      const s = geo.boundingSphere ? 1.1 / geo.boundingSphere.radius : 1;
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: 0x35d6ff, wireframe: true, transparent: true, opacity: 0.75 }));
+      const g = new THREE.Group();
+      g.add(mesh);
+      g.scale.setScalar(s);
+      this.setModelGroup(g);
+    } catch (e) {
+      this.showCore();
+    }
+  },
+
+  setModelGroup(g) {
+    const c = this._ctx;
+    if (c.modelGroup) { c.scene.remove(c.modelGroup); }
+    c.modelGroup = g;
+    c.scene.add(g);
+    c.core.visible = false;
+  },
+
+  showCore() {
+    const c = this._ctx;
+    if (!c) return;
+    if (c.modelGroup) { c.scene.remove(c.modelGroup); c.modelGroup = null; }
+    c.core.visible = true;
+  },
+
+  pollArc() {
+    const arc = OmniOS.modules.arc;
+    const E = this.els;
+    if (arc && arc._streaming) {
+      E.arcStatus.textContent = "STREAMING";
+      E.arcPts.textContent = arc._count ? arc._count.toLocaleString() : "0";
+    } else if (arc && arc._linked) {
+      E.arcStatus.textContent = "LINKED";
+      E.arcPts.textContent = arc._count ? arc._count.toLocaleString() : "0";
+    } else {
+      E.arcStatus.textContent = "IDLE";
+      E.arcPts.textContent = "--";
+    }
+  },
+
+  ago(ts) {
+    const s = Date.now() / 1000 - ts;
+    if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}M`;
+    if (s < 86400) return `${Math.floor(s / 3600)}H`;
+    if (s < 86400 * 30) return `${Math.floor(s / 86400)}D`;
+    return `${Math.floor(s / 86400 / 30)}MO`;
+  },
+
+  async loadTicker() {
+    if (!OmniNative.available) return;
+    let r;
+    try { r = await OmniNative.request("git.recent", null, 12000); } catch (e) { return; }
+    const commits = (r && r.commits) || [];
+    const track = this.els.ticker;
+    track.textContent = "";
+    if (!commits.length) {
+      const s = document.createElement("span");
+      s.className = "cmd-empty";
+      s.textContent = "NO RECENT COMMITS";
+      track.appendChild(s);
+      return;
+    }
+    // 무한 스크롤 위해 2배 복제
+    const build = () => {
+      for (const c of commits) {
+        const item = document.createElement("span");
+        item.className = "item";
+        const b = document.createElement("b");
+        b.textContent = c.repo;
+        const msg = document.createElement("span");
+        msg.textContent = ` ${c.msg}`;
+        const ago = document.createElement("span");
+        ago.className = "ago";
+        ago.textContent = ` \u00b7 ${this.ago(c.ts)} AGO`;
+        item.append(b, msg, ago);
+        track.appendChild(item);
+      }
+    };
+    build();
+    build();
+  },
+});
+
 OmniOS.register("clock", {
   init() {
     this.timeEl = document.getElementById("clock-time");

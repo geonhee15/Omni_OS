@@ -2983,3 +2983,240 @@ input.vc-name {
 }
 
 .vc-wave { cursor: crosshair; }
+
+/* ---------- panel: COMMAND BRIDGE ---------- */
+.panel-cmd {
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px 10px;
+  min-height: 0;
+}
+
+.cmd-topstrip {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  border-bottom: 1px solid var(--cyan-faint);
+  padding-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.cmd-title {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 16px;
+  letter-spacing: 5px;
+  color: #eafcff;
+  text-shadow: 0 0 16px var(--cyan-soft);
+}
+
+.cmd-sub { font-size: 9px; letter-spacing: 2px; color: var(--text-dim); }
+.cmd-clock {
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: var(--cyan);
+  font-variant-numeric: tabular-nums;
+}
+.cmd-up { font-size: 9px; letter-spacing: 2px; color: var(--text-dim); }
+
+.cmd-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr 240px;
+  gap: 12px;
+}
+
+.cmd-col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+
+.cmd-tile {
+  border: 1px solid var(--cyan-faint);
+  background: rgba(5, 18, 36, 0.5);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.cmd-tile-grow { flex: 1; min-height: 0; }
+
+.cmd-tile-h {
+  font-size: 8.5px;
+  letter-spacing: 2px;
+  color: var(--cyan);
+  border-bottom: 1px solid var(--cyan-faint);
+  padding-bottom: 5px;
+  margin-bottom: 3px;
+}
+
+.cmd-note { color: var(--text-dim); letter-spacing: 1px; }
+
+.cmd-metric {
+  display: grid;
+  grid-template-columns: 30px 1fr 42px;
+  gap: 8px;
+  align-items: center;
+  font-size: 8.5px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+
+.cmd-bar { height: 5px; background: rgba(53, 214, 255, 0.12); }
+.cmd-bar i { display: block; height: 100%; width: 0; background: var(--cyan); box-shadow: 0 0 6px rgba(53, 214, 255, 0.5); transition: width 0.4s; }
+.cmd-v { text-align: right; color: #bfe9f7; font-variant-numeric: tabular-nums; }
+
+.cmd-kv {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8.5px;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+.cmd-kv span:last-child { color: #bfe9f7; }
+
+.cmd-state {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 2px;
+  color: var(--ok);
+  padding: 2px 0;
+}
+.cmd-state.alert { color: var(--alert); }
+.cmd-state.warn { color: var(--warn); }
+.cmd-state.off { color: var(--text-dim); }
+
+.cmd-proj-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 1.5px;
+  color: #eafcff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmd-dday {
+  margin-top: 4px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: var(--cyan);
+}
+.cmd-dday.soon { color: var(--warn); }
+.cmd-dday.over { color: var(--alert); }
+
+/* 중앙 홀로그램 스테이지 */
+.cmd-stage {
+  position: relative;
+  border: 1px solid var(--cyan-faint);
+  background:
+    radial-gradient(ellipse at 50% 60%, rgba(53, 214, 255, 0.08), transparent 65%),
+    rgba(2, 8, 19, 0.6);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cmd-stage-vp { position: absolute; inset: 0; }
+.cmd-stage-vp canvas { display: block; }
+
+.cmd-stage-ring {
+  position: absolute;
+  bottom: 8%;
+  left: 50%;
+  width: 62%;
+  height: 62%;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  border: 1px solid rgba(53, 214, 255, 0.15);
+  box-shadow: inset 0 0 40px rgba(53, 214, 255, 0.08);
+  pointer-events: none;
+}
+
+.cmd-stage-label {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: #eafcff;
+  text-shadow: 0 0 10px var(--cyan-soft);
+  pointer-events: none;
+}
+.cmd-stage-sub {
+  position: absolute;
+  top: 30px;
+  left: 14px;
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.cmd-mission {
+  list-style: none;
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cmd-mission::-webkit-scrollbar { width: 5px; }
+.cmd-mission::-webkit-scrollbar-thumb { background: rgba(53, 214, 255, 0.2); }
+
+.cmd-mission li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  line-height: 1.4;
+  color: #bfe9f7;
+}
+.cmd-mission li .box {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--cyan-soft);
+  margin-top: 1px;
+}
+.cmd-mission li .repo { color: var(--text-dim); font-size: 7.5px; }
+.cmd-empty { color: rgba(111, 168, 201, 0.5); font-size: 8px; letter-spacing: 1.5px; }
+
+/* 하단 활동 티커 */
+.cmd-ticker {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--cyan-faint);
+  padding-top: 8px;
+  overflow: hidden;
+}
+.cmd-ticker-h {
+  flex-shrink: 0;
+  font-size: 8.5px;
+  letter-spacing: 2px;
+  color: var(--cyan);
+}
+.cmd-ticker-track {
+  display: flex;
+  gap: 26px;
+  white-space: nowrap;
+  animation: cmd-scroll 40s linear infinite;
+}
+.cmd-ticker:hover .cmd-ticker-track { animation-play-state: paused; }
+.cmd-ticker-track .item { font-size: 8.5px; letter-spacing: 0.8px; color: var(--text-dim); }
+.cmd-ticker-track .item b { color: var(--cyan); font-weight: 400; }
+.cmd-ticker-track .item .ago { color: rgba(111, 168, 201, 0.5); }
+
+@keyframes cmd-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}

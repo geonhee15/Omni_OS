@@ -963,6 +963,42 @@ static NSString *ArcSavesDir(void) {
                 [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
             }
         }
+    } else if ([cmd isEqualToString:@"git.recent"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            NSString *root = OmniBaseDir().stringByDeletingLastPathComponent;
+            NSFileManager *fm = NSFileManager.defaultManager;
+            NSMutableArray *all = [NSMutableArray array];
+            for (NSString *name in [fm contentsOfDirectoryAtPath:root error:nil]) {
+                if ([name hasPrefix:@"."]) continue;
+                NSString *repo = [root stringByAppendingPathComponent:name];
+                BOOL isDir = NO;
+                if (![fm fileExistsAtPath:repo isDirectory:&isDir] || !isDir) continue;
+                if (![fm fileExistsAtPath:[repo stringByAppendingPathComponent:@".git"]]) continue;
+                NSTask *t = [[NSTask alloc] init];
+                t.executableURL = [NSURL fileURLWithPath:@"/usr/bin/git"];
+                t.arguments = @[ @"-C", repo, @"log", @"-4",
+                    @"--format=%ct%x1f%s", @"--no-merges" ];
+                NSPipe *p = [NSPipe pipe];
+                t.standardOutput = p;
+                t.standardError = [NSPipe pipe];
+                if (![t launchAndReturnError:nil]) continue;
+                NSData *d = [p.fileHandleForReading readDataToEndOfFile];
+                [t waitUntilExit];
+                NSString *out = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"";
+                for (NSString *line in [out componentsSeparatedByString:@"\n"]) {
+                    NSArray *parts = [line componentsSeparatedByString:@"\x1f"];
+                    if (parts.count < 2) continue;
+                    [all addObject:@{ @"repo" : name,
+                                      @"ts" : @([parts[0] doubleValue]),
+                                      @"msg" : parts[1] }];
+                }
+            }
+            [all sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y) {
+                return [(NSNumber *)y[@"ts"] compare:(NSNumber *)x[@"ts"]];
+            }];
+            NSArray *top = all.count > 14 ? [all subarrayWithRange:NSMakeRange(0, 14)] : all;
+            [self deliverPayload:@{ @"ok" : @YES, @"commits" : top } forId:msgId];
+        });
     } else if ([cmd isEqualToString:@"sys.stats"]) {
         // 시스템 지표는 전용 직렬 큐에서 — 델타 static이 경쟁하지 않게
         static dispatch_queue_t sysQ;
