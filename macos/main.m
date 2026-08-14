@@ -552,6 +552,67 @@ static NSString *ArcSavesDir(void) {
                 [self deliverPayload:@{ @"ok" : @NO, @"error" : tail } forId:msgId];
             }
         });
+    } else if ([cmd isEqualToString:@"voice.ultra"]) {
+        // ULTRA 엔진 (Seed-VC): 확산 기반 zero-shot 변환 — 완료 후 출력 wav 경로 반환
+        NSDictionary *a = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+        }
+        NSString *source = [a[@"source"] isKindOfClass:[NSString class]] ? a[@"source"] : nil;
+        NSString *ref = [a[@"ref"] isKindOfClass:[NSString class]] ? a[@"ref"] : nil;
+        NSString *outDir = [a[@"outDir"] isKindOfClass:[NSString class]] ? a[@"outDir"] : nil;
+        int steps = [a[@"steps"] intValue] ?: 25;
+        NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+        NSString *py = [eng stringByAppendingPathComponent:@"seedvc/venv/bin/python"];
+        if (source == nil || ref == nil || outDir == nil
+            || ![NSFileManager.defaultManager isExecutableFileAtPath:py]) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"ultra engine not installed" }
+                           forId:msgId];
+            return;
+        }
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            [NSFileManager.defaultManager createDirectoryAtPath:outDir
+                withIntermediateDirectories:YES attributes:nil error:nil];
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:py];
+            task.arguments = @[ [eng stringByAppendingPathComponent:@"seed_infer.py"],
+                @"--source", source, @"--target", ref, @"--output", outDir,
+                @"--diffusion-steps", [NSString stringWithFormat:@"%d", steps] ];
+            NSPipe *errPipe = [NSPipe pipe];
+            task.standardOutput = [NSPipe pipe];
+            task.standardError = errPipe;
+            NSError *err = nil;
+            if (![task launchAndReturnError:&err]) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : err.localizedDescription ?: @"launch failed" } forId:msgId];
+                return;
+            }
+            NSData *errData = [errPipe.fileHandleForReading readDataToEndOfFile];
+            [task waitUntilExit];
+            NSString *found = nil;
+            for (NSString *f in [NSFileManager.defaultManager
+                                 contentsOfDirectoryAtPath:outDir error:nil]) {
+                if ([f.pathExtension.lowercaseString isEqualToString:@"wav"]) {
+                    found = [outDir stringByAppendingPathComponent:f];
+                }
+            }
+            if (task.terminationStatus == 0 && found != nil) {
+                [self deliverPayload:@{ @"ok" : @YES, @"path" : found } forId:msgId];
+            } else {
+                NSString *errStr = [[NSString alloc] initWithData:errData
+                    encoding:NSUTF8StringEncoding] ?: @"";
+                NSString *tail = errStr.length > 500
+                    ? [errStr substringFromIndex:errStr.length - 500] : errStr;
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : tail } forId:msgId];
+            }
+        });
+    } else if ([cmd isEqualToString:@"voice.ultraStatus"]) {
+        NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+        BOOL ok = [NSFileManager.defaultManager isExecutableFileAtPath:
+            [eng stringByAppendingPathComponent:@"seedvc/venv/bin/python"]];
+        [self deliverPayload:@{ @"ok" : @YES, @"installed" : @(ok) } forId:msgId];
     } else if ([cmd isEqualToString:@"voice.liveStart"]) {
         // 신경망 라이브 데몬 기동 — stdout 라인을 OmniVC._live/_liveState 로 푸시
         NSDictionary *a = nil;

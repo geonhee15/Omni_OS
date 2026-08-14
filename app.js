@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.34.1",
+  version: "0.35.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -3229,6 +3229,15 @@ OmniOS.register("voice", {
       btn.disabled = !ready;
       const liveNN = this.els.liveMode.querySelector('[data-m="neural"]');
       liveNN.disabled = !ready;
+      try {
+        const u = await OmniNative.request("voice.ultraStatus", null, 8000);
+        const ub = this.els.engine.querySelector('[data-e="ultra"]');
+        ub.disabled = !(u && u.installed);
+        if (u && u.installed && !this._engineChecked) {
+          // 최상위 품질 엔진이 있으면 기본으로
+          setTimeout(() => ub.click(), 0);
+        }
+      } catch (e) {}
       if (!ready && this._liveMode === "neural") {
         this._liveMode = "dsp";
         this.els.liveMode.querySelectorAll("button").forEach((x) =>
@@ -3404,6 +3413,10 @@ OmniOS.register("voice", {
   // ── 프로파일 학습 ──
   learnProfile() {
     if (!this._ref) return;
+    if (this._engine === "ultra") {
+      this.learnUltra();
+      return;
+    }
     if (this._engine === "neural") {
       this.learnNeural();
       return;
@@ -3456,6 +3469,87 @@ OmniOS.register("voice", {
     return buf.sampleRate === this.SR
       ? out
       : window.OmniVoiceDSP.resample(out, this.SR / buf.sampleRate);
+  },
+
+  // ── ULTRA 엔진 (Seed-VC): zero-shot — 학습 = 레퍼런스 보관 (1~30초 사용) ──
+  async learnUltra() {
+    const D = window.OmniVoiceDSP;
+    this.els.learn.disabled = true;
+    this.flash("SAVING REFERENCE\u2026");
+    try {
+      const dir = await this.voiceDir();
+      const id = `v${Date.now().toString(36)}`;
+      // Seed-VC 권장 1~30초 — 길면 에너지 최대 30초 창을 고른다
+      let refAudio = this._ref;
+      const maxN = this.SR * 30;
+      if (refAudio.length > maxN) {
+        let best = 0, bestE = -1;
+        const hop = this.SR * 2;
+        for (let s = 0; s + maxN <= refAudio.length; s += hop) {
+          let e = 0;
+          for (let i = s; i < s + maxN; i += 16) e += refAudio[i] * refAudio[i];
+          if (e > bestE) { bestE = e; best = s; }
+        }
+        refAudio = refAudio.slice(best, best + maxN);
+      }
+      await OmniNative.request("ce.mkdir",
+        JSON.stringify({ path: `${dir}/profiles` }), 8000).catch(() => {});
+      const wavPath = await this.writeWav(`${dir}/profiles`, `${id}_ref.wav`, refAudio);
+      const p = D.analyzeProfile(this._ref, this.SR);
+      const name = (this.els.profName.value.trim()
+        || `VOICE ${this._profiles.length + 1}`).toUpperCase();
+      this._profiles.unshift({
+        id, name,
+        pitch: p.pitch || 0,
+        centroid: p.centroid,
+        duration: p.duration,
+        ltas: Array.from(p.ltas),
+        ultra: wavPath,
+      });
+      this.els.profName.value = "";
+      this.persist();
+      this.renderProfiles();
+      this.selectProfile(0);
+      this.flash(`LEARNED ${name} (ULTRA)`, "ok");
+    } catch (e) {
+      this.flash(`ULTRA LEARN FAILED \u2014 ${String(e.message || e).slice(0, 60)}`, "alert");
+    }
+    this.els.learn.disabled = false;
+  },
+
+  async convertUltra(p) {
+    this.els.convert.disabled = true;
+    this.flash("ULTRA CONVERTING\u2026 (DIFFUSION)");
+    try {
+      const dir = await this.voiceDir();
+      const stamp = Date.now().toString(36);
+      const inPath = await this.writeWav(`${dir}/tmp`, `${stamp}_in.wav`, this._tgt);
+      const t0 = performance.now();
+      const r = await OmniNative.request("voice.ultra", JSON.stringify({
+        source: inPath, ref: p.ultra, outDir: `${dir}/tmp/${stamp}_out`, steps: 30,
+      }), 900000);
+      if (!r || !r.ok) throw new Error(r && r.error || "ultra failed");
+      const ms = Math.round(performance.now() - t0);
+      this.stopSlot("out", true);
+      this._players.out.offset = 0;
+      this._out = await this.readWav(r.path);
+      this.drawWave(this.els.outWave, this._out);
+      this.els.playOut.disabled = false;
+      this.els.stopOut.disabled = false;
+      const D = window.OmniVoiceDSP;
+      const sp = D.estimatePitch(this._tgt, this.SR);
+      const op = D.estimatePitch(this._out, this.SR);
+      this.els.rSrc.textContent = sp ? `${sp.toFixed(1)} HZ` : "\u2014";
+      this.els.rDst.textContent = op ? `${op.toFixed(1)} HZ` : "\u2014";
+      this.els.rShift.textContent = "DIFFUSION";
+      this.els.outStat.textContent =
+        `${(this._out.length / this.SR).toFixed(1)}S \u00b7 ${(ms / 1000).toFixed(1)}S`;
+      this.flash(`CONVERTED WITH ${p.name} (ULTRA)`, "ok");
+    } catch (e) {
+      this.flash(`ULTRA CONVERT FAILED \u2014 ${String(e.message || e).slice(0, 60)}`, "alert");
+    }
+    this.els.convert.disabled = false;
+    this.syncConvert();
   },
 
   async learnNeural() {
@@ -3551,7 +3645,7 @@ OmniOS.register("voice", {
       nm.textContent = p.name;
       const hz = document.createElement("span");
       hz.className = "vc-hz";
-      hz.textContent = `${p.neural ? "NN \u00b7 " : ""}${p.pitch.toFixed(0)} HZ`;
+      hz.textContent = `${p.ultra ? "ULTRA \u00b7 " : p.neural ? "NN \u00b7 " : ""}${p.pitch.toFixed(0)} HZ`;
       const x = document.createElement("span");
       x.className = "vc-x";
       x.textContent = "\u2715";
@@ -3584,6 +3678,10 @@ OmniOS.register("voice", {
   },
 
   syncMode() {
+    if (this._engine === "ultra") {
+      this.els.rMode.textContent = "SEED-VC DIFFUSION";
+      return;
+    }
     if (this._engine === "neural") {
       this.els.rMode.textContent = "KNN-VC (WAVLM)";
       return;
@@ -3604,6 +3702,14 @@ OmniOS.register("voice", {
     const p = this._profiles[idx];
     if (!p || !this._tgt) return;
     if (this._active < 0) this.selectProfile(0);
+    if (this._engine === "ultra") {
+      if (!p.ultra) {
+        this.flash("RELEARN THIS PROFILE WITH ULTRA ENGINE", "alert");
+        return;
+      }
+      this.convertUltra(p);
+      return;
+    }
     if (this._engine === "neural") {
       if (!p.neural) {
         this.flash("THIS PROFILE IS DSP-ONLY \u2014 RELEARN WITH NEURAL ENGINE", "alert");

@@ -11,3 +11,4 @@ voice_engine/*.log
 examples/Demo-Voice-Changer/
 voice_engine/__pycache__/
 __pycache__/
+voice_engine/seedvc/
