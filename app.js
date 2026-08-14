@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.32.0",
+  version: "0.33.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -3116,6 +3116,8 @@ OmniOS.register("voice", {
       profName: $("vc-prof-name"), learn: $("vc-learn"),
       recTgt: $("vc-rec-tgt"), fileTgt: $("vc-file-tgt"), tgtInput: $("vc-tgt-input"),
       tgtStat: $("vc-tgt-stat"), tgtWave: $("vc-tgt-wave"), playTgt: $("vc-play-tgt"),
+      engine: $("vc-engine"), install: $("vc-install"), engStat: $("vc-eng-stat"),
+      dspOpts: $("vc-dsp-opts"),
       strength: $("vc-strength"), strengthV: $("vc-strength-v"), opts: $("vc-opts"),
       convert: $("vc-convert"), outWave: $("vc-out-wave"),
       playOut: $("vc-play-out"), save: $("vc-save"), outStat: $("vc-out-stat"),
@@ -3142,10 +3144,66 @@ OmniOS.register("voice", {
         b.classList.toggle("active");
         this.syncMode();
       }));
+    E.engine.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => {
+        if (b.disabled) return;
+        E.engine.querySelectorAll("button").forEach((x) =>
+          x.classList.toggle("active", x === b));
+        this._engine = b.dataset.e;
+        E.dspOpts.hidden = this._engine === "neural";
+        this.syncMode();
+      }));
+    E.install.addEventListener("click", () => this.installEngine());
+    // 엔진 설치 스트림 수신
+    window.OmniVC = {
+      _log: (b64) => {
+        const text = atob(b64).trim().split("\n").pop();
+        if (text) this.els.engStat.textContent = text.slice(0, 60).toUpperCase();
+      },
+      _done: (code) => {
+        this.els.engStat.textContent = code === 0 ? "" : `SETUP FAILED (${code})`;
+        this.flash(code === 0 ? "NEURAL ENGINE READY" : "ENGINE SETUP FAILED",
+          code === 0 ? "ok" : "alert");
+        this.checkEngine();
+      },
+    };
     document.addEventListener("omni:panel", (e) => {
-      if (e.detail === "voice") this.load();
-      else this.stopRec(true);
+      if (e.detail === "voice") {
+        this.load();
+        this.checkEngine();
+      } else {
+        this.stopRec(true);
+      }
     });
+  },
+
+  _engine: "dsp",
+
+  async checkEngine() {
+    if (!OmniNative.available) return;
+    try {
+      const r = await OmniNative.request("voice.status", null, 8000);
+      const ready = !!(r && r.installed && r.models);
+      const btn = this.els.engine.querySelector('[data-e="neural"]');
+      btn.disabled = !ready;
+      this.els.install.hidden = ready;
+      if (ready && this._engine === "dsp" && !this._engineChecked) {
+        // 준비돼 있으면 신경망을 기본으로
+        btn.click();
+      }
+      this._engineChecked = true;
+    } catch (e) {}
+  },
+
+  async installEngine() {
+    this.els.install.disabled = true;
+    this.flash("INSTALLING NEURAL ENGINE\u2026 (2GB+)");
+    try {
+      await OmniNative.request("voice.setup", null, 10000);
+    } catch (e) {
+      this.flash("SETUP LAUNCH FAILED", "alert");
+      this.els.install.disabled = false;
+    }
   },
 
   flash(text, tone) {
@@ -3292,6 +3350,10 @@ OmniOS.register("voice", {
   // ── 프로파일 학습 ──
   learnProfile() {
     if (!this._ref) return;
+    if (this._engine === "neural") {
+      this.learnNeural();
+      return;
+    }
     const D = window.OmniVoiceDSP;
     this.flash("LEARNING\u2026");
     const p = D.analyzeProfile(this._ref, this.SR);
@@ -3316,6 +3378,102 @@ OmniOS.register("voice", {
     this.flash(`LEARNED ${name} \u00b7 ${p.pitch.toFixed(0)}HZ`, "ok");
   },
 
+  // ── 신경망 경로 (kNN-VC 워커) ──
+  async voiceDir() {
+    const r = await OmniNative.request("voice.dir", null, 8000);
+    if (!r || !r.ok) throw new Error("no voice dir");
+    return r.path;
+  },
+
+  async writeWav(dir, name, audio) {
+    const ok = await OmniOS.projectKeep(dir, name,
+      await this.wavBlob(audio).arrayBuffer());
+    if (!ok) throw new Error("wav write failed");
+    return `${dir}/${name}`;
+  },
+
+  async readWav(path) {
+    const res = await fetch(
+      `omni://local/__media__?p=${encodeURIComponent(path)}`);
+    if (!res.ok) throw new Error("wav read failed");
+    const buf = await this.audioCtx().decodeAudioData(await res.arrayBuffer());
+    const out = new Float32Array(buf.length);
+    out.set(buf.getChannelData(0));
+    return buf.sampleRate === this.SR
+      ? out
+      : window.OmniVoiceDSP.resample(out, this.SR / buf.sampleRate);
+  },
+
+  async learnNeural() {
+    const D = window.OmniVoiceDSP;
+    this.els.learn.disabled = true;
+    this.flash("NEURAL LEARNING\u2026 (WAVLM FEATURES)");
+    try {
+      const dir = await this.voiceDir();
+      const id = `v${Date.now().toString(36)}`;
+      const wavPath = await this.writeWav(`${dir}/tmp`, `${id}_ref.wav`, this._ref);
+      const pt = `${dir}/profiles/${id}.pt`;
+      await OmniNative.request("ce.mkdir",
+        JSON.stringify({ path: `${dir}/profiles` }), 8000).catch(() => {});
+      const r = await OmniNative.request("voice.exec",
+        JSON.stringify({ args: ["learn", wavPath, pt] }), 600000);
+      if (!r || !r.ok) throw new Error(r && r.error || "learn failed");
+      const p = D.analyzeProfile(this._ref, this.SR); // 표시용 지표는 DSP로
+      const name = (this.els.profName.value.trim()
+        || `VOICE ${this._profiles.length + 1}`).toUpperCase();
+      this._profiles.unshift({
+        id, name,
+        pitch: p.pitch || 0,
+        centroid: p.centroid,
+        duration: p.duration,
+        ltas: Array.from(p.ltas),
+        neural: pt,
+        frames: r.frames,
+      });
+      this.els.profName.value = "";
+      this.persist();
+      this.renderProfiles();
+      this.selectProfile(0);
+      this.flash(`LEARNED ${name} \u00b7 ${r.frames} FRAMES (${r.device.toUpperCase()})`, "ok");
+    } catch (e) {
+      this.flash(`NEURAL LEARN FAILED \u2014 ${String(e.message || e).slice(0, 60)}`, "alert");
+    }
+    this.els.learn.disabled = false;
+  },
+
+  async convertNeural(p) {
+    this.els.convert.disabled = true;
+    this.flash("NEURAL CONVERTING\u2026");
+    try {
+      const dir = await this.voiceDir();
+      const stamp = Date.now().toString(36);
+      const inPath = await this.writeWav(`${dir}/tmp`, `${stamp}_in.wav`, this._tgt);
+      const outPath = `${dir}/tmp/${stamp}_out.wav`;
+      const t0 = performance.now();
+      const r = await OmniNative.request("voice.exec",
+        JSON.stringify({ args: ["convert", p.neural, inPath, outPath] }), 600000);
+      if (!r || !r.ok) throw new Error(r && r.error || "convert failed");
+      const ms = Math.round(performance.now() - t0);
+      this._out = await this.readWav(outPath);
+      this.drawWave(this.els.outWave, this._out);
+      this.els.playOut.disabled = false;
+      this.els.save.disabled = false;
+      const D = window.OmniVoiceDSP;
+      const sp = D.estimatePitch(this._tgt, this.SR);
+      const op = D.estimatePitch(this._out, this.SR);
+      this.els.rSrc.textContent = sp ? `${sp.toFixed(1)} HZ` : "\u2014";
+      this.els.rDst.textContent = op ? `${op.toFixed(1)} HZ` : "\u2014";
+      this.els.rShift.textContent = "NEURAL";
+      this.els.outStat.textContent =
+        `${(this._out.length / this.SR).toFixed(1)}S \u00b7 ${(ms / 1000).toFixed(1)}S \u00b7 ${(r.device || "").toUpperCase()}`;
+      this.flash(`CONVERTED WITH ${p.name} (NEURAL)`, "ok");
+    } catch (e) {
+      this.flash(`NEURAL CONVERT FAILED \u2014 ${String(e.message || e).slice(0, 60)}`, "alert");
+    }
+    this.els.convert.disabled = false;
+    this.syncConvert();
+  },
+
   renderProfiles() {
     const box = this.els.profiles;
     box.textContent = "";
@@ -3336,7 +3494,7 @@ OmniOS.register("voice", {
       nm.textContent = p.name;
       const hz = document.createElement("span");
       hz.className = "vc-hz";
-      hz.textContent = `${p.pitch.toFixed(0)} HZ`;
+      hz.textContent = `${p.neural ? "NN \u00b7 " : ""}${p.pitch.toFixed(0)} HZ`;
       const x = document.createElement("span");
       x.className = "vc-x";
       x.textContent = "\u2715";
@@ -3367,6 +3525,10 @@ OmniOS.register("voice", {
   },
 
   syncMode() {
+    if (this._engine === "neural") {
+      this.els.rMode.textContent = "KNN-VC (WAVLM)";
+      return;
+    }
     const on = (k) => !!this.els.opts.querySelector(`[data-o="${k}"].active`);
     this.els.rMode.textContent = on("pitch") && on("timbre") ? "PITCH + TIMBRE"
       : on("pitch") ? "PITCH ONLY" : on("timbre") ? "TIMBRE ONLY" : "PASSTHROUGH";
@@ -3383,6 +3545,14 @@ OmniOS.register("voice", {
     const p = this._profiles[idx];
     if (!p || !this._tgt) return;
     if (this._active < 0) this.selectProfile(0);
+    if (this._engine === "neural") {
+      if (!p.neural) {
+        this.flash("THIS PROFILE IS DSP-ONLY \u2014 RELEARN WITH NEURAL ENGINE", "alert");
+        return;
+      }
+      this.convertNeural(p);
+      return;
+    }
     this.flash("CONVERTING\u2026");
     // 무거운 DSP — 상태 메시지가 먼저 그려지도록 다음 프레임에 실행
     setTimeout(() => {

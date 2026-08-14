@@ -793,6 +793,15 @@
           <div class="mod vc-mod">
             <div class="mod-title">3 &middot; CONVERT</div>
             <div class="vc-row">
+              <span class="r3l-label">ENGINE</span>
+              <div class="r3d-modes" id="vc-engine">
+                <button class="ig-tab active" data-e="dsp">DSP</button>
+                <button class="ig-tab" data-e="neural" disabled>NEURAL</button>
+              </div>
+              <button class="ig-tab" id="vc-install" hidden>INSTALL ENGINE</button>
+              <span class="vc-stat" id="vc-eng-stat"></span>
+            </div>
+            <div class="vc-row" id="vc-dsp-opts">
               <span class="r3l-label">STRENGTH</span>
               <input type="range" class="r3l-slider" id="vc-strength" min="0" max="100" step="5" value="100" />
               <span class="vc-val" id="vc-strength-v">100%</span>
@@ -933,7 +942,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.32.0</span>
+      <span>v0.33.0</span>
     </footer>
   </div>
 

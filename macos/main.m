@@ -453,7 +453,103 @@ static NSString *ArcSavesDir(void) {
     NSString *arg = [body[@"arg"] isKindOfClass:[NSString class]] ? body[@"arg"] : nil;
     if (msgId == nil || cmd == nil) return;
 
-    if ([cmd isEqualToString:@"voice.dir"]) {
+    if ([cmd isEqualToString:@"voice.status"]) {
+        // 신경망 엔진 설치 여부 (파일 검사 — 빠름)
+        NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+        NSFileManager *fm = NSFileManager.defaultManager;
+        BOOL venv = [fm isExecutableFileAtPath:
+            [eng stringByAppendingPathComponent:@"venv/bin/python"]];
+        BOOL worker = [fm fileExistsAtPath:
+            [eng stringByAppendingPathComponent:@"worker.py"]];
+        NSString *cache = [NSHomeDirectory()
+            stringByAppendingPathComponent:@".cache/torch/hub/checkpoints/WavLM-Large.pt"];
+        [self deliverPayload:@{ @"ok" : @YES,
+                                @"installed" : @(venv && worker),
+                                @"models" : @([fm fileExistsAtPath:cache]),
+                                @"dir" : eng } forId:msgId];
+    } else if ([cmd isEqualToString:@"voice.setup"]) {
+        // 엔진 설치 — 출력 라인을 OmniVC._log 로 스트리밍
+        NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+        NSTask *task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:@"/bin/zsh"];
+        task.arguments = @[ [eng stringByAppendingPathComponent:@"setup.sh"] ];
+        NSPipe *pipe = [NSPipe pipe];
+        task.standardOutput = pipe;
+        task.standardError = pipe;
+        __weak AppDelegate *weakSelf = self;
+        pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+            NSData *d = fh.availableData;
+            if (d.length == 0) return;
+            NSString *js = [NSString stringWithFormat:
+                @"window.OmniVC && OmniVC._log('%@')",
+                [d base64EncodedStringWithOptions:0]];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf.webView evaluateJavaScript:js completionHandler:nil];
+            });
+        };
+        task.terminationHandler = ^(NSTask *t) {
+            pipe.fileHandleForReading.readabilityHandler = nil;
+            NSString *js = [NSString stringWithFormat:
+                @"window.OmniVC && OmniVC._done(%d)", t.terminationStatus];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf.webView evaluateJavaScript:js completionHandler:nil];
+            });
+        };
+        NSError *err = nil;
+        BOOL ok = [task launchAndReturnError:&err];
+        [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+    } else if ([cmd isEqualToString:@"voice.exec"]) {
+        // 워커 실행 (learn/convert/status) — 완료 시 stdout JSON 반환
+        NSDictionary *a = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+        }
+        NSArray *args = [a[@"args"] isKindOfClass:[NSArray class]] ? a[@"args"] : @[];
+        NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:
+                [eng stringByAppendingPathComponent:@"venv/bin/python"]];
+            task.arguments = [@[ [eng stringByAppendingPathComponent:@"worker.py"] ]
+                arrayByAddingObjectsFromArray:args];
+            NSPipe *outPipe = [NSPipe pipe];
+            NSPipe *errPipe = [NSPipe pipe];
+            task.standardOutput = outPipe;
+            task.standardError = errPipe;
+            NSError *err = nil;
+            if (![task launchAndReturnError:&err]) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : err.localizedDescription ?: @"launch failed" }
+                               forId:msgId];
+                return;
+            }
+            NSData *outData = [outPipe.fileHandleForReading readDataToEndOfFile];
+            NSData *errData = [errPipe.fileHandleForReading readDataToEndOfFile];
+            [task waitUntilExit];
+            NSString *outStr = [[NSString alloc] initWithData:outData
+                encoding:NSUTF8StringEncoding] ?: @"";
+            // 마지막 JSON 라인 파싱 (torch 경고 등이 섞여도 견디게)
+            NSDictionary *result = nil;
+            for (NSString *line in [[outStr componentsSeparatedByString:@"\n"]
+                                    reverseObjectEnumerator]) {
+                if (![line hasPrefix:@"{"]) continue;
+                NSData *ld = [line dataUsingEncoding:NSUTF8StringEncoding];
+                id p = [NSJSONSerialization JSONObjectWithData:ld options:0 error:nil];
+                if ([p isKindOfClass:[NSDictionary class]]) { result = p; break; }
+            }
+            if (result != nil) {
+                [self deliverPayload:result forId:msgId];
+            } else {
+                NSString *errStr = [[NSString alloc] initWithData:errData
+                    encoding:NSUTF8StringEncoding] ?: @"";
+                NSString *tail = errStr.length > 600
+                    ? [errStr substringFromIndex:errStr.length - 600] : errStr;
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : tail } forId:msgId];
+            }
+        });
+    } else if ([cmd isEqualToString:@"voice.dir"]) {
         // 음성 산출물 폴더 (Omni_OS/Voice) 생성 + 쓰기 루트 등록
         if (self.ceRoots == nil) self.ceRoots = [NSMutableSet set];
         NSString *dir = [OmniBaseDir() stringByAppendingPathComponent:@"Voice"];
