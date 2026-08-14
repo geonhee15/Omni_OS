@@ -2967,3 +2967,17 @@ input.vc-name {
   line-height: 1.9;
   color: var(--text-dim);
 }
+
+.vc-live-kv {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr;
+  gap: 0 14px;
+  width: 100%;
+}
+
+.vc-live-kv .kv { min-width: 0; }
+
+#vc-live.live-on {
+  color: var(--alert);
+  border-color: var(--alert);
+}

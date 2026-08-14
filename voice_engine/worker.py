@@ -29,10 +29,8 @@ def out(obj):
 
 
 def pick_device():
-    import torch
-    # WavLM은 MPS에서 연산자 이슈가 있을 수 있어 실패 시 CPU 폴백
-    if torch.backends.mps.is_available():
-        return "mps"
+    # knn-vc가 내부에서 CUDA 외 GPU를 cpu로 강제 + MPS는 float64 이슈.
+    # M4 CPU에서 RTF 0.1 수준이라 CPU로 충분하다.
     return "cpu"
 
 
@@ -128,6 +126,59 @@ def cmd_convert(profile_pt, in_wav, out_wav, topk=4):
          "device": device})
 
 
+def cmd_serve(profile_pt):
+    """라이브 스트리밍 데몬: stdin으로 4바이트 길이 + float32 PCM(16kHz) 청크를
+    받아 변환 후 stdout에 base64 한 줄씩 출력. 길이 0 프레임 = 종료.
+    각 청크는 직전 컨텍스트(0.5초)를 붙여 특징을 뽑고 꼬리만 내보내
+    경계 품질을 유지한다."""
+    import base64
+    import contextlib
+    import struct
+
+    import numpy as np
+    import torch
+
+    # 모델 로딩이 stdout에 찍는 로그가 프로토콜을 오염시키지 않게 우회
+    with contextlib.redirect_stdout(sys.stderr):
+        knn, device = load_with_fallback()
+        matching = torch.load(profile_pt, map_location="cpu")
+    sr = 16000
+    ctx_len = sr // 2
+    ctx = np.zeros(ctx_len, dtype=np.float32)  # 첫 청크도 균일 길이로 나오게
+    stdin = sys.stdin.buffer
+    stdout = sys.stdout
+    print("READY", flush=True)
+    while True:
+        hdr = stdin.read(4)
+        if len(hdr) < 4:
+            break
+        n = struct.unpack("<I", hdr)[0]
+        if n == 0 or n > sr * 30 * 4:
+            break
+        raw = b""
+        while len(raw) < n:
+            more = stdin.read(n - len(raw))
+            if not more:
+                return
+            raw += more
+        chunk = np.frombuffer(raw, dtype=np.float32)
+        full = np.concatenate([ctx, chunk])
+        ctx = full[-ctx_len:].copy()
+        try:
+            wav_t = torch.from_numpy(full.copy())
+            q = knn.get_features(wav_t, vad_trigger_level=0)
+            out = knn.match(q, matching, topk=4, tgt_loudness_db=None)
+            out_np = out.cpu().numpy().astype(np.float32)
+            # 컨텍스트에 해당하는 앞부분을 버리고 청크 분량 꼬리만 방출
+            emit_len = (len(chunk) // 320) * 320
+            emit = out_np[-emit_len:] if len(out_np) >= emit_len else out_np
+            stdout.write(base64.b64encode(emit.tobytes()).decode() + "\n")
+            stdout.flush()
+        except Exception as e:
+            stdout.write(f"ERR {str(e)[:120]}\n")
+            stdout.flush()
+
+
 def main():
     if len(sys.argv) < 2:
         out({"ok": False, "error": "no command"})
@@ -140,6 +191,8 @@ def main():
             cmd_prefetch()
         elif cmd == "learn":
             cmd_learn(sys.argv[2], sys.argv[3])
+        elif cmd == "serve":
+            cmd_serve(sys.argv[2])
         elif cmd == "convert":
             topk = sys.argv[5] if len(sys.argv) > 5 else 4
             cmd_convert(sys.argv[2], sys.argv[3], sys.argv[4], topk)

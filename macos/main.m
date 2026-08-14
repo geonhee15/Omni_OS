@@ -187,6 +187,8 @@ static NSString *ArcSavesDir(void) {
 @property (strong) NSURLSessionWebSocketTask *arcTask;
 @property (strong) ArduinoBridge *arduino;
 @property (strong) OmniTermManager *terms;
+@property (strong) NSTask *voiceLiveTask;
+@property (strong) NSPipe *voiceLiveIn;
 @property (strong) NSMutableSet<NSString *> *ceRoots; // CODE EDITOR가 열어둔 폴더들
 @end
 
@@ -279,6 +281,7 @@ static NSString *ArcSavesDir(void) {
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    if (self.voiceLiveTask != nil) [self.voiceLiveTask terminate];
     [self.terms closeAll]; // 좀비 zsh 방지
     SP1ResumeWatcher();
 }
@@ -549,6 +552,113 @@ static NSString *ArcSavesDir(void) {
                 [self deliverPayload:@{ @"ok" : @NO, @"error" : tail } forId:msgId];
             }
         });
+    } else if ([cmd isEqualToString:@"voice.liveStart"]) {
+        // 신경망 라이브 데몬 기동 — stdout 라인을 OmniVC._live/_liveState 로 푸시
+        NSDictionary *a = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+        }
+        NSString *profile = [a[@"profile"] isKindOfClass:[NSString class]] ? a[@"profile"] : nil;
+        if (self.voiceLiveTask != nil) {
+            [self.voiceLiveTask terminate];
+            self.voiceLiveTask = nil;
+            self.voiceLiveIn = nil;
+        }
+        NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+        NSTask *task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:
+            [eng stringByAppendingPathComponent:@"venv/bin/python"]];
+        task.arguments = @[ [eng stringByAppendingPathComponent:@"worker.py"],
+                            @"serve", profile ?: @"" ];
+        NSPipe *inPipe = [NSPipe pipe];
+        NSPipe *outPipe = [NSPipe pipe];
+        task.standardInput = inPipe;
+        task.standardOutput = outPipe;
+        task.standardError = [NSPipe pipe];
+        __weak AppDelegate *weakSelf = self;
+        __block NSMutableData *lineBuf = [NSMutableData data];
+        outPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+            NSData *d = fh.availableData;
+            if (d.length == 0) return;
+            [lineBuf appendData:d];
+            // 개행 단위로 분리해 JS로 전달 (b64 오디오 또는 READY/ERR)
+            while (YES) {
+                NSRange nl = [lineBuf rangeOfData:[NSData dataWithBytes:"\n" length:1]
+                                          options:0
+                                            range:NSMakeRange(0, lineBuf.length)];
+                if (nl.location == NSNotFound) break;
+                NSData *lineData = [lineBuf subdataWithRange:NSMakeRange(0, nl.location)];
+                [lineBuf replaceBytesInRange:NSMakeRange(0, nl.location + 1)
+                                   withBytes:NULL length:0];
+                NSString *line = [[NSString alloc] initWithData:lineData
+                    encoding:NSUTF8StringEncoding] ?: @"";
+                NSString *js;
+                if ([line isEqualToString:@"READY"] || [line hasPrefix:@"ERR"]) {
+                    NSData *lj = [NSJSONSerialization dataWithJSONObject:@[ line ]
+                        options:0 error:nil];
+                    NSString *encoded = [[NSString alloc] initWithData:lj
+                        encoding:NSUTF8StringEncoding];
+                    js = [NSString stringWithFormat:
+                        @"window.OmniVC && OmniVC._liveState(%@[0])", encoded];
+                } else {
+                    js = [NSString stringWithFormat:
+                        @"window.OmniVC && OmniVC._live('%@')", line];
+                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf.webView evaluateJavaScript:js completionHandler:nil];
+                });
+            }
+        };
+        task.terminationHandler = ^(NSTask *t) {
+            outPipe.fileHandleForReading.readabilityHandler = nil;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf.webView evaluateJavaScript:
+                    @"window.OmniVC && OmniVC._liveState('EXITED')"
+                    completionHandler:nil];
+            });
+        };
+        NSError *err = nil;
+        BOOL ok = [task launchAndReturnError:&err];
+        if (ok) {
+            self.voiceLiveTask = task;
+            self.voiceLiveIn = inPipe;
+        }
+        [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+    } else if ([cmd isEqualToString:@"voice.liveFeed"]) {
+        // float32 PCM 청크(base64) → 4바이트 길이 프리픽스 붙여 데몬 stdin으로
+        NSDictionary *a = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+        }
+        NSString *b64 = [a[@"data"] isKindOfClass:[NSString class]] ? a[@"data"] : nil;
+        NSData *pcm = b64 ? [[NSData alloc] initWithBase64EncodedString:b64 options:0] : nil;
+        BOOL ok = NO;
+        if (pcm != nil && self.voiceLiveIn != nil) {
+            uint32_t len = (uint32_t)pcm.length;
+            NSMutableData *frame = [NSMutableData dataWithBytes:&len length:4];
+            [frame appendData:pcm];
+            @try {
+                [self.voiceLiveIn.fileHandleForWriting writeData:frame];
+                ok = YES;
+            } @catch (NSException *e) {}
+        }
+        [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+    } else if ([cmd isEqualToString:@"voice.liveStop"]) {
+        if (self.voiceLiveIn != nil) {
+            uint32_t zero = 0;
+            @try {
+                [self.voiceLiveIn.fileHandleForWriting
+                    writeData:[NSData dataWithBytes:&zero length:4]];
+            } @catch (NSException *e) {}
+        }
+        if (self.voiceLiveTask != nil) [self.voiceLiveTask terminate];
+        self.voiceLiveTask = nil;
+        self.voiceLiveIn = nil;
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
     } else if ([cmd isEqualToString:@"voice.dir"]) {
         // 음성 산출물 폴더 (Omni_OS/Voice) 생성 + 쓰기 루트 등록
         if (self.ceRoots == nil) self.ceRoots = [NSMutableSet set];

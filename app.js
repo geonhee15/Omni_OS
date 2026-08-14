@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.33.0",
+  version: "0.34.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -3122,7 +3122,18 @@ OmniOS.register("voice", {
       convert: $("vc-convert"), outWave: $("vc-out-wave"),
       playOut: $("vc-play-out"), save: $("vc-save"), outStat: $("vc-out-stat"),
       rSrc: $("vc-r-src"), rDst: $("vc-r-dst"), rShift: $("vc-r-shift"), rMode: $("vc-r-mode"),
+      live: $("vc-live"), liveStat: $("vc-live-stat"), liveMode: $("vc-live-mode"),
+      lPitch: $("vc-l-pitch"), lShift: $("vc-l-shift"), lPath: $("vc-l-path"),
     };
+    this.els.live.addEventListener("click", () =>
+      this._liveSession ? this.stopLive() : this.goLive());
+    this.els.liveMode.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => {
+        if (b.disabled || this._liveSession) return;
+        this.els.liveMode.querySelectorAll("button").forEach((x) =>
+          x.classList.toggle("active", x === b));
+        this._liveMode = b.dataset.m;
+      }));
     const E = this.els;
     E.recRef.addEventListener("click", () => this.toggleRec("ref"));
     E.recTgt.addEventListener("click", () => this.toggleRec("tgt"));
@@ -3156,6 +3167,8 @@ OmniOS.register("voice", {
     E.install.addEventListener("click", () => this.installEngine());
     // 엔진 설치 스트림 수신
     window.OmniVC = {
+      _live: (b64) => this.onLiveChunk(b64),
+      _liveState: (s) => this.onLiveState(s),
       _log: (b64) => {
         const text = atob(b64).trim().split("\n").pop();
         if (text) this.els.engStat.textContent = text.slice(0, 60).toUpperCase();
@@ -3173,11 +3186,14 @@ OmniOS.register("voice", {
         this.checkEngine();
       } else {
         this.stopRec(true);
+        this.stopLive();
       }
     });
   },
 
   _engine: "dsp",
+  _liveMode: "neural",
+  _liveSession: null,
 
   async checkEngine() {
     if (!OmniNative.available) return;
@@ -3186,6 +3202,13 @@ OmniOS.register("voice", {
       const ready = !!(r && r.installed && r.models);
       const btn = this.els.engine.querySelector('[data-e="neural"]');
       btn.disabled = !ready;
+      const liveNN = this.els.liveMode.querySelector('[data-m="neural"]');
+      liveNN.disabled = !ready;
+      if (!ready && this._liveMode === "neural") {
+        this._liveMode = "dsp";
+        this.els.liveMode.querySelectorAll("button").forEach((x) =>
+          x.classList.toggle("active", x.dataset.m === "dsp"));
+      }
       this.els.install.hidden = ready;
       if (ready && this._engine === "dsp" && !this._engineChecked) {
         // 준비돼 있으면 신경망을 기본으로
@@ -3518,6 +3541,8 @@ OmniOS.register("voice", {
     const p = this._profiles[i];
     this.renderProfiles();
     if (!p) return;
+    this.els.live.disabled = false;
+    if (!this._liveSession) this.els.liveStat.textContent = "READY";
     this.els.dPitch.textContent = `${p.pitch.toFixed(1)} HZ`;
     this.els.dBright.textContent = `${Math.round(p.centroid)} HZ`;
     this.els.dDur.textContent = `${p.duration.toFixed(1)} S`;
@@ -3647,6 +3672,276 @@ OmniOS.register("voice", {
     } catch (e) {
       this.flash("SAVE FAILED", "alert");
     }
+  },
+
+  // ── LIVE CHANGE: 마이크 실시간 변조 ──
+  async goLive() {
+    const p = this._profiles[this._active >= 0 ? this._active : 0];
+    if (!p) {
+      this.flash("SELECT A PROFILE FIRST", "alert");
+      return;
+    }
+    if (this._active < 0) this.selectProfile(0);
+    if (this._liveMode === "neural" && !p.neural) {
+      this.flash("PROFILE IS DSP-ONLY \u2014 RELEARN WITH NEURAL ENGINE", "alert");
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+    } catch (e) {
+      this.flash("MIC ACCESS DENIED", "alert");
+      return;
+    }
+    const ac = this.audioCtx();
+    await ac.resume();
+    const session = {
+      mode: this._liveMode, profile: p, stream, nodes: [], timers: [],
+      nextT: 0, pitchHist: [],
+    };
+    this._liveSession = session;
+    this.els.live.textContent = "\u25A0 STOP LIVE";
+    this.els.live.classList.add("live-on");
+    this.els.lPath.textContent = session.mode === "neural"
+      ? "KNN-VC STREAM (0.5S CHUNKS)" : "GRANULAR + EQ BANK";
+    try {
+      if (session.mode === "neural") await this.liveNeural(session, ac);
+      else await this.liveDsp(session, ac);
+      this.els.liveStat.textContent = "LIVE";
+      this.els.liveStat.className = "vc-stat rec";
+    } catch (e) {
+      this.flash(`LIVE START FAILED \u2014 ${String(e.message || e).slice(0, 50)}`, "alert");
+      this.stopLive();
+    }
+  },
+
+  // 신경망 라이브: 0.5초 16k 청크를 데몬으로 보내고 결과를 이어 재생
+  async liveNeural(s, ac) {
+    this.els.liveStat.textContent = "LOADING MODEL\u2026";
+    const ready = new Promise((res, rej) => {
+      s.readyRes = res;
+      s.readyRej = rej;
+      s.readyT = setTimeout(() => rej(new Error("engine timeout")), 90000);
+    });
+    const r = await OmniNative.request("voice.liveStart",
+      JSON.stringify({ profile: s.profile.neural }), 10000);
+    if (!r || !r.ok) throw new Error("daemon launch failed");
+    await ready;
+    const D = window.OmniVoiceDSP;
+    const src = ac.createMediaStreamSource(s.stream);
+    const tap = ac.createScriptProcessor(4096, 1, 1);
+    const mute = ac.createGain();
+    mute.gain.value = 0;
+    src.connect(tap);
+    tap.connect(mute);
+    mute.connect(ac.destination);
+    s.nodes.push(src, tap, mute);
+    const need = Math.round(ac.sampleRate / 2); // 0.5초 @ ctx rate
+    let acc = new Float32Array(0);
+    tap.onaudioprocess = (e) => {
+      const inp = e.inputBuffer.getChannelData(0);
+      const merged = new Float32Array(acc.length + inp.length);
+      merged.set(acc);
+      merged.set(inp, acc.length);
+      acc = merged;
+      while (acc.length >= need) {
+        const block = acc.subarray(0, need);
+        acc = acc.slice(need);
+        const ds = D.resample(block, this.SR / ac.sampleRate);
+        // 피치 리드아웃
+        const f0 = D.estimatePitch(ds, this.SR);
+        if (f0 > 0) this.els.lPitch.textContent = `${f0.toFixed(0)} HZ`;
+        this.els.lShift.textContent = "NEURAL";
+        const bytes = new Uint8Array(ds.buffer, ds.byteOffset, ds.byteLength);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          bin += String.fromCharCode.apply(null,
+            bytes.subarray(i, i + 0x8000));
+        }
+        OmniNative.request("voice.liveFeed",
+          JSON.stringify({ data: btoa(bin) })).catch(() => {});
+      }
+    };
+  },
+
+  onLiveState(state) {
+    const s = this._liveSession;
+    if (!s) return;
+    if (state === "READY" && s.readyRes) {
+      clearTimeout(s.readyT);
+      s.readyRes();
+    } else if (state.startsWith("ERR")) {
+      this.flash(`LIVE ${state.slice(0, 60)}`, "alert");
+    } else if (state === "EXITED" && s.mode === "neural") {
+      this.stopLive();
+    }
+  },
+
+  onLiveChunk(b64) {
+    const s = this._liveSession;
+    if (!s || s.mode !== "neural") return;
+    const D = window.OmniVoiceDSP;
+    const ac = this.audioCtx();
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const pcm = new Float32Array(bytes.buffer);
+    const up = D.resample(pcm, ac.sampleRate / this.SR);
+    // 경계 클릭 방지 3ms 페이드
+    const fade = Math.round(ac.sampleRate * 0.003);
+    for (let i = 0; i < fade && i < up.length; i++) {
+      const g = i / fade;
+      up[i] *= g;
+      up[up.length - 1 - i] *= g;
+    }
+    const buf = ac.createBuffer(1, up.length, ac.sampleRate);
+    buf.getChannelData(0).set(up);
+    const node = ac.createBufferSource();
+    node.buffer = buf;
+    node.connect(ac.destination);
+    const t = Math.max(ac.currentTime + 0.12, s.nextT || 0);
+    node.start(t);
+    s.nextT = t + buf.duration;
+  },
+
+  // DSP 라이브: 그래뉼러 피치 시프터(워클릿) + 프로파일 EQ 뱅크, 지연 ~50ms
+  async liveDsp(s, ac) {
+    const D = window.OmniVoiceDSP;
+    const p = s.profile;
+    const src = ac.createMediaStreamSource(s.stream);
+    s.nodes.push(src);
+    // 피치 시프터: AudioWorklet 우선, 실패 시 ScriptProcessor 폴백
+    let shiftNode = null;
+    let setRatio = null;
+    try {
+      if (!this._workletLoaded) {
+        await ac.audioWorklet.addModule("vendor/dsp/pitch_worklet.js");
+        this._workletLoaded = true;
+      }
+      shiftNode = new AudioWorkletNode(ac, "omni-grain-shifter",
+        { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      const param = shiftNode.parameters.get("ratio");
+      setRatio = (r) => param.setTargetAtTime(r, ac.currentTime, 0.15);
+    } catch (e) {
+      const core = new window.OmniGrainCore(ac.sampleRate);
+      let ratio = 1;
+      shiftNode = ac.createScriptProcessor(1024, 1, 1);
+      shiftNode.onaudioprocess = (ev) => core.process(
+        ev.inputBuffer.getChannelData(0),
+        ev.outputBuffer.getChannelData(0), ratio);
+      setRatio = (r) => { ratio = r; };
+    }
+    s.setRatio = setRatio;
+    // EQ 뱅크: 프로파일 포락선 vs 라이브 스펙트럼
+    const bands = [120, 200, 330, 550, 900, 1500, 2500, 4000, 6000];
+    const eq = bands.map((f) => {
+      const b = ac.createBiquadFilter();
+      b.type = "peaking";
+      b.frequency.value = f;
+      b.Q.value = 1.1;
+      b.gain.value = 0;
+      return b;
+    });
+    const analyser = ac.createAnalyser();
+    analyser.fftSize = 4096;
+    analyser.smoothingTimeConstant = 0.9;
+    src.connect(analyser);
+    src.connect(shiftNode);
+    let prev = shiftNode;
+    for (const b of eq) {
+      prev.connect(b);
+      prev = b;
+    }
+    const comp = ac.createDynamicsCompressor();
+    prev.connect(comp);
+    comp.connect(ac.destination);
+    s.nodes.push(shiftNode, ...eq, analyser, comp);
+
+    // 프로파일 포락선 밴드 기준값 (dB, 전체 평균 대비)
+    const ltas = Float32Array.from(p.ltas);
+    const sm = D.smoothLtas(ltas, 0.5);
+    const binHz = this.SR / 2 / sm.length;
+    const bandDb = (arrDb) => {
+      const overall = arrDb.reduce((a, b) => a + b, 0) / arrDb.length;
+      return arrDb.map((v) => v - overall);
+    };
+    const refDb = bandDb(bands.map((f) => {
+      let sum = 0, cnt = 0;
+      for (let k = Math.floor(f / 1.35 / binHz);
+           k <= Math.min(sm.length - 1, Math.ceil(f * 1.35 / binHz)); k++) {
+        sum += sm[k];
+        cnt++;
+      }
+      return 20 * Math.log10(Math.max(1e-9, sum / Math.max(1, cnt)));
+    }));
+
+    // 실시간 피치 추적 → 자동 비율
+    const td = new Float32Array(4096);
+    s.timers.push(setInterval(() => {
+      analyser.getFloatTimeDomainData(td);
+      const f0 = D.estimatePitch(td, ac.sampleRate);
+      if (f0 > 0 && p.pitch > 0) {
+        s.pitchHist.push(f0);
+        if (s.pitchHist.length > 8) s.pitchHist.shift();
+        const med = [...s.pitchHist].sort((a, b) => a - b)[
+          Math.floor(s.pitchHist.length / 2)];
+        const ratio = Math.max(0.5, Math.min(2, p.pitch / med));
+        setRatio(ratio);
+        this.els.lPitch.textContent = `${med.toFixed(0)} HZ`;
+        this.els.lShift.textContent =
+          `${(12 * Math.log2(ratio)).toFixed(1)} ST`;
+      }
+    }, 300));
+    // 라이브 스펙트럼 → EQ 갱신
+    const fd = new Float32Array(analyser.frequencyBinCount);
+    const acBin = ac.sampleRate / 2 / analyser.frequencyBinCount;
+    s.timers.push(setInterval(() => {
+      analyser.getFloatFrequencyData(fd);
+      const liveDb = bandDb(bands.map((f) => {
+        let sum = 0, cnt = 0;
+        for (let k = Math.floor(f / 1.35 / acBin);
+             k <= Math.min(fd.length - 1, Math.ceil(f * 1.35 / acBin)); k++) {
+          if (Number.isFinite(fd[k])) {
+            sum += fd[k];
+            cnt++;
+          }
+        }
+        return cnt ? sum / cnt : -80;
+      }));
+      eq.forEach((b, i) => {
+        const g = Math.max(-12, Math.min(12, refDb[i] - liveDb[i]));
+        b.gain.setTargetAtTime(g, ac.currentTime, 0.4);
+      });
+    }, 1500));
+  },
+
+  stopLive() {
+    const s = this._liveSession;
+    if (!s) return;
+    this._liveSession = null;
+    s.timers.forEach(clearInterval);
+    clearTimeout(s.readyT);
+    if (s.readyRej) s.readyRej = null;
+    for (const n of s.nodes) {
+      try {
+        if (n.onaudioprocess !== undefined) n.onaudioprocess = null;
+        n.disconnect();
+      } catch (e) {}
+    }
+    try {
+      s.stream.getTracks().forEach((t) => t.stop());
+    } catch (e) {}
+    if (s.mode === "neural") {
+      OmniNative.request("voice.liveStop", null, 8000).catch(() => {});
+    }
+    this.els.live.textContent = "\u25CF GO LIVE";
+    this.els.live.classList.remove("live-on");
+    this.els.liveStat.textContent = "READY";
+    this.els.liveStat.className = "vc-stat";
+    this.els.lPitch.textContent = "\u2014";
+    this.els.lShift.textContent = "\u2014";
   },
 
   // ── 시각화 ──

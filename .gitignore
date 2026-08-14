@@ -8,3 +8,6 @@ Notes/
 Voice/
 voice_engine/venv/
 voice_engine/*.log
+examples/Demo-Voice-Changer/
+voice_engine/__pycache__/
+__pycache__/

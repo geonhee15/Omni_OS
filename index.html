@@ -821,6 +821,24 @@
               <span class="vc-stat" id="vc-out-stat"></span>
             </div>
           </div>
+
+          <div class="mod vc-mod">
+            <div class="mod-title">4 &middot; LIVE CHANGE
+              <span class="mod-note">HEADPHONES RECOMMENDED &mdash; DSP ENGINE</span></div>
+            <div class="vc-row">
+              <div class="r3d-modes" id="vc-live-mode">
+                <button class="ig-tab active" data-m="neural">NEURAL ~0.8S</button>
+                <button class="ig-tab" data-m="dsp">DSP ~0.05S</button>
+              </div>
+              <button class="ig-tab active" id="vc-live" disabled>&#9679; GO LIVE</button>
+              <span class="vc-stat" id="vc-live-stat">SELECT A PROFILE FIRST</span>
+            </div>
+            <div class="vc-row vc-live-kv">
+              <div class="kv"><span>LIVE PITCH</span><span id="vc-l-pitch">&mdash;</span></div>
+              <div class="kv"><span>SHIFT</span><span id="vc-l-shift">&mdash;</span></div>
+              <div class="kv"><span>PATH</span><span id="vc-l-path">&mdash;</span></div>
+            </div>
+          </div>
         </div>
 
         <!-- right: readout -->
@@ -942,7 +960,7 @@
       <span class="divider">|</span>
       <span>MODULES: CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.33.0</span>
+      <span>v0.34.0</span>
     </footer>
   </div>
 
@@ -977,6 +995,7 @@
   <script src="vendor/codemirror/modes/toml.js"></script>
   <script src="vendor/marked/marked.umd.js"></script>
   <script src="vendor/dsp/voice_dsp.js"></script>
+  <script src="vendor/dsp/pitch_worklet.js"></script>
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/xterm-addon-fit.js"></script>
   <script src="app.js"></script>
