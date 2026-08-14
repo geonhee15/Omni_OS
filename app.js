@@ -3112,7 +3112,7 @@ OmniOS.register("voice", {
       spec: $("vc-spec"), dPitch: $("vc-d-pitch"), dBright: $("vc-d-bright"),
       dDur: $("vc-d-dur"),
       recRef: $("vc-rec-ref"), fileRef: $("vc-file-ref"), refInput: $("vc-ref-input"),
-      refStat: $("vc-ref-stat"), refWave: $("vc-ref-wave"),
+      refStat: $("vc-ref-stat"), refWave: $("vc-ref-wave"), playRef: $("vc-play-ref"),
       profName: $("vc-prof-name"), learn: $("vc-learn"),
       recTgt: $("vc-rec-tgt"), fileTgt: $("vc-file-tgt"), tgtInput: $("vc-tgt-input"),
       tgtStat: $("vc-tgt-stat"), tgtWave: $("vc-tgt-wave"), playTgt: $("vc-play-tgt"),
@@ -3130,6 +3130,7 @@ OmniOS.register("voice", {
     E.tgtInput.addEventListener("change", () => this.loadFile("tgt", E.tgtInput));
     E.learn.addEventListener("click", () => this.learnProfile());
     E.convert.addEventListener("click", () => this.convert());
+    E.playRef.addEventListener("click", () => this.play(this._ref));
     E.playTgt.addEventListener("click", () => this.play(this._tgt));
     E.playOut.addEventListener("click", () => this.play(this._out));
     E.save.addEventListener("click", () => this.saveWav());
@@ -3274,6 +3275,7 @@ OmniOS.register("voice", {
       this.els.refStat.className = `vc-stat${secs >= 20 ? " ok" : ""}`;
       this.drawWave(this.els.refWave, audio);
       this.els.learn.disabled = false;
+      this.els.playRef.disabled = false;
       if (secs < 20) this.flash("SHORT SAMPLE \u2014 60S GIVES A BETTER PROFILE");
       else this.flash("SAMPLE READY", "ok");
     } else {
