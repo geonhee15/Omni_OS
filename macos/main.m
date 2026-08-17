@@ -1475,10 +1475,10 @@ static BOOL OmniAINeuralAvailable(void) {
             return;
         }
         BOOL wantNeural = [a[@"neural"] boolValue];
-        // 경로별 기본 속도: 신경망 소스(Eddy)는 대사팩 실측 템포(7.0음절/초)에
-        // 맞춘 320, DSP 폴백(Yuna)은 자연 속도 180
+        // 경로별 기본 속도: 신경망 소스(Eddy)는 대사팩 템포(7.0음절/초) 근처에서
+        // 사용자 취향 반영해 305(6.6음절/초), DSP 폴백(Yuna)은 자연 속도 180
         NSNumber *rate = [a[@"rate"] isKindOfClass:[NSNumber class]] ? a[@"rate"]
-            : (wantNeural ? @320 : @180);
+            : (wantNeural ? @305 : @180);
 
         if (wantNeural && OmniAINeuralAvailable()) {
             // 신경망 경로: say(Eddy) 소스 → 대사팩 음색으로 kNN-VC 변환.
