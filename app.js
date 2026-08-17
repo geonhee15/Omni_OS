@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.39.4",
+  version: "0.40.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -524,7 +524,21 @@ OmniOS.register("ai", {
     "- 상대를 부르는 호칭(주인님, 보스, 대장님, 사용자님, 선생님 등)을 절대 사용하지 않습니다. \"네, 알겠습니다.\"처럼 호칭 없이 바로 말합니다.",
     "- 구식 메인프레임 컴퓨터 같은 담백하고 기계적인 보고체를 사용합니다. 감탄사, 이모지, 과장된 표현을 쓰지 않습니다.",
     "- 답은 음성으로 낭독됩니다. 목록, 마크다운, 코드블록 없이 평문 문장 1~3개로 간결하게 답합니다.",
-    "- 당신의 정체: 이 컴퓨터에서 실행 중인 개인 HUD 시스템 OMNI_OS의 관제 AI입니다. 시스템 제어, 메일 확인 같은 기능 연동은 아직 준비 중이므로, 그런 요청에는 해당 기능이 아직 연결되지 않았다고 짧게 보고합니다.",
+    "- 당신의 정체: 이 컴퓨터에서 실행 중인 개인 HUD 시스템 OMNI_OS의 관제 AI입니다. 아래 [실시간 상태 스냅샷]으로 모든 패널의 현재 상태를 파악하고 있으며, 앱·시스템에 대한 질문에는 그 실측값으로 답합니다. 패널을 직접 여닫거나 실행하는 제어, 메일 확인 같은 외부 연동은 아직 연결 준비 중이므로, 그런 요청에는 해당 기능이 아직 연결되지 않았다고 짧게 보고합니다.",
+  ].join("\n"),
+  PANEL_GUIDE: [
+    "COMMAND BRIDGE: 홈 상황실 — 시스템 게이지, SP-1 방어 상태, 활성 프로젝트 홀로그램, 미션 목표, 최근 커밋 티커",
+    "OMNI_AI: 이 음성 인터페이스 (한국어 STT + 로봇 보이스)",
+    "CLOCK: 시계/업타임 HUD",
+    "PROJECTS: 프로젝트 등록부 — 상태/우선순위/목표일 관리, 패널 연결, 전용 에디터",
+    "SYSTEM MONITOR: CPU/GPU/메모리/디스크/네트워크/배터리 실시간 대시보드",
+    "SECURITY-PROTOCOL-1: 자리비움 침입 감지 — 박수 두 번으로 락다운, 침입자 촬영 기록",
+    "RENDER_3D: 3D 모델 뷰어 (STL/STEP 등) + 웹캠 손 제스처 컨트롤",
+    "ARDUINO IDE: 스케치 편집/컴파일/업로드 + 시리얼 모니터",
+    "CODE EDITOR: 미니 IDE — 파일 트리, 하이라이팅, 자동완성, 내장 터미널",
+    "NOTES: 마크다운 노트 볼트 — 위키링크, 미리보기",
+    "VOICE CHANGER: 음성 학습 + 음색 전이 (DSP/신경망/ULTRA, 라이브 변조)",
+    "ARC-SCAN: 자작 회전 라이다(ESP32+ToF 7ch) 실시간 3D 스캔 뷰어 — 평면도, 방 크기 추정, PLY 저장",
   ].join("\n"),
   model: "claude-haiku-4-5-20251001",
   history: [],
@@ -603,6 +617,15 @@ OmniOS.register("ai", {
       }
     });
     requestAnimationFrame(() => this.drawCore());
+    // 배터리 감시: 패널이 닫혀 있어도 앱 전역에서 자동 경고 발화
+    if (OmniNative.available) {
+      OmniNative.request("ai.status", null, 5000).then((r) => {
+        this.neural = !!(r && r.neural);
+        this.hasKey = !!(r && r.key);
+      }).catch(() => {});
+      setTimeout(() => this.batteryWatch(), 15000);
+      setInterval(() => this.batteryWatch(), 60000);
+    }
   },
 
   // ---- 상태 표시 ----
@@ -644,6 +667,92 @@ OmniOS.register("ai", {
     } catch (e) {
       /* 브리지 타임아웃 — 표시 유지 */
     }
+  },
+
+  // ---- 배터리 자동 경고 ----
+  _battWarn10: false,
+  _battWarn5: false,
+
+  async batteryWatch() {
+    if (!OmniNative.available || this.state !== "idle") return;
+    let d;
+    try { d = await OmniNative.request("sys.stats", null, 4000); } catch (e) { return; }
+    const b = d && d.battery;
+    if (!b || typeof b.percent !== "number" || b.percent < 0) return;
+    if (b.charging || b.percent >= 15) {
+      this._battWarn10 = false;
+      this._battWarn5 = false;
+      return;
+    }
+    let msg = null;
+    if (b.percent <= 5 && !this._battWarn5) {
+      msg = `배터리 잔량이 ${b.percent}퍼센트입니다. 즉시 전원을 연결하십시오.`;
+      this._battWarn5 = true;
+      this._battWarn10 = true;
+    } else if (b.percent <= 10 && !this._battWarn10) {
+      msg = `배터리 잔량이 ${b.percent}퍼센트입니다. 충전기 연결이 필요합니다.`;
+      this._battWarn10 = true;
+    }
+    if (msg) {
+      this.logLine("omni", msg);
+      this.speak(msg);
+    }
+  },
+
+  // ---- 앱 전역 상태 스냅샷 (매 질문마다 시스템 프롬프트에 주입) ----
+  async gatherContext() {
+    const L = [];
+    const up = Math.floor((Date.now() - OmniOS.bootTime) / 60000);
+    L.push(`OMNI_OS v${OmniOS.version}, 세션 가동 ${up}분`);
+    const nav = document.querySelector(".nav-item.active .nav-label");
+    if (nav) L.push(`사용자가 보고 있는 패널: ${nav.textContent}`);
+    if (!OmniNative.available) return L.join("\n");
+    const req = (cmd, arg, t) => OmniNative.request(cmd, arg, t).catch(() => null);
+    const [sys, sp1] = await Promise.all([
+      req("sys.stats", null, 3000),
+      req("sp1.status", null, 3000),
+    ]);
+    if (sys) {
+      const m = sys.mem || {};
+      const used = m.total
+        ? Math.round(((m.wired || 0) + (m.compressed || 0) + (m.active || 0)
+            + (m.inactive || 0)) / m.total * 100) : null;
+      const TH = ["정상", "주의", "심각", "위험"];
+      let s = `시스템: CPU ${Math.round((sys.cpu || 0) * 100)}%`;
+      if (typeof sys.gpu === "number") s += `, GPU ${Math.round(sys.gpu)}%`;
+      if (used != null) s += `, 메모리 ${used}%`;
+      s += `, 발열 ${TH[sys.thermal] || "?"}`;
+      const b = sys.battery;
+      if (b && b.percent >= 0) {
+        s += `, 배터리 ${b.percent}% ${b.charging ? "충전 중" : "방전 중"}`;
+      }
+      L.push(s);
+    }
+    if (sp1) {
+      const w = sp1.watcher || {};
+      L.push(`보안 SP-1: 상태 ${(sp1.state || "불명").toUpperCase()}, `
+        + `워처 ${w.running ? "가동 중" : "정지"}, 침입 기록 ${sp1.intrusions != null ? sp1.intrusions : 0}건`);
+    }
+    let items = (OmniOS.modules.proj && OmniOS.modules.proj._items) || [];
+    if (!items.length) {
+      const r = await req("store.read", JSON.stringify({ name: "projects" }), 2000);
+      try { items = r && r.data ? JSON.parse(r.data) : []; } catch (e) { items = []; }
+    }
+    if (items.length) {
+      const line = items.slice(0, 10)
+        .map((p) => `${p.name}(${p.status || "?"}${p.priority ? "/" + p.priority : ""})`)
+        .join(", ");
+      L.push(`프로젝트 ${items.length}개: ${line}`);
+    }
+    try {
+      const arc = OmniOS.modules.arc;
+      if (arc && typeof arc._count === "number" && arc._count > 0) {
+        L.push(`ARC-SCAN: 현재 워크스페이스에 포인트 ${arc._count}개`);
+      }
+    } catch (e) { /* arc 미초기화 */ }
+    L.push(`음성 엔진: ${this.neural ? "신경망(보이스팩 음색)" : "DSP 폴백"}, `
+      + `API 키 ${this.hasKey ? "설정됨" : "없음"}`);
+    return L.join("\n");
   },
 
   async saveKey() {
@@ -830,9 +939,13 @@ OmniOS.register("ai", {
       return;
     }
     try {
+      // 매 질문마다 앱 전역 실측 스냅샷을 수집해 프롬프트에 주입
+      const snapshot = await this.gatherContext();
+      const system = `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}`
+        + `\n\n[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`;
       const r = await OmniNative.request("ai.chat", JSON.stringify({
         model: this.model,
-        system: this.PERSONA,
+        system,
         messages: this.history,
       }), 90000);
       if (!r || !r.ok) {
