@@ -3420,3 +3420,4 @@ input.vc-name {
   line-height: 1.8;
   color: rgba(111, 168, 201, 0.5);
 }
+.ai-model.disabled { opacity: 0.35; cursor: default; }

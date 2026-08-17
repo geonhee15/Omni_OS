@@ -10,6 +10,7 @@ WavLM-Large 특징 공간에서 소스 프레임을 레퍼런스 프레임의 k-
   worker.py prefetch                    # 모델 다운로드만
   worker.py learn <ref.wav> <out.pt>    # 레퍼런스 특징 추출 → 프로파일 저장
   worker.py convert <profile.pt> <in.wav> <out.wav> [topk]
+  worker.py ttsserve <profile.pt>       # OMNI_AI TTS 변환 데몬 (JSON 라인)
 """
 import json
 import os
@@ -179,6 +180,37 @@ def cmd_serve(profile_pt):
             stdout.flush()
 
 
+def cmd_ttsserve(profile_pt):
+    """OMNI_AI TTS 변환 데몬: 모델·프로파일을 상주시켜 두고 stdin의 JSON 라인
+    {"in": path, "out": path} 마다 전체 발화를 오프라인 변환한다 (스트리밍 serve와
+    달리 문장 단위라 경계 아티팩트가 없음). 응답은 stdout에 JSON 한 줄씩.
+    모델 로그(리샘플 알림 등)가 프로토콜을 오염시키지 않게 stdout을 우회한다."""
+    import contextlib
+
+    import torch
+    import torchaudio
+
+    real_stdout = sys.stdout
+    with contextlib.redirect_stdout(sys.stderr):
+        knn, device = load_with_fallback()
+        matching = torch.load(profile_pt, map_location="cpu")
+    print("READY", file=real_stdout, flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+            with contextlib.redirect_stdout(sys.stderr):
+                query = knn.get_features(req["in"], vad_trigger_level=0)
+                wav = knn.match(query, matching.to(query.device), topk=4)
+                torchaudio.save(req["out"], wav[None].cpu(), 16000)
+            resp = {"ok": True, "seconds": round(wav.shape[-1] / 16000, 2)}
+        except Exception as e:  # 요청 하나의 실패가 데몬을 죽이지 않게
+            resp = {"ok": False, "error": str(e)[:200]}
+        print(json.dumps(resp), file=real_stdout, flush=True)
+
+
 def main():
     if len(sys.argv) < 2:
         out({"ok": False, "error": "no command"})
@@ -193,6 +225,8 @@ def main():
             cmd_learn(sys.argv[2], sys.argv[3])
         elif cmd == "serve":
             cmd_serve(sys.argv[2])
+        elif cmd == "ttsserve":
+            cmd_ttsserve(sys.argv[2])
         elif cmd == "convert":
             topk = sys.argv[5] if len(sys.argv) > 5 else 4
             cmd_convert(sys.argv[2], sys.argv[3], sys.argv[4], topk)

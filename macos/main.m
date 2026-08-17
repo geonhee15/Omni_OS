@@ -192,6 +192,15 @@ static NSString *ArcSavesDir(void) {
 @property (strong) NSPipe *voiceLiveIn;
 @property (strong) NSMutableSet<NSString *> *ceRoots; // CODE EDITOR가 열어둔 폴더들
 @property (strong) OmniAIListener *aiListener;        // OMNI_AI 음성 인식
+// OMNI_AI 신경망 TTS 변환 데몬 (worker.py ttsserve)
+@property (strong) NSTask *aiTtsTask;
+@property (strong) NSPipe *aiTtsIn;
+@property (assign) BOOL aiTtsReady;
+@property (strong) NSMutableString *aiTtsBuf;
+@property (strong) NSMutableArray *aiTtsWaiters;      // (^)(BOOL ready) 블록들
+@property (strong) NSNumber *aiTtsPendingId;          // 진행 중 요청의 msgId
+@property (strong) NSString *aiTtsPendingIn;
+@property (strong) NSString *aiTtsPendingOut;
 @end
 
 @implementation AppDelegate
@@ -284,6 +293,7 @@ static NSString *ArcSavesDir(void) {
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     if (self.voiceLiveTask != nil) [self.voiceLiveTask terminate];
+    if (self.aiTtsTask != nil) [self.aiTtsTask terminate];
     [self.aiListener cancel];
     [self.terms closeAll]; // 좀비 zsh 방지
     SP1ResumeWatcher();
@@ -1175,6 +1185,153 @@ static NSString *OmniAIJSON(NSDictionary *obj) {
     return s;
 }
 
+// 신경망 로봇 보이스 사용 가능 여부 (엔진 + 학습된 음색 프로파일)
+static NSString *OmniAIProfilePath(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@".omni/omni_ai_voice.pt"];
+}
+
+static BOOL OmniAINeuralAvailable(void) {
+    NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    return [fm isExecutableFileAtPath:[eng stringByAppendingPathComponent:@"venv/bin/python"]]
+        && [fm fileExistsAtPath:[eng stringByAppendingPathComponent:@"worker.py"]]
+        && [fm fileExistsAtPath:OmniAIProfilePath()];
+}
+
+// TTS 변환 데몬 기동 보장 — done(ready)는 메인 큐에서 호출
+- (void)aiTtsEnsure:(void (^)(BOOL))done {
+    if (self.aiTtsTask != nil && self.aiTtsTask.isRunning) {
+        if (self.aiTtsReady) { done(YES); return; }
+        [self.aiTtsWaiters addObject:[done copy]];
+        return;
+    }
+    if (!OmniAINeuralAvailable()) { done(NO); return; }
+    self.aiTtsReady = NO;
+    self.aiTtsBuf = [NSMutableString string];
+    if (self.aiTtsWaiters == nil) self.aiTtsWaiters = [NSMutableArray array];
+    [self.aiTtsWaiters addObject:[done copy]];
+
+    NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:
+        [eng stringByAppendingPathComponent:@"venv/bin/python"]];
+    task.arguments = @[ [eng stringByAppendingPathComponent:@"worker.py"],
+                        @"ttsserve", OmniAIProfilePath() ];
+    NSPipe *inPipe = [NSPipe pipe];
+    NSPipe *outPipe = [NSPipe pipe];
+    NSPipe *errPipe = [NSPipe pipe];
+    task.standardInput = inPipe;
+    task.standardOutput = outPipe;
+    task.standardError = errPipe;
+    // stderr(모델 로그)는 버퍼가 차서 데몬이 막히지 않게 계속 비운다
+    errPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+        (void)fh.availableData;
+    };
+    __weak AppDelegate *weakSelf = self;
+    outPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+        NSData *d = fh.availableData;
+        if (d.length == 0) return;
+        NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+        if (s == nil) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf aiTtsConsume:s];
+        });
+    };
+    task.terminationHandler = ^(NSTask *t) {
+        outPipe.fileHandleForReading.readabilityHandler = nil;
+        errPipe.fileHandleForReading.readabilityHandler = nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppDelegate *s = weakSelf;
+            if (s == nil) return;
+            s.aiTtsReady = NO;
+            s.aiTtsTask = nil;
+            s.aiTtsIn = nil;
+            for (void (^w)(BOOL) in s.aiTtsWaiters) w(NO);
+            [s.aiTtsWaiters removeAllObjects];
+            [s aiTtsFailPending:@"daemon exited"];
+        });
+    };
+    NSError *err = nil;
+    if (![task launchAndReturnError:&err]) {
+        for (void (^w)(BOOL) in self.aiTtsWaiters) w(NO);
+        [self.aiTtsWaiters removeAllObjects];
+        return;
+    }
+    self.aiTtsTask = task;
+    self.aiTtsIn = inPipe;
+}
+
+// 데몬 stdout 라인 처리 (메인 큐)
+- (void)aiTtsConsume:(NSString *)chunk {
+    [self.aiTtsBuf appendString:chunk];
+    NSRange nl;
+    while ((nl = [self.aiTtsBuf rangeOfString:@"\n"]).location != NSNotFound) {
+        NSString *line = [[self.aiTtsBuf substringToIndex:nl.location]
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        [self.aiTtsBuf deleteCharactersInRange:NSMakeRange(0, nl.location + 1)];
+        if (line.length == 0) continue;
+        if ([line isEqualToString:@"READY"]) {
+            self.aiTtsReady = YES;
+            for (void (^w)(BOOL) in self.aiTtsWaiters) w(YES);
+            [self.aiTtsWaiters removeAllObjects];
+            continue;
+        }
+        // 변환 응답 JSON
+        NSNumber *msgId = self.aiTtsPendingId;
+        if (msgId == nil) continue; // 타임아웃 뒤 늦게 온 응답
+        NSString *inPath = self.aiTtsPendingIn, *outPath = self.aiTtsPendingOut;
+        self.aiTtsPendingId = nil;
+        self.aiTtsPendingIn = nil;
+        self.aiTtsPendingOut = nil;
+        NSData *jd = [line dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary *r = jd ? [NSJSONSerialization JSONObjectWithData:jd
+                                                               options:0 error:nil] : nil;
+        BOOL ok = [r isKindOfClass:[NSDictionary class]] && [r[@"ok"] boolValue];
+        NSData *wav = ok ? [NSData dataWithContentsOfFile:outPath] : nil;
+        [NSFileManager.defaultManager removeItemAtPath:inPath error:nil];
+        [NSFileManager.defaultManager removeItemAtPath:outPath error:nil];
+        if (wav.length == 0) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" } forId:msgId];
+        } else {
+            [self deliverPayload:@{ @"ok" : @YES, @"neural" : @YES,
+                                    @"wav" : [wav base64EncodedStringWithOptions:0] }
+                           forId:msgId];
+        }
+    }
+}
+
+- (void)aiTtsFailPending:(NSString *)reason {
+    if (self.aiTtsPendingId == nil) return;
+    NSNumber *msgId = self.aiTtsPendingId;
+    if (self.aiTtsPendingIn != nil) {
+        [NSFileManager.defaultManager removeItemAtPath:self.aiTtsPendingIn error:nil];
+    }
+    self.aiTtsPendingId = nil;
+    self.aiTtsPendingIn = nil;
+    self.aiTtsPendingOut = nil;
+    [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" } forId:msgId];
+}
+
+// say 실행 → wav 파일 (완료 블록은 배경 큐에서 호출)
+- (BOOL)aiRunSay:(NSString *)text voice:(NSString *)voice rate:(NSNumber *)rate
+          toFile:(NSString *)path {
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/say"];
+    task.arguments = @[ @"-v", voice, @"-r", rate.stringValue, @"-o", path,
+                        @"--data-format=LEI16@22050" ];
+    NSPipe *inPipe = [NSPipe pipe];
+    task.standardInput = inPipe;
+    task.standardError = [NSPipe pipe];
+    NSError *err = nil;
+    if (![task launchAndReturnError:&err]) return NO;
+    [inPipe.fileHandleForWriting writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+    [inPipe.fileHandleForWriting closeFile];
+    [task waitUntilExit];
+    unsigned long long size = [[NSFileManager.defaultManager
+        attributesOfItemAtPath:path error:nil] fileSize];
+    return task.terminationStatus == 0 && size > 100;
+}
+
 - (void)handleAI:(NSString *)cmd arg:(NSString *)arg msgId:(NSNumber *)msgId {
     NSDictionary *a = nil;
     if (arg != nil) {
@@ -1186,8 +1343,17 @@ static NSString *OmniAIJSON(NSDictionary *obj) {
     if ([cmd isEqualToString:@"ai.status"]) {
         [self deliverPayload:@{ @"ok" : @YES,
                                 @"key" : @(OmniAIReadKey() != nil),
+                                @"neural" : @(OmniAINeuralAvailable()),
                                 @"listening" : @(self.aiListener.running) }
                        forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.warm"]) {
+        // 패널이 열릴 때 데몬을 미리 띄워 첫 응답 지연 제거
+        if (OmniAINeuralAvailable()) {
+            [self aiTtsEnsure:^(BOOL ready) { (void)ready; }];
+        }
+        [self deliverPayload:@{ @"ok" : @YES,
+                                @"neural" : @(OmniAINeuralAvailable()) } forId:msgId];
 
     } else if ([cmd isEqualToString:@"ai.saveKey"]) {
         NSString *key = [a[@"key"] isKindOfClass:[NSString class]] ? a[@"key"] : nil;
@@ -1306,40 +1472,83 @@ static NSString *OmniAIJSON(NSDictionary *obj) {
             [self deliverPayload:@{ @"ok" : @NO, @"error" : @"bad text" } forId:msgId];
             return;
         }
-        NSString *voice = [a[@"voice"] isKindOfClass:[NSString class]] ? a[@"voice"] : @"Yuna";
         NSNumber *rate = [a[@"rate"] isKindOfClass:[NSNumber class]] ? a[@"rate"] : @180;
+        BOOL wantNeural = [a[@"neural"] boolValue];
+
+        if (wantNeural && OmniAINeuralAvailable()) {
+            // 신경망 경로: say(Eddy) 소스 → 대사팩 음색으로 kNN-VC 변환.
+            // Eddy의 밋밋한 기계 억양이 타겟 TTS 억양과 가장 잘 맞는다 (WavLM 실측)
+            if (self.aiTtsPendingId != nil) {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_BUSY" } forId:msgId];
+                return;
+            }
+            NSString *base = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                [NSString stringWithFormat:@"omni_ai_%@", NSUUID.UUID.UUIDString]];
+            NSString *tmpIn = [base stringByAppendingString:@"_src.wav"];
+            NSString *tmpOut = [base stringByAppendingString:@"_vc.wav"];
+            __weak AppDelegate *weakSelf = self;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                BOOL said = [weakSelf aiRunSay:text
+                                         voice:@"Eddy (한국어(대한민국))"
+                                          rate:rate toFile:tmpIn];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    AppDelegate *s = weakSelf;
+                    if (s == nil) return;
+                    if (!said) {
+                        [s deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" }
+                                    forId:msgId];
+                        return;
+                    }
+                    [s aiTtsEnsure:^(BOOL ready) {
+                        if (!ready || s.aiTtsPendingId != nil) {
+                            [NSFileManager.defaultManager removeItemAtPath:tmpIn error:nil];
+                            [s deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" }
+                                        forId:msgId];
+                            return;
+                        }
+                        s.aiTtsPendingId = msgId;
+                        s.aiTtsPendingIn = tmpIn;
+                        s.aiTtsPendingOut = tmpOut;
+                        NSData *req = [NSJSONSerialization dataWithJSONObject:
+                            @{ @"in" : tmpIn, @"out" : tmpOut } options:0 error:nil];
+                        NSMutableData *line = [req mutableCopy];
+                        [line appendBytes:"\n" length:1];
+                        @try {
+                            [s.aiTtsIn.fileHandleForWriting writeData:line];
+                        } @catch (NSException *e) {
+                            [s aiTtsFailPending:@"pipe closed"];
+                            return;
+                        }
+                        // 30초 타임아웃 — 응답이 늦으면 실패 처리 (늦은 응답은 무시됨)
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC),
+                                       dispatch_get_main_queue(), ^{
+                            if ([s.aiTtsPendingId isEqualToNumber:msgId]) {
+                                [s aiTtsFailPending:@"timeout"];
+                            }
+                        });
+                    }];
+                });
+            });
+            return;
+        }
+
+        // DSP 폴백 경로: say(Yuna) 원본을 그대로 반환 — JS가 로봇 DSP 체인 적용
+        NSString *voice = [a[@"voice"] isKindOfClass:[NSString class]] ? a[@"voice"] : @"Yuna";
+        __weak AppDelegate *weakSelf = self;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
                 [NSString stringWithFormat:@"omni_ai_tts_%@.wav", NSUUID.UUID.UUIDString]];
-            NSTask *task = [[NSTask alloc] init];
-            task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/say"];
-            // 텍스트는 stdin으로 — 인자 파싱/주입 문제 원천 차단
-            task.arguments = @[ @"-v", voice,
-                                @"-r", rate.stringValue,
-                                @"-o", tmp,
-                                @"--data-format=LEI16@22050" ];
-            NSPipe *inPipe = [NSPipe pipe];
-            task.standardInput = inPipe;
-            task.standardError = [NSPipe pipe];
-            NSError *err = nil;
-            if (![task launchAndReturnError:&err]) {
-                [self deliverPayload:@{ @"ok" : @NO,
-                    @"error" : err.localizedDescription ?: @"say launch" } forId:msgId];
-                return;
-            }
-            [inPipe.fileHandleForWriting
-                writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
-            [inPipe.fileHandleForWriting closeFile];
-            [task waitUntilExit];
-            NSData *wav = [NSData dataWithContentsOfFile:tmp];
+            BOOL said = [weakSelf aiRunSay:text voice:voice rate:rate toFile:tmp];
+            NSData *wav = said ? [NSData dataWithContentsOfFile:tmp] : nil;
             [NSFileManager.defaultManager removeItemAtPath:tmp error:nil];
-            if (task.terminationStatus != 0 || wav.length == 0) {
-                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"tts failed" } forId:msgId];
+            if (wav.length == 0) {
+                [weakSelf deliverPayload:@{ @"ok" : @NO, @"error" : @"tts failed" }
+                                   forId:msgId];
                 return;
             }
-            [self deliverPayload:@{ @"ok" : @YES,
-                                    @"wav" : [wav base64EncodedStringWithOptions:0] }
-                           forId:msgId];
+            [weakSelf deliverPayload:@{ @"ok" : @YES, @"neural" : @NO,
+                                        @"wav" : [wav base64EncodedStringWithOptions:0] }
+                               forId:msgId];
         });
     }
 }

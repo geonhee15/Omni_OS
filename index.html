@@ -182,6 +182,11 @@
             <div class="ai-ind"><span>LLM</span><span id="ai-ind-llm">--</span></div>
             <div class="ai-ind"><span>TTS</span><span id="ai-ind-tts">--</span></div>
           </div>
+          <div class="ai-side-h">VOICE</div>
+          <div class="ai-modelrow">
+            <button class="ai-model ai-voice active" data-voice="neural">NEURAL</button>
+            <button class="ai-model ai-voice" data-voice="dsp">DSP</button>
+          </div>
           <div class="ai-side-h">MODEL</div>
           <div class="ai-modelrow">
             <button class="ai-model active" data-model="claude-haiku-4-5-20251001">FAST</button>
@@ -196,7 +201,7 @@
             <input id="ai-keyfield" type="password" placeholder="sk-ant-..." autocomplete="off">
             <button id="ai-keysave">SAVE</button>
           </div>
-          <div class="ai-side-note">VOICE: RETRO-MECH DSP<br>LANG: KO-KR // STT: ON-DEVICE</div>
+          <div class="ai-side-note">NEURAL: VOICE-PACK TIMBRE (kNN-VC)<br>DSP: RETRO-MECH CHAIN<br>LANG: KO-KR // STT: ON-DEVICE</div>
         </div>
       </div>
     </section>
@@ -1081,7 +1086,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.38.0</span>
+      <span>v0.39.0</span>
     </footer>
   </div>
 
