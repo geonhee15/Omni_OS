@@ -37,6 +37,16 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   **MISSION OBJECTIVES**(ACTIVE 프로젝트 `notes/`의 미완료 체크박스 `- [ ]`를 자동 수집).
   하단 **ACTIVITY 티커**: `~/Desktop/Important` 하위 git 레포들의 최근 커밋을 시간순으로 흐름
   (git.recent 브리지). 3초 주기 폴링, 패널이 보일 때만 렌더.
+- **OMNI_AI** — 한국어 음성 인터페이스 (1단계: 한국어 · 지능 · 레트로 로봇 보이스).
+  **LISTEN** 버튼 → 네이티브 SFSpeechRecognizer(ko-KR, 온디바이스 우선)로 실시간 부분 인식 표시,
+  침묵 1.6초에 자동 확정 (텍스트 입력도 지원). 확정된 명령은 Claude API로 전달 —
+  모델 선택 **FAST**(Haiku 4.5) / **SMART**(Sonnet 5), API 키는 패널에서 저장하면
+  `~/.omni/anthropic.key`(0600)에 로컬 보관되고 네이티브가 직접 호출한다 (JS에 키 노출 없음).
+  페르소나: 항상 존댓말, 호칭 없음, 담백한 기계 보고체, 음성 낭독용 1~3문장.
+  응답은 시스템 TTS(`say`)로 합성한 뒤 **레트로 기계 로봇 DSP 체인**
+  (피치 다운 → 300–3400Hz 대역 제한 → 링 모듈레이션 → 비트크러시 → 소프트클립,
+  `vendor/dsp/robot_voice.js`)을 거쳐 재생. 코어 비주얼라이저가 대기/청취/사고/발화 상태를 표시.
+  다중언어·앱 제어 기능 연동은 다음 단계.
 - **CLOCK** — 중앙 디지털 시계 (시간 / 날짜 / 업타임), 회전 링 HUD
 - **RENDER_3D** — three.js 기반 3D 모델 뷰어. STL·OBJ/MTL·GLTF/GLB·FBX·PLY·3MF·DAE에 더해
   **STEP/IGES/BREP**(OpenCascade WASM, 원본 CAD 색상·조립 좌표 유지)를

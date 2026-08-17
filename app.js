@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.37.0",
+  version: "0.38.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -512,6 +512,508 @@ OmniOS.register("cmd", {
     };
     build();
     build();
+  },
+});
+
+// ---------- module: OMNI_AI (한국어 음성 인터페이스 // 레트로 로봇 보이스) ----------
+OmniOS.register("ai", {
+  PERSONA: [
+    "당신은 OMNI_OS의 중앙 관제 인공지능 '옴니'입니다.",
+    "대답 규칙:",
+    "- 항상 한국어 존댓말을 사용합니다.",
+    "- 상대를 부르는 호칭(주인님, 보스, 대장님, 사용자님, 선생님 등)을 절대 사용하지 않습니다. \"네, 알겠습니다.\"처럼 호칭 없이 바로 말합니다.",
+    "- 구식 메인프레임 컴퓨터 같은 담백하고 기계적인 보고체를 사용합니다. 감탄사, 이모지, 과장된 표현을 쓰지 않습니다.",
+    "- 답은 음성으로 낭독됩니다. 목록, 마크다운, 코드블록 없이 평문 문장 1~3개로 간결하게 답합니다.",
+    "- 당신의 정체: 이 컴퓨터에서 실행 중인 개인 HUD 시스템 OMNI_OS의 관제 AI입니다. 시스템 제어, 메일 확인 같은 기능 연동은 아직 준비 중이므로, 그런 요청에는 해당 기능이 아직 연결되지 않았다고 짧게 보고합니다.",
+  ].join("\n"),
+  model: "claude-haiku-4-5-20251001",
+  history: [],
+  state: "idle", // idle | listening | thinking | speaking
+  hasKey: false,
+  micLevel: 0,
+  _pendingLine: null,
+  _partialText: "",
+  _lastPartialAt: 0,
+  _listenStartAt: 0,
+  _watchdog: null,
+  _speakSrc: null,
+  _analyser: null,
+  ctx: null,
+
+  init() {
+    this.els = {
+      state: document.getElementById("ai-state"),
+      log: document.getElementById("ai-log"),
+      listen: document.getElementById("ai-listen"),
+      listenGlyph: document.getElementById("ai-listen-glyph"),
+      listenLabel: document.getElementById("ai-listen-label"),
+      text: document.getElementById("ai-text"),
+      send: document.getElementById("ai-send"),
+      core: document.getElementById("ai-core"),
+      indStt: document.getElementById("ai-ind-stt"),
+      indLlm: document.getElementById("ai-ind-llm"),
+      indTts: document.getElementById("ai-ind-tts"),
+      keystate: document.getElementById("ai-keystate"),
+      keybtn: document.getElementById("ai-keybtn"),
+      keyinput: document.getElementById("ai-keyinput"),
+      keyfield: document.getElementById("ai-keyfield"),
+      keysave: document.getElementById("ai-keysave"),
+    };
+    window.OmniAI = this; // 네이티브 STT 푸시 수신 (OmniAI._stt)
+
+    this.els.listen.addEventListener("click", () => this.toggleListen());
+    this.els.send.addEventListener("click", () => this.sendFromInput());
+    this.els.text.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) this.sendFromInput();
+    });
+    document.querySelectorAll(".ai-model").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".ai-model").forEach((b) =>
+          b.classList.toggle("active", b === btn));
+        this.model = btn.dataset.model;
+      });
+    });
+    this.els.keybtn.addEventListener("click", () => {
+      this.els.keyinput.classList.toggle("open");
+      if (this.els.keyinput.classList.contains("open")) this.els.keyfield.focus();
+    });
+    this.els.keysave.addEventListener("click", () => this.saveKey());
+    this.els.keyfield.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.saveKey();
+    });
+
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "ai") {
+        this.sizeCore();
+        this.refreshStatus();
+      }
+    });
+    requestAnimationFrame(() => this.drawCore());
+  },
+
+  // ---- 상태 표시 ----
+  setState(state, label, cls) {
+    this.state = state;
+    this.els.state.textContent = label;
+    this.els.state.className = `ai-state${cls ? " " + cls : ""}`;
+  },
+
+  setInd(el, text, cls) {
+    el.textContent = text;
+    el.className = cls || "";
+  },
+
+  async refreshStatus() {
+    if (!OmniNative.available) {
+      this.setInd(this.els.indStt, "OFFLINE", "err");
+      this.setInd(this.els.indLlm, "OFFLINE", "err");
+      this.setInd(this.els.indTts, "OFFLINE", "err");
+      this.els.keystate.textContent = "BRIDGE OFFLINE";
+      return;
+    }
+    try {
+      const r = await OmniNative.request("ai.status", null, 5000);
+      this.hasKey = !!(r && r.key);
+      this.setInd(this.els.indStt, "READY", "ok");
+      this.setInd(this.els.indTts, "READY", "ok");
+      this.setInd(this.els.indLlm, this.hasKey ? "READY" : "NO KEY",
+        this.hasKey ? "ok" : "err");
+      this.els.keystate.textContent = this.hasKey ? "CONFIGURED" : "NOT SET";
+      this.els.keystate.className = `ai-keystate ${this.hasKey ? "ok" : "err"}`;
+    } catch (e) {
+      /* 브리지 타임아웃 — 표시 유지 */
+    }
+  },
+
+  async saveKey() {
+    const key = this.els.keyfield.value.trim();
+    if (!key) return;
+    try {
+      const r = await OmniNative.request("ai.saveKey", JSON.stringify({ key }), 8000);
+      if (r && r.ok) {
+        this.els.keyfield.value = "";
+        this.els.keyinput.classList.remove("open");
+        this.logLine("sys", "API 키가 저장되었습니다.");
+        this.refreshStatus();
+      } else {
+        this.logLine("sys", `키 저장 실패: ${(r && r.error) || "unknown"}`);
+      }
+    } catch (e) {
+      this.logLine("sys", "키 저장 실패: 브리지 오류");
+    }
+  },
+
+  // ---- 대화 로그 ----
+  logLine(who, text, pending) {
+    const hint = this.els.log.querySelector(".ai-hint");
+    if (hint) hint.remove();
+    const line = document.createElement("div");
+    line.className = `ai-line ${who}${pending ? " pending" : ""}`;
+    const w = document.createElement("span");
+    w.className = "who";
+    w.textContent = who === "you" ? "YOU" : who === "omni" ? "OMNI" : "SYS";
+    const t = document.createElement("span");
+    t.className = "txt";
+    t.textContent = text;
+    line.append(w, t);
+    this.els.log.appendChild(line);
+    this.els.log.scrollTop = this.els.log.scrollHeight;
+    return line;
+  },
+
+  // ---- 음성 인식 ----
+  toggleListen() {
+    if (this.state === "speaking") {
+      this.stopSpeak();
+      this.startListen();
+    } else if (this.state === "listening") {
+      this.finishListen();
+    } else if (this.state === "idle") {
+      this.startListen();
+    }
+    // thinking 중에는 무시
+  },
+
+  async startListen() {
+    if (!OmniNative.available) {
+      this.logLine("sys", "네이티브 브리지 오프라인 — 앱에서만 음성 인식이 동작합니다.");
+      return;
+    }
+    this.ensureCtx();
+    this._partialText = "";
+    this._lastPartialAt = 0;
+    this._listenStartAt = Date.now();
+    this.setState("listening", "LISTENING", "busy");
+    this.els.listen.classList.add("live");
+    this.els.listenGlyph.textContent = "■";
+    this.els.listenLabel.textContent = "STOP";
+    this._pendingLine = this.logLine("you", "…", true);
+    this.setInd(this.els.indStt, "LIVE", "busy");
+    this._watchdog = setInterval(() => this.checkSilence(), 250);
+    try {
+      // 최초 권한 팝업 대기까지 고려한 긴 타임아웃
+      const r = await OmniNative.request("ai.listen", null, 120000);
+      if (!r || !r.ok) {
+        const reason = (r && r.error) || "unknown";
+        const msg = reason === "SPEECH_DENIED"
+          ? "음성 인식 권한이 거부되어 있습니다. 시스템 설정 > 개인정보 보호 > 음성 인식에서 허용하십시오."
+          : reason === "MIC_DENIED"
+            ? "마이크 권한이 거부되어 있습니다. 시스템 설정 > 개인정보 보호 > 마이크에서 허용하십시오."
+            : `음성 인식을 시작하지 못했습니다: ${reason}`;
+        this.abortListen(msg);
+      }
+    } catch (e) {
+      this.abortListen("음성 인식 시작 실패: 브리지 오류");
+    }
+  },
+
+  // 침묵/무입력 감시: 말이 끝나면 자동 종료
+  checkSilence() {
+    if (this.state !== "listening") return;
+    const now = Date.now();
+    if (this._partialText && now - this._lastPartialAt > 1600) {
+      this.finishListen();
+    } else if (!this._partialText && now - this._listenStartAt > 8000) {
+      this.abortListen("입력된 음성이 없습니다.");
+      OmniNative.request("ai.listenCancel", null, 5000).catch(() => {});
+    } else if (now - this._listenStartAt > 20000) {
+      this.finishListen(); // 하드 캡
+    }
+  },
+
+  finishListen() {
+    if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
+    this.resetListenBtn();
+    // final 이벤트가 _stt로 도착할 때까지 살짝 대기 상태
+    this.setState("listening", "PROCESSING", "busy");
+    OmniNative.request("ai.listenStop", null, 5000).catch(() => {});
+  },
+
+  abortListen(msg) {
+    if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
+    this.resetListenBtn();
+    if (this._pendingLine) { this._pendingLine.remove(); this._pendingLine = null; }
+    if (msg) this.logLine("sys", msg);
+    this.setState("idle", "STANDBY", "");
+    this.setInd(this.els.indStt, "READY", "ok");
+    this.micLevel = 0;
+  },
+
+  resetListenBtn() {
+    this.els.listen.classList.remove("live");
+    this.els.listenGlyph.textContent = "◉";
+    this.els.listenLabel.textContent = "LISTEN";
+  },
+
+  // 네이티브 STT 이벤트 수신
+  _stt(ev) {
+    if (!ev || typeof ev !== "object") return;
+    if (ev.type === "level") {
+      this.micLevel = Math.min(1, (ev.rms || 0) * 6);
+    } else if (ev.type === "partial") {
+      this._partialText = ev.text || "";
+      this._lastPartialAt = Date.now();
+      if (this._pendingLine) {
+        this._pendingLine.querySelector(".txt").textContent = this._partialText || "…";
+        this.els.log.scrollTop = this.els.log.scrollHeight;
+      }
+    } else if (ev.type === "final") {
+      if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
+      this.resetListenBtn();
+      this.micLevel = 0;
+      this.setInd(this.els.indStt, "READY", "ok");
+      const text = (ev.text || this._partialText || "").trim();
+      if (this._pendingLine) { this._pendingLine.remove(); this._pendingLine = null; }
+      if (text) {
+        this.send(text);
+      } else if (this.state === "listening") {
+        this.logLine("sys", "인식된 내용이 없습니다.");
+        this.setState("idle", "STANDBY", "");
+      }
+    } else if (ev.type === "state" && (ev.state === "error" || ev.state === "unavailable")) {
+      this.abortListen(ev.state === "unavailable"
+        ? "음성 인식을 사용할 수 없습니다. (ko-KR 인식기 비활성)"
+        : `음성 인식 오류: ${ev.detail || ""}`);
+    }
+  },
+
+  // ---- 텍스트 입력 ----
+  sendFromInput() {
+    const text = this.els.text.value.trim();
+    if (!text || this.state === "thinking") return;
+    if (this.state === "speaking") this.stopSpeak();
+    if (this.state === "listening") {
+      OmniNative.request("ai.listenCancel", null, 5000).catch(() => {});
+      this.abortListen(null);
+    }
+    this.ensureCtx();
+    this.els.text.value = "";
+    this.send(text);
+  },
+
+  // ---- LLM 대화 ----
+  async send(text) {
+    this.logLine("you", text);
+    this.history.push({ role: "user", content: text });
+    while (this.history.length > 16) this.history.shift();
+    if (this.history[0] && this.history[0].role !== "user") this.history.shift();
+    this.setState("thinking", "THINKING", "busy");
+    this.setInd(this.els.indLlm, "QUERY", "busy");
+    if (!OmniNative.available) {
+      // 브라우저 테스트 모드: 즉석 응답
+      const reply = "네, 알겠습니다. 현재는 브라우저 테스트 모드로 동작 중입니다.";
+      this.history.push({ role: "assistant", content: reply });
+      this.logLine("omni", reply);
+      this.setInd(this.els.indLlm, "STUB", "busy");
+      this.speak(reply);
+      return;
+    }
+    try {
+      const r = await OmniNative.request("ai.chat", JSON.stringify({
+        model: this.model,
+        system: this.PERSONA,
+        messages: this.history,
+      }), 90000);
+      if (!r || !r.ok) {
+        const err = (r && r.error) || "unknown";
+        this.history.pop(); // 실패한 user 턴 되돌림
+        if (err === "NO_KEY") {
+          this.logLine("sys", "API 키가 없습니다. 우측 API KEY > SET에 Anthropic API 키를 저장하십시오.");
+        } else {
+          this.logLine("sys", `응답 실패: ${err}`);
+        }
+        this.setState("idle", "STANDBY", "");
+        this.refreshStatus();
+        return;
+      }
+      const reply = (r.text || "").trim() || "응답이 비어 있습니다.";
+      this.history.push({ role: "assistant", content: reply });
+      this.logLine("omni", reply);
+      this.setInd(this.els.indLlm, "READY", "ok");
+      this.speak(reply);
+    } catch (e) {
+      this.history.pop();
+      this.logLine("sys", "응답 실패: 요청 시간 초과");
+      this.setState("idle", "STANDBY", "");
+    }
+  },
+
+  // ---- 로봇 TTS ----
+  ensureCtx() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC();
+    }
+    if (this.ctx.state === "suspended") this.ctx.resume();
+  },
+
+  async speak(text) {
+    if (!OmniNative.available) { this.setState("idle", "STANDBY", ""); return; }
+    this.setState("speaking", "SPEAKING", "on");
+    this.setInd(this.els.indTts, "SYNTH", "busy");
+    // 낭독용 정리: 마크다운 기호 제거
+    const clean = text.replace(/[*#`_~<>|]+/g, " ").replace(/\s{2,}/g, " ").trim();
+    try {
+      const r = await OmniNative.request("ai.speak",
+        JSON.stringify({ text: clean.slice(0, 1200), rate: 180 }), 60000);
+      if (!r || !r.ok || !r.wav) {
+        this.setInd(this.els.indTts, "FAIL", "err");
+        this.setState("idle", "STANDBY", "");
+        return;
+      }
+      if (this.state !== "speaking") return; // 그 사이 중단됨
+      const { x, sr } = this.parseWav(r.wav);
+      // 레트로 기계 로봇 체인: 피치 다운 → 대역 제한 + 링모드 + 비트크러시
+      let y = OmniVoiceDSP.pitchShift(x, 0.85);
+      y = OmniRobotVoice.robotize(y, sr);
+      this.playRobot(y, sr);
+    } catch (e) {
+      this.setInd(this.els.indTts, "FAIL", "err");
+      this.setState("idle", "STANDBY", "");
+    }
+  },
+
+  parseWav(b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const dv = new DataView(bytes.buffer);
+    let off = 12, sr = 22050, ch = 1, bits = 16, data = null;
+    while (off + 8 <= bytes.length) {
+      const id = String.fromCharCode(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]);
+      const sz = dv.getUint32(off + 4, true);
+      if (id === "fmt ") {
+        ch = dv.getUint16(off + 10, true);
+        sr = dv.getUint32(off + 12, true);
+        bits = dv.getUint16(off + 22, true);
+      } else if (id === "data") {
+        data = { start: off + 8, size: sz };
+      }
+      off += 8 + sz + (sz & 1);
+    }
+    if (!data || bits !== 16) throw new Error("bad wav");
+    const n = Math.floor(data.size / 2 / ch);
+    const x = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      x[i] = dv.getInt16(data.start + i * 2 * ch, true) / 32768;
+    }
+    return { x, sr };
+  },
+
+  playRobot(samples, sr) {
+    this.ensureCtx();
+    const buf = this.ctx.createBuffer(1, samples.length, sr);
+    buf.copyToChannel(samples, 0);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    if (!this._analyser) {
+      this._analyser = this.ctx.createAnalyser();
+      this._analyser.fftSize = 512;
+      this._analyser.connect(this.ctx.destination);
+    }
+    src.connect(this._analyser);
+    src.onended = () => {
+      if (this._speakSrc === src) {
+        this._speakSrc = null;
+        this.setInd(this.els.indTts, "READY", "ok");
+        if (this.state === "speaking") this.setState("idle", "STANDBY", "");
+      }
+    };
+    this._speakSrc = src;
+    src.start();
+  },
+
+  stopSpeak() {
+    if (this._speakSrc) {
+      try { this._speakSrc.stop(); } catch (e) { /* already stopped */ }
+      this._speakSrc = null;
+    }
+    this.setInd(this.els.indTts, "READY", "ok");
+    if (this.state === "speaking") this.setState("idle", "STANDBY", "");
+  },
+
+  // ---- 코어 비주얼라이저 ----
+  sizeCore() {
+    const c = this.els.core;
+    const rect = c.getBoundingClientRect();
+    if (rect.width < 4) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = Math.round(rect.width * dpr);
+    c.height = Math.round(rect.height * dpr);
+  },
+
+  drawCore() {
+    requestAnimationFrame(() => this.drawCore());
+    const panel = document.getElementById("panel-ai");
+    if (!panel || !panel.classList.contains("active")) return;
+    const c = this.els.core;
+    if (c.width === 0) this.sizeCore();
+    const g = c.getContext("2d");
+    const W = c.width, H = c.height;
+    if (W === 0) return;
+    g.clearRect(0, 0, W, H);
+    const cx = W / 2, cy = H / 2;
+    const base = Math.min(W, H) * 0.3;
+    const t = performance.now() / 1000;
+    const style = getComputedStyle(document.documentElement);
+    const cyan = style.getPropertyValue("--cyan").trim() || "#35d6ff";
+    const ok = style.getPropertyValue("--ok").trim() || "#3dffa8";
+    const warn = style.getPropertyValue("--warn").trim() || "#ffc857";
+    const alert = style.getPropertyValue("--alert").trim() || "#ff4d5e";
+
+    // 내부 코어 점
+    g.beginPath();
+    g.arc(cx, cy, base * 0.12, 0, Math.PI * 2);
+    g.fillStyle = this.state === "speaking" ? ok
+      : this.state === "listening" ? alert
+        : this.state === "thinking" ? warn : cyan;
+    g.globalAlpha = 0.85;
+    g.fill();
+    g.globalAlpha = 1;
+
+    if (this.state === "speaking" && this._analyser) {
+      // 출력 파형을 방사형 링으로
+      const data = new Uint8Array(this._analyser.fftSize);
+      this._analyser.getByteTimeDomainData(data);
+      g.beginPath();
+      for (let i = 0; i <= 120; i++) {
+        const a = (i / 120) * Math.PI * 2;
+        const v = (data[Math.floor((i / 120) * (data.length - 1))] - 128) / 128;
+        const r = base + v * base * 0.55;
+        const x = cx + Math.cos(a) * r, yy = cy + Math.sin(a) * r;
+        if (i === 0) g.moveTo(x, yy); else g.lineTo(x, yy);
+      }
+      g.closePath();
+      g.strokeStyle = ok;
+      g.lineWidth = Math.max(1.5, W / 160);
+      g.globalAlpha = 0.9;
+      g.stroke();
+      g.globalAlpha = 1;
+    } else if (this.state === "listening") {
+      // 마이크 레벨 링
+      const lv = this.micLevel;
+      g.beginPath();
+      g.arc(cx, cy, base * (0.7 + lv * 0.6), 0, Math.PI * 2);
+      g.strokeStyle = alert;
+      g.lineWidth = Math.max(1.5, W / 160);
+      g.globalAlpha = 0.5 + lv * 0.5;
+      g.stroke();
+      g.globalAlpha = 1;
+    } else {
+      // 대기/사고: 회전 아크 세그먼트
+      const speed = this.state === "thinking" ? 2.6 : 0.4;
+      const col = this.state === "thinking" ? warn : cyan;
+      for (let s = 0; s < 3; s++) {
+        g.beginPath();
+        g.arc(cx, cy, base * (0.75 + s * 0.22),
+          t * speed + s * 2.1, t * speed + s * 2.1 + Math.PI * 0.7);
+        g.strokeStyle = col;
+        g.lineWidth = Math.max(1, W / 220);
+        g.globalAlpha = 0.55 - s * 0.13;
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+    }
   },
 });
 

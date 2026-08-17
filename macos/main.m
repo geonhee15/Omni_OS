@@ -4,6 +4,7 @@
 #import "sp1_status.h"
 #import "sysmon.h"
 #import "code_editor.h"
+#import "omni_ai.h"
 #import <CommonCrypto/CommonDigest.h>
 
 // ── 오너 잠금 ──
@@ -190,6 +191,7 @@ static NSString *ArcSavesDir(void) {
 @property (strong) NSTask *voiceLiveTask;
 @property (strong) NSPipe *voiceLiveIn;
 @property (strong) NSMutableSet<NSString *> *ceRoots; // CODE EDITOR가 열어둔 폴더들
+@property (strong) OmniAIListener *aiListener;        // OMNI_AI 음성 인식
 @end
 
 @implementation AppDelegate
@@ -282,6 +284,7 @@ static NSString *ArcSavesDir(void) {
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     if (self.voiceLiveTask != nil) [self.voiceLiveTask terminate];
+    [self.aiListener cancel];
     [self.terms closeAll]; // 좀비 zsh 방지
     SP1ResumeWatcher();
 }
@@ -1131,6 +1134,8 @@ static NSString *ArcSavesDir(void) {
         [self.arcTask cancel];
         self.arcTask = nil;
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd hasPrefix:@"ai."]) {
+        [self handleAI:cmd arg:arg msgId:msgId];
     } else if ([cmd hasPrefix:@"arduino."]) {
         [self handleArduino:cmd arg:arg msgId:msgId];
     } else if ([cmd isEqualToString:@"sp1.start"]) {
@@ -1140,6 +1145,203 @@ static NSString *ArcSavesDir(void) {
         });
     }
     // unknown commands are ignored; the JS side times out on its own
+}
+
+// ---- OMNI_AI: 음성 인식 / Claude 대화 / 로봇 TTS ----
+
+static NSString *OmniAIKeyPath(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@".omni/anthropic.key"];
+}
+
+static NSString *OmniAIReadKey(void) {
+    NSString *raw = [NSString stringWithContentsOfFile:OmniAIKeyPath()
+                                              encoding:NSUTF8StringEncoding
+                                                 error:nil];
+    NSString *key = [raw stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return key.length > 10 ? key : nil;
+}
+
+// evaluateJavaScript 인라인용 JSON 문자열 (U+2028/2029 이스케이프)
+static NSString *OmniAIJSON(NSDictionary *obj) {
+    NSData *d = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
+    if (d == nil) return nil;
+    NSMutableString *s = [[[NSString alloc] initWithData:d
+                                                encoding:NSUTF8StringEncoding] mutableCopy];
+    [s replaceOccurrencesOfString:[NSString stringWithFormat:@"%C", (unichar)0x2028]
+                       withString:@"\\u2028" options:0 range:NSMakeRange(0, s.length)];
+    [s replaceOccurrencesOfString:[NSString stringWithFormat:@"%C", (unichar)0x2029]
+                       withString:@"\\u2029" options:0 range:NSMakeRange(0, s.length)];
+    return s;
+}
+
+- (void)handleAI:(NSString *)cmd arg:(NSString *)arg msgId:(NSNumber *)msgId {
+    NSDictionary *a = nil;
+    if (arg != nil) {
+        NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+        id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+        if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+    }
+
+    if ([cmd isEqualToString:@"ai.status"]) {
+        [self deliverPayload:@{ @"ok" : @YES,
+                                @"key" : @(OmniAIReadKey() != nil),
+                                @"listening" : @(self.aiListener.running) }
+                       forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.saveKey"]) {
+        NSString *key = [a[@"key"] isKindOfClass:[NSString class]] ? a[@"key"] : nil;
+        key = [key stringByTrimmingCharactersInSet:
+            NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (key.length < 10) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"invalid key" } forId:msgId];
+            return;
+        }
+        NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@".omni"];
+        [NSFileManager.defaultManager createDirectoryAtPath:dir
+                                withIntermediateDirectories:YES attributes:nil error:nil];
+        NSError *err = nil;
+        BOOL ok = [key writeToFile:OmniAIKeyPath() atomically:YES
+                          encoding:NSUTF8StringEncoding error:&err];
+        if (ok) {
+            [NSFileManager.defaultManager setAttributes:@{ NSFilePosixPermissions : @0600 }
+                                           ofItemAtPath:OmniAIKeyPath() error:nil];
+        }
+        [self deliverPayload:@{ @"ok" : @(ok),
+                                @"error" : err.localizedDescription ?: @"" } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.listen"]) {
+        if (self.aiListener == nil) {
+            self.aiListener = [[OmniAIListener alloc] init];
+            __weak AppDelegate *weakSelf = self;
+            self.aiListener.onEvent = ^(NSDictionary *event) {
+                NSString *json = OmniAIJSON(event);
+                if (json == nil) return;
+                NSString *js = [NSString stringWithFormat:
+                    @"window.OmniAI && OmniAI._stt(%@)", json];
+                [weakSelf.webView evaluateJavaScript:js completionHandler:nil];
+            };
+        }
+        __weak AppDelegate *weakSelf = self;
+        [self.aiListener requestAuthThen:^(BOOL granted, NSString *reason) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (granted) [weakSelf.aiListener start];
+                [weakSelf deliverPayload:@{ @"ok" : @(granted), @"error" : reason ?: @"" }
+                                   forId:msgId];
+            });
+        }];
+
+    } else if ([cmd isEqualToString:@"ai.listenStop"]) {
+        [self.aiListener stop];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.listenCancel"]) {
+        [self.aiListener cancel];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.chat"]) {
+        NSString *key = OmniAIReadKey();
+        if (key == nil) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NO_KEY" } forId:msgId];
+            return;
+        }
+        NSString *model = [a[@"model"] isKindOfClass:[NSString class]]
+            ? a[@"model"] : @"claude-haiku-4-5-20251001";
+        NSString *system = [a[@"system"] isKindOfClass:[NSString class]] ? a[@"system"] : @"";
+        NSArray *messages = [a[@"messages"] isKindOfClass:[NSArray class]] ? a[@"messages"] : @[];
+        NSDictionary *body = @{ @"model" : model,
+                                @"max_tokens" : @400,
+                                @"system" : system,
+                                @"messages" : messages };
+        NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+        if (bodyData == nil) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"bad request" } forId:msgId];
+            return;
+        }
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
+            [NSURL URLWithString:@"https://api.anthropic.com/v1/messages"]];
+        req.HTTPMethod = @"POST";
+        req.HTTPBody = bodyData;
+        req.timeoutInterval = 60;
+        [req setValue:@"application/json" forHTTPHeaderField:@"content-type"];
+        [req setValue:key forHTTPHeaderField:@"x-api-key"];
+        [req setValue:@"2023-06-01" forHTTPHeaderField:@"anthropic-version"];
+        [[NSURLSession.sharedSession dataTaskWithRequest:req
+            completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
+            if (error != nil) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : error.localizedDescription ?: @"network" } forId:msgId];
+                return;
+            }
+            id parsed = data ? [NSJSONSerialization JSONObjectWithData:data
+                                                               options:0 error:nil] : nil;
+            NSDictionary *r = [parsed isKindOfClass:[NSDictionary class]] ? parsed : nil;
+            NSInteger status = [(NSHTTPURLResponse *)resp statusCode];
+            if (status != 200 || r == nil) {
+                NSString *msg = @"";
+                if ([r[@"error"] isKindOfClass:[NSDictionary class]]) {
+                    msg = [r[@"error"][@"message"] isKindOfClass:[NSString class]]
+                        ? r[@"error"][@"message"] : @"";
+                }
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : [NSString stringWithFormat:@"HTTP %ld %@", (long)status, msg] }
+                               forId:msgId];
+                return;
+            }
+            NSMutableString *text = [NSMutableString string];
+            if ([r[@"content"] isKindOfClass:[NSArray class]]) {
+                for (NSDictionary *item in r[@"content"]) {
+                    if ([item isKindOfClass:[NSDictionary class]]
+                        && [item[@"text"] isKindOfClass:[NSString class]]) {
+                        [text appendString:item[@"text"]];
+                    }
+                }
+            }
+            [self deliverPayload:@{ @"ok" : @YES, @"text" : text } forId:msgId];
+        }] resume];
+
+    } else if ([cmd isEqualToString:@"ai.speak"]) {
+        NSString *text = [a[@"text"] isKindOfClass:[NSString class]] ? a[@"text"] : @"";
+        if (text.length == 0 || text.length > 2000) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"bad text" } forId:msgId];
+            return;
+        }
+        NSString *voice = [a[@"voice"] isKindOfClass:[NSString class]] ? a[@"voice"] : @"Yuna";
+        NSNumber *rate = [a[@"rate"] isKindOfClass:[NSNumber class]] ? a[@"rate"] : @180;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                [NSString stringWithFormat:@"omni_ai_tts_%@.wav", NSUUID.UUID.UUIDString]];
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/say"];
+            // 텍스트는 stdin으로 — 인자 파싱/주입 문제 원천 차단
+            task.arguments = @[ @"-v", voice,
+                                @"-r", rate.stringValue,
+                                @"-o", tmp,
+                                @"--data-format=LEI16@22050" ];
+            NSPipe *inPipe = [NSPipe pipe];
+            task.standardInput = inPipe;
+            task.standardError = [NSPipe pipe];
+            NSError *err = nil;
+            if (![task launchAndReturnError:&err]) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : err.localizedDescription ?: @"say launch" } forId:msgId];
+                return;
+            }
+            [inPipe.fileHandleForWriting
+                writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+            [inPipe.fileHandleForWriting closeFile];
+            [task waitUntilExit];
+            NSData *wav = [NSData dataWithContentsOfFile:tmp];
+            [NSFileManager.defaultManager removeItemAtPath:tmp error:nil];
+            if (task.terminationStatus != 0 || wav.length == 0) {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"tts failed" } forId:msgId];
+                return;
+            }
+            [self deliverPayload:@{ @"ok" : @YES,
+                                    @"wav" : [wav base64EncodedStringWithOptions:0] }
+                           forId:msgId];
+        });
+    }
 }
 
 - (void)deliverPayload:(NSDictionary *)payload forId:(NSNumber *)msgId {

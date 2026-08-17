@@ -37,6 +37,10 @@
         <span class="nav-icon">&#9673;</span>
         <span class="nav-label">COMMAND BRIDGE</span>
       </button>
+      <button class="nav-item" data-panel="ai">
+        <span class="nav-icon">&#9004;</span>
+        <span class="nav-label">OMNI_AI</span>
+      </button>
       <button class="nav-item" data-panel="clock">
         <span class="nav-icon">&#9711;</span>
         <span class="nav-label">CLOCK</span>
@@ -149,6 +153,51 @@
       <div class="cmd-ticker">
         <span class="cmd-ticker-h">ACTIVITY</span>
         <div class="cmd-ticker-track" id="cmd-ticker"><span class="cmd-empty">NO RECENT COMMITS</span></div>
+      </div>
+    </section>
+
+    <!-- panel: OMNI_AI (한국어 음성 인터페이스 // 레트로 로봇 보이스) -->
+    <section class="panel panel-ai" id="panel-ai">
+      <div class="ai-wrap">
+        <div class="ai-main">
+          <div class="ai-head">
+            <span class="ai-title">OMNI_AI</span>
+            <span class="ai-sub">KOREAN VOICE INTERFACE // RETRO-MECH</span>
+            <span class="ts-spacer"></span>
+            <span class="ai-state" id="ai-state">STANDBY</span>
+          </div>
+          <div class="ai-log" id="ai-log">
+            <div class="ai-hint">LISTEN을 누르고 말하거나, 아래 입력창에 명령을 입력하십시오.</div>
+          </div>
+          <div class="ai-input-row">
+            <button class="ai-listen" id="ai-listen"><span id="ai-listen-glyph">&#9673;</span><span id="ai-listen-label">LISTEN</span></button>
+            <input class="ai-text" id="ai-text" placeholder="명령 입력..." autocomplete="off" spellcheck="false">
+            <button class="ai-sendbtn" id="ai-send">&#9655;</button>
+          </div>
+        </div>
+        <div class="ai-side">
+          <canvas class="ai-core" id="ai-core"></canvas>
+          <div class="ai-ind-list">
+            <div class="ai-ind"><span>STT</span><span id="ai-ind-stt">--</span></div>
+            <div class="ai-ind"><span>LLM</span><span id="ai-ind-llm">--</span></div>
+            <div class="ai-ind"><span>TTS</span><span id="ai-ind-tts">--</span></div>
+          </div>
+          <div class="ai-side-h">MODEL</div>
+          <div class="ai-modelrow">
+            <button class="ai-model active" data-model="claude-haiku-4-5-20251001">FAST</button>
+            <button class="ai-model" data-model="claude-sonnet-5">SMART</button>
+          </div>
+          <div class="ai-side-h">API KEY</div>
+          <div class="ai-keyrow">
+            <span class="ai-keystate" id="ai-keystate">--</span>
+            <button class="ai-keybtn" id="ai-keybtn">SET</button>
+          </div>
+          <div class="ai-keyinput" id="ai-keyinput">
+            <input id="ai-keyfield" type="password" placeholder="sk-ant-..." autocomplete="off">
+            <button id="ai-keysave">SAVE</button>
+          </div>
+          <div class="ai-side-note">VOICE: RETRO-MECH DSP<br>LANG: KO-KR // STT: ON-DEVICE</div>
+        </div>
       </div>
     </section>
 
@@ -1030,9 +1079,9 @@
     <footer class="bottombar">
       <span id="uptime">UPTIME 00:00:00</span>
       <span class="divider">|</span>
-      <span>MODULES: CMD &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
+      <span>MODULES: CMD &middot; AI &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.37.0</span>
+      <span>v0.38.0</span>
     </footer>
   </div>
 
@@ -1068,6 +1117,7 @@
   <script src="vendor/marked/marked.umd.js"></script>
   <script src="vendor/dsp/voice_dsp.js"></script>
   <script src="vendor/dsp/pitch_worklet.js"></script>
+  <script src="vendor/dsp/robot_voice.js"></script>
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/xterm-addon-fit.js"></script>
   <script src="app.js"></script>
