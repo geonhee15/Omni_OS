@@ -7,6 +7,7 @@
 
 @interface OmniAIListener : NSObject
 @property (nonatomic, copy) void (^onEvent)(NSDictionary *event);
+@property (nonatomic, copy) NSString *localeId; // 기본 ko-KR, start 전에 설정
 @property (readonly) BOOL running;
 
 // 음성 인식 + 마이크 권한을 순서대로 요청. done(granted, reason)

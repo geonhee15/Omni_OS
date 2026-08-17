@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.40.0",
+  version: "0.41.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -524,8 +524,19 @@ OmniOS.register("ai", {
     "- 상대를 부르는 호칭(주인님, 보스, 대장님, 사용자님, 선생님 등)을 절대 사용하지 않습니다. \"네, 알겠습니다.\"처럼 호칭 없이 바로 말합니다.",
     "- 구식 메인프레임 컴퓨터 같은 담백하고 기계적인 보고체를 사용합니다. 감탄사, 이모지, 과장된 표현을 쓰지 않습니다.",
     "- 답은 음성으로 낭독됩니다. 목록, 마크다운, 코드블록 없이 평문 문장 1~3개로 간결하게 답합니다.",
-    "- 당신의 정체: 이 컴퓨터에서 실행 중인 개인 HUD 시스템 OMNI_OS의 관제 AI입니다. 아래 [실시간 상태 스냅샷]으로 모든 패널의 현재 상태를 파악하고 있으며, 앱·시스템에 대한 질문에는 그 실측값으로 답합니다. 패널을 직접 여닫거나 실행하는 제어, 메일 확인 같은 외부 연동은 아직 연결 준비 중이므로, 그런 요청에는 해당 기능이 아직 연결되지 않았다고 짧게 보고합니다.",
+    "- 당신의 정체: 이 컴퓨터에서 실행 중인 개인 HUD 시스템 OMNI_OS의 관제 AI입니다. 아래 [실시간 상태 스냅샷]으로 모든 패널의 현재 상태를 파악하고 있으며, 앱·시스템에 대한 질문에는 그 실측값으로 답합니다.",
+    "- 언어: 기본은 한국어이고 일본어·중국어·영어·스페인어·러시아어를 구사합니다. [인터페이스 언어]로 지정된 언어로만 답합니다. 존댓말·호칭 금지 규칙은 모든 언어에서 동일하게 적용합니다(정중한 어조, 호칭 없음).",
+    "- 패널 열기: 사용자가 특정 패널을 열어 달라고 요청하면(예: \"아크스캔 열어\", \"시스템 모니터 보여줘\") 짧은 확인 문장 뒤에 [[OPEN:키]] 태그를 붙입니다. 키 목록: cmd(커맨드 브리지/홈), ai(옴니 AI), clock(시계), proj(프로젝트), sys(시스템 모니터), sp1(보안 프로토콜), r3d(3D 뷰어), ino(아두이노), ce(코드 에디터), notes(노트), voice(보이스 체인저), arc(아크스캔). 태그는 화면 전환 명령이라 낭독되지 않으며, 열기 요청이 명확할 때만 붙입니다. 그 외 제어(파일 실행, 메일 확인 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
+  LOCALES: { ko: "ko-KR", ja: "ja-JP", zh: "zh-CN", en: "en-US", es: "es-ES", ru: "ru-RU" },
+  LANG_NAMES: { ko: "한국어", ja: "일본어", zh: "중국어(간체)", en: "영어", es: "스페인어", ru: "러시아어" },
+  PANEL_LABELS: {
+    cmd: "COMMAND BRIDGE", ai: "OMNI_AI", clock: "CLOCK", proj: "PROJECTS",
+    sys: "SYSTEM MONITOR", sp1: "SECURITY-PROTOCOL-1", r3d: "RENDER_3D",
+    ino: "ARDUINO IDE", ce: "CODE EDITOR", notes: "NOTES",
+    voice: "VOICE CHANGER", arc: "ARC-SCAN",
+  },
+  lang: "ko",
   PANEL_GUIDE: [
     "COMMAND BRIDGE: 홈 상황실 — 시스템 게이지, SP-1 방어 상태, 활성 프로젝트 홀로그램, 미션 목표, 최근 커밋 티커",
     "OMNI_AI: 이 음성 인터페이스 (한국어 STT + 로봇 보이스)",
@@ -595,6 +606,13 @@ OmniOS.register("ai", {
         document.querySelectorAll(".ai-voice").forEach((b) =>
           b.classList.toggle("active", b === btn));
         this.voiceMode = btn.dataset.voice;
+      });
+    });
+    document.querySelectorAll(".ai-lang").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".ai-lang").forEach((b) =>
+          b.classList.toggle("active", b === btn));
+        this.lang = btn.dataset.lang;
       });
     });
     this.els.keybtn.addEventListener("click", () => {
@@ -822,7 +840,8 @@ OmniOS.register("ai", {
     this._watchdog = setInterval(() => this.checkSilence(), 250);
     try {
       // 최초 권한 팝업 대기까지 고려한 긴 타임아웃
-      const r = await OmniNative.request("ai.listen", null, 120000);
+      const r = await OmniNative.request("ai.listen",
+        JSON.stringify({ locale: this.LOCALES[this.lang] || "ko-KR" }), 120000);
       if (!r || !r.ok) {
         const reason = (r && r.error) || "unknown";
         const msg = reason === "SPEECH_DENIED"
@@ -942,7 +961,8 @@ OmniOS.register("ai", {
       // 매 질문마다 앱 전역 실측 스냅샷을 수집해 프롬프트에 주입
       const snapshot = await this.gatherContext();
       const system = `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}`
-        + `\n\n[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`;
+        + `\n\n[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
+        + `\n\n[인터페이스 언어]\n${this.LANG_NAMES[this.lang] || "한국어"}`;
       const r = await OmniNative.request("ai.chat", JSON.stringify({
         model: this.model,
         system,
@@ -960,10 +980,25 @@ OmniOS.register("ai", {
         this.refreshStatus();
         return;
       }
-      const reply = (r.text || "").trim() || "응답이 비어 있습니다.";
+      // [[OPEN:키]] 태그 추출 → 패널 전환 실행, 낭독/로그에서는 제거
+      const opens = [];
+      let reply = (r.text || "")
+        .replace(/\[\[OPEN:([a-z0-9]+)\]\]/gi, (m, k) => {
+          opens.push(k.toLowerCase());
+          return " ";
+        })
+        .replace(/\s{2,}/g, " ").trim();
+      if (!reply) reply = "완료했습니다.";
       this.history.push({ role: "assistant", content: reply });
       this.logLine("omni", reply);
       this.setInd(this.els.indLlm, "READY", "ok");
+      for (const k of [...new Set(opens)]) {
+        const btn = document.querySelector(`.nav-item[data-panel="${k}"]`);
+        if (btn && this.PANEL_LABELS[k]) {
+          btn.click();
+          this.logLine("sys", `패널 전환: ${this.PANEL_LABELS[k]}`);
+        }
+      }
       this.speak(reply);
     } catch (e) {
       this.history.pop();
@@ -989,14 +1024,14 @@ OmniOS.register("ai", {
     const clean = text.replace(/[*#`_~<>|]+/g, " ").replace(/\s{2,}/g, " ").trim();
     const wantNeural = this.voiceMode === "neural" && this.neural;
     try {
-      // rate는 네이티브가 경로별 기본값 결정 (신경망 320 / DSP 180)
+      // rate는 네이티브가 언어·경로별 기본값 결정 (ko 신경망 275 / ko DSP 180 / 그 외 기본)
       let r = await OmniNative.request("ai.speak", JSON.stringify({
-        text: clean.slice(0, 1200), neural: wantNeural,
+        text: clean.slice(0, 1200), neural: wantNeural, lang: this.lang,
       }), 60000);
       if ((!r || !r.ok) && wantNeural) {
         // 신경망 실패 시 DSP 폴백 1회
         r = await OmniNative.request("ai.speak", JSON.stringify({
-          text: clean.slice(0, 1200), neural: false,
+          text: clean.slice(0, 1200), neural: false, lang: this.lang,
         }), 60000);
       }
       if (!r || !r.ok || !r.wav) {

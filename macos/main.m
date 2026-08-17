@@ -1319,8 +1319,12 @@ static BOOL OmniAINeuralAvailable(void) {
           toFile:(NSString *)path {
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/say"];
-    task.arguments = @[ @"-v", voice, @"-r", rate.stringValue, @"-o", path,
-                        @"--data-format=LEI16@22050" ];
+    NSMutableArray *args = [@[ @"-v", voice ] mutableCopy];
+    if (rate.intValue > 0) { // 0 = 보이스 기본 속도
+        [args addObjectsFromArray:@[ @"-r", rate.stringValue ]];
+    }
+    [args addObjectsFromArray:@[ @"-o", path, @"--data-format=LEI16@22050" ]];
+    task.arguments = args;
     NSPipe *inPipe = [NSPipe pipe];
     task.standardInput = inPipe;
     task.standardError = [NSPipe pipe];
@@ -1390,6 +1394,8 @@ static BOOL OmniAINeuralAvailable(void) {
                 [weakSelf.webView evaluateJavaScript:js completionHandler:nil];
             };
         }
+        NSString *locale = [a[@"locale"] isKindOfClass:[NSString class]] ? a[@"locale"] : @"ko-KR";
+        self.aiListener.localeId = locale;
         __weak AppDelegate *weakSelf = self;
         [self.aiListener requestAuthThen:^(BOOL granted, NSString *reason) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -1475,10 +1481,22 @@ static BOOL OmniAINeuralAvailable(void) {
             return;
         }
         BOOL wantNeural = [a[@"neural"] boolValue];
-        // 경로별 기본 속도: 신경망 소스(Eddy)는 사용자 취향 반영 275(5.8음절/초,
-        // 대사팩 원본은 7.0), DSP 폴백(Yuna)은 자연 속도 180
+        NSString *lang = [a[@"lang"] isKindOfClass:[NSString class]] ? a[@"lang"] : @"ko";
+        // 언어별 TTS 소스 보이스 — 음색 변환(kNN-VC)은 언어 무관이라 어떤 소스든
+        // 대사팩 목소리로 나온다. 러시아어만 Eddy가 없어 Milena 사용.
+        // (보이스 이름은 시스템 언어(한국어) 기준 표시명 — say -v 가 이 이름을 받음)
+        NSDictionary *voices = @{
+            @"ko" : @"Eddy (한국어(대한민국))",
+            @"en" : @"Eddy (영어(미국))",
+            @"ja" : @"Eddy (일본어(일본))",
+            @"zh" : @"Eddy (중국어(중국 본토))",
+            @"es" : @"Eddy (스페인어(스페인))",
+            @"ru" : @"Milena",
+        };
+        // 속도: 한국어는 대사팩 템포 기반 사용자 튜닝값 275, 그 외 언어는
+        // 보이스 기본 속도(0 = -r 생략)가 가장 자연스럽다
         NSNumber *rate = [a[@"rate"] isKindOfClass:[NSNumber class]] ? a[@"rate"]
-            : (wantNeural ? @275 : @180);
+            : ([lang isEqualToString:@"ko"] ? (wantNeural ? @275 : @180) : @0);
 
         if (wantNeural && OmniAINeuralAvailable()) {
             // 신경망 경로: say(Eddy) 소스 → 대사팩 음색으로 kNN-VC 변환.
@@ -1492,9 +1510,10 @@ static BOOL OmniAINeuralAvailable(void) {
             NSString *tmpIn = [base stringByAppendingString:@"_src.wav"];
             NSString *tmpOut = [base stringByAppendingString:@"_vc.wav"];
             __weak AppDelegate *weakSelf = self;
+            NSString *srcVoice = voices[lang] ?: voices[@"ko"];
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 BOOL said = [weakSelf aiRunSay:text
-                                         voice:@"Eddy (한국어(대한민국))"
+                                         voice:srcVoice
                                           rate:rate toFile:tmpIn];
                 dispatch_async(dispatch_get_main_queue(), ^{
                     AppDelegate *s = weakSelf;
@@ -1537,8 +1556,11 @@ static BOOL OmniAINeuralAvailable(void) {
             return;
         }
 
-        // DSP 폴백 경로: say(Yuna) 원본을 그대로 반환 — JS가 로봇 DSP 체인 적용
-        NSString *voice = [a[@"voice"] isKindOfClass:[NSString class]] ? a[@"voice"] : @"Yuna";
+        // DSP 폴백 경로: say 원본을 그대로 반환 — JS가 로봇 DSP 체인 적용.
+        // 한국어는 자연스러운 Yuna, 그 외 언어는 위 매핑 보이스
+        NSString *defVoice = [lang isEqualToString:@"ko"] ? @"Yuna"
+            : (voices[lang] ?: @"Yuna");
+        NSString *voice = [a[@"voice"] isKindOfClass:[NSString class]] ? a[@"voice"] : defVoice;
         __weak AppDelegate *weakSelf = self;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:

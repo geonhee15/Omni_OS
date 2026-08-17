@@ -3421,3 +3421,5 @@ input.vc-name {
   color: rgba(111, 168, 201, 0.5);
 }
 .ai-model.disabled { opacity: 0.35; cursor: default; }
+.ai-langrow { flex-wrap: wrap; }
+.ai-langrow .ai-model { flex: 1 0 28%; padding: 5px 0; font-size: 8.5px; }
