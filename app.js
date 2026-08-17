@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.39.1",
+  version: "0.39.2",
   bootTime: Date.now(),
   modules: {},
 
@@ -876,13 +876,14 @@ OmniOS.register("ai", {
     const clean = text.replace(/[*#`_~<>|]+/g, " ").replace(/\s{2,}/g, " ").trim();
     const wantNeural = this.voiceMode === "neural" && this.neural;
     try {
+      // rate는 네이티브가 경로별 기본값 결정 (신경망 320 / DSP 180)
       let r = await OmniNative.request("ai.speak", JSON.stringify({
-        text: clean.slice(0, 1200), rate: 180, neural: wantNeural,
+        text: clean.slice(0, 1200), neural: wantNeural,
       }), 60000);
       if ((!r || !r.ok) && wantNeural) {
         // 신경망 실패 시 DSP 폴백 1회
         r = await OmniNative.request("ai.speak", JSON.stringify({
-          text: clean.slice(0, 1200), rate: 180, neural: false,
+          text: clean.slice(0, 1200), neural: false,
         }), 60000);
       }
       if (!r || !r.ok || !r.wav) {
