@@ -180,20 +180,119 @@ def cmd_serve(profile_pt):
             stdout.flush()
 
 
-def cmd_ttsserve(profile_pt):
+# ── OMNI_AI TTS 후처리 (numpy 포트: vendor/dsp/voice_dsp.js 와 같은 알고리즘) ──
+# kNN-VC 출력은 타겟보다 피치가 높고(얇게 들림) 평균 스펙트럼이 어긋난다.
+# 위상 보코더 피치 다운 + 타겟 LTAS 포락선 매칭으로 원본 톤에 붙인다.
+
+def _pv_time_stretch(x, stretch):
+    import numpy as np
+    N, hop_a = 1024, 256
+    hop_s = max(1, round(hop_a * stretch))
+    w = np.hanning(N).astype(np.float32)
+    half = N // 2
+    out_len = int(np.ceil(len(x) * stretch)) + N
+    out = np.zeros(out_len, dtype=np.float32)
+    win = np.zeros(out_len, dtype=np.float32)
+    last_ph = np.zeros(half + 1)
+    sum_ph = np.zeros(half + 1)
+    expct = 2 * np.pi * hop_a * np.arange(half + 1) / N
+    pos = 0
+    for s in range(0, len(x) - N + 1, hop_a):
+        spec = np.fft.rfft(x[s:s + N] * w)
+        mag, ph = np.abs(spec), np.angle(spec)
+        dphi = ph - last_ph - expct
+        last_ph = ph
+        dphi -= 2 * np.pi * np.round(dphi / (2 * np.pi))
+        sum_ph += (hop_s / hop_a) * (expct + dphi)
+        seg = np.fft.irfft(mag * np.exp(1j * sum_ph))
+        out[pos:pos + N] += seg * w
+        win[pos:pos + N] += w * w
+        pos += hop_s
+    floor = max(1e-6, win.max() * 0.1)
+    n = round(len(x) * stretch)
+    res = out[:n]
+    wv = win[:n]
+    res = np.where(wv >= floor, res / np.maximum(wv, 1e-9), 0)
+    return res.astype(np.float32)
+
+
+def _pitch_shift(x, ratio):
+    import numpy as np
+    if abs(ratio - 1) < 1e-3:
+        return x
+    st = _pv_time_stretch(x, ratio)
+    n2 = len(x)
+    idx = np.linspace(0, len(st) - 1, n2)
+    return np.interp(idx, np.arange(len(st)), st).astype(np.float32)
+
+
+def _ltas(x, sr):
+    import numpy as np
+    N, hop = 1024, 256
+    w = np.hanning(N)
+    acc = np.zeros(N // 2)
+    c = 0
+    for s in range(0, len(x) - N, hop):
+        acc += np.abs(np.fft.rfft(x[s:s + N] * w))[:N // 2]
+        c += 1
+    return acc / max(c, 1)
+
+
+def _smooth_ltas(l, frac=0.5):
+    import numpy as np
+    half = len(l)
+    out = np.empty(half)
+    for k in range(half):
+        lo = max(1, int(k * 2 ** -frac))
+        hi = min(half - 1, int(np.ceil(k * 2 ** frac)))
+        out[k] = l[lo:hi + 1].mean() if hi >= lo else l[k]
+    return out
+
+
+def _envelope_match(x, sr, ref_ltas):
+    import numpy as np
+    N, hop = 1024, 256
+    w = np.hanning(N).astype(np.float32)
+    half = N // 2
+    rs = _smooth_ltas(ref_ltas)
+    ts = _smooth_ltas(_ltas(x, sr))
+    gain = np.clip((rs / max(rs.mean(), 1e-9))
+                   / np.maximum(ts / max(ts.mean(), 1e-9), 1e-6), 0.05, 20)
+    gain = np.append(gain, gain[-1]).astype(np.float32)
+    out = np.zeros(len(x), dtype=np.float32)
+    win = np.zeros(len(x), dtype=np.float32)
+    for s in range(0, len(x) - N + 1, hop):
+        spec = np.fft.rfft(x[s:s + N] * w) * gain
+        seg = np.fft.irfft(spec).astype(np.float32)
+        out[s:s + N] += seg * w
+        win[s:s + N] += w * w
+    floor = max(1e-6, win.max() * 0.1)
+    out = np.where(win >= floor, out / np.maximum(win, 1e-9), 0)
+    return out.astype(np.float32)
+
+
+def cmd_ttsserve(profile_pt, ref_wav=None):
     """OMNI_AI TTS 변환 데몬: 모델·프로파일을 상주시켜 두고 stdin의 JSON 라인
-    {"in": path, "out": path} 마다 전체 발화를 오프라인 변환한다 (스트리밍 serve와
-    달리 문장 단위라 경계 아티팩트가 없음). 응답은 stdout에 JSON 한 줄씩.
+    {"in": path, "out": path, "topk"?, "pitch"?, "ltas"?} 마다 전체 발화를
+    오프라인 변환 + 후처리한다. 응답은 stdout에 JSON 한 줄씩.
+    기본 후처리(topk=1, pitch=0.855, LTAS 매칭)는 로봇 대사팩 실측 튜닝값 —
+    WavLM cosine 0.788(기본 변환) → 0.818, F0 152→132Hz(타겟 131Hz).
     모델 로그(리샘플 알림 등)가 프로토콜을 오염시키지 않게 stdout을 우회한다."""
     import contextlib
 
+    import numpy as np
+    import soundfile as sf
     import torch
-    import torchaudio
 
     real_stdout = sys.stdout
     with contextlib.redirect_stdout(sys.stderr):
         knn, device = load_with_fallback()
         matching = torch.load(profile_pt, map_location="cpu")
+    ref_ltas = None
+    if ref_wav and os.path.exists(ref_wav):
+        rx, rsr = sf.read(ref_wav, always_2d=True)
+        rx = rx.mean(axis=1)[:rsr * 90]
+        ref_ltas = _ltas(rx, rsr)  # 레퍼런스도 16kHz라 빈 정렬 일치
     print("READY", file=real_stdout, flush=True)
     for line in sys.stdin:
         line = line.strip()
@@ -203,9 +302,15 @@ def cmd_ttsserve(profile_pt):
             req = json.loads(line)
             with contextlib.redirect_stdout(sys.stderr):
                 query = knn.get_features(req["in"], vad_trigger_level=0)
-                wav = knn.match(query, matching.to(query.device), topk=4)
-                torchaudio.save(req["out"], wav[None].cpu(), 16000)
-            resp = {"ok": True, "seconds": round(wav.shape[-1] / 16000, 2)}
+                wav = knn.match(query, matching.to(query.device),
+                                topk=int(req.get("topk", 1)))
+                y = wav.cpu().numpy().astype(np.float32).reshape(-1)
+                y = _pitch_shift(y, float(req.get("pitch", 0.855)))
+                if req.get("ltas", True) and ref_ltas is not None:
+                    y = _envelope_match(y, 16000, ref_ltas)
+                peak = max(abs(y).max(), 1e-9)
+                sf.write(req["out"], y / peak * 0.95, 16000)
+            resp = {"ok": True, "seconds": round(len(y) / 16000, 2)}
         except Exception as e:  # 요청 하나의 실패가 데몬을 죽이지 않게
             resp = {"ok": False, "error": str(e)[:200]}
         print(json.dumps(resp), file=real_stdout, flush=True)
@@ -226,7 +331,7 @@ def main():
         elif cmd == "serve":
             cmd_serve(sys.argv[2])
         elif cmd == "ttsserve":
-            cmd_ttsserve(sys.argv[2])
+            cmd_ttsserve(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
         elif cmd == "convert":
             topk = sys.argv[5] if len(sys.argv) > 5 else 4
             cmd_convert(sys.argv[2], sys.argv[3], sys.argv[4], topk)

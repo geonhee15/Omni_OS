@@ -1216,7 +1216,9 @@ static BOOL OmniAINeuralAvailable(void) {
     task.executableURL = [NSURL fileURLWithPath:
         [eng stringByAppendingPathComponent:@"venv/bin/python"]];
     task.arguments = @[ [eng stringByAppendingPathComponent:@"worker.py"],
-                        @"ttsserve", OmniAIProfilePath() ];
+                        @"ttsserve", OmniAIProfilePath(),
+                        [NSHomeDirectory() stringByAppendingPathComponent:
+                            @".omni/omni_ai_voice_ref.wav"] ];
     NSPipe *inPipe = [NSPipe pipe];
     NSPipe *outPipe = [NSPipe pipe];
     NSPipe *errPipe = [NSPipe pipe];
