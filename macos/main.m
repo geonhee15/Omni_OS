@@ -1534,7 +1534,8 @@ static BOOL OmniAINeuralAvailable(void) {
                         s.aiTtsPendingIn = tmpIn;
                         s.aiTtsPendingOut = tmpOut;
                         NSData *req = [NSJSONSerialization dataWithJSONObject:
-                            @{ @"in" : tmpIn, @"out" : tmpOut } options:0 error:nil];
+                            @{ @"in" : tmpIn, @"out" : tmpOut, @"lang" : lang }
+                            options:0 error:nil];
                         NSMutableData *line = [req mutableCopy];
                         [line appendBytes:"\n" length:1];
                         @try {

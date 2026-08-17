@@ -249,7 +249,10 @@ def _smooth_ltas(l, frac=0.5):
     return out
 
 
-def _envelope_match(x, sr, ref_ltas):
+def _envelope_match(x, sr, ref_ltas, strength=0.75, floor=0.2):
+    """타겟 LTAS로 포락선 보정. strength<1 이면 보정을 부분 적용하고,
+    floor 는 대역별 최대 감쇠 한계 — 타겟의 고역 컷(~4kHz)을 그대로 강제하면
+    자음이 뭉개져 딕션이 탁해지므로 기본값을 완만하게 잡는다."""
     import numpy as np
     N, hop = 1024, 256
     w = np.hanning(N).astype(np.float32)
@@ -257,7 +260,8 @@ def _envelope_match(x, sr, ref_ltas):
     rs = _smooth_ltas(ref_ltas)
     ts = _smooth_ltas(_ltas(x, sr))
     gain = np.clip((rs / max(rs.mean(), 1e-9))
-                   / np.maximum(ts / max(ts.mean(), 1e-9), 1e-6), 0.05, 20)
+                   / np.maximum(ts / max(ts.mean(), 1e-9), 1e-6), floor, 20)
+    gain = gain ** strength
     gain = np.append(gain, gain[-1]).astype(np.float32)
     out = np.zeros(len(x), dtype=np.float32)
     win = np.zeros(len(x), dtype=np.float32)
@@ -269,6 +273,32 @@ def _envelope_match(x, sr, ref_ltas):
     floor = max(1e-6, win.max() * 0.1)
     out = np.where(win >= floor, out / np.maximum(win, 1e-9), 0)
     return out.astype(np.float32)
+
+
+def _f0_median(x, sr, lo=70, hi=350):
+    import numpy as np
+    frame, hop = int(sr * 0.04), int(sr * 0.02)
+    f0s = []
+    for s in range(0, len(x) - frame, hop):
+        seg = x[s:s + frame]
+        if (seg ** 2).mean() < 1e-5:
+            continue
+        seg = seg - seg.mean()
+        ac = np.correlate(seg, seg, "full")[frame - 1:]
+        if ac[0] <= 0:
+            continue
+        l0, l1 = int(sr / hi), int(sr / lo)
+        lag = l0 + int(np.argmax(ac[l0:l1]))
+        if ac[lag] / ac[0] > 0.4:
+            f0s.append(sr / lag)
+    return float(np.median(f0s)) if f0s else 0.0
+
+
+def _ring_mod(x, sr, hz=40.0, wet=0.3):
+    import numpy as np
+    t = np.arange(len(x), dtype=np.float32)
+    m = np.sin(2 * np.pi * hz * t / sr).astype(np.float32)
+    return x * (1 - wet) + x * m * wet
 
 
 def cmd_ttsserve(profile_pt, ref_wav=None):
@@ -300,14 +330,37 @@ def cmd_ttsserve(profile_pt, ref_wav=None):
             continue
         try:
             req = json.loads(line)
+            lang = req.get("lang", "ko")
             with contextlib.redirect_stdout(sys.stderr):
-                query = knn.get_features(req["in"], vad_trigger_level=0)
-                wav = knn.match(query, matching.to(query.device),
-                                topk=int(req.get("topk", 1)))
-                y = wav.cpu().numpy().astype(np.float32).reshape(-1)
-                y = _pitch_shift(y, float(req.get("pitch", 0.855)))
-                if req.get("ltas", True) and ref_ltas is not None:
-                    y = _envelope_match(y, 16000, ref_ltas)
+                if lang == "ko":
+                    # 한국어: kNN 프레임 치환 — 대사팩(한국어)과 음소 공간이 같아
+                    # 억양 왜곡 없이 진짜 그 목소리가 된다
+                    query = knn.get_features(req["in"], vad_trigger_level=0)
+                    wav = knn.match(query, matching.to(query.device),
+                                    topk=int(req.get("topk", 1)))
+                    y = wav.cpu().numpy().astype(np.float32).reshape(-1)
+                    y = _pitch_shift(y, float(req.get("pitch", 0.855)))
+                    if req.get("ltas", True) and ref_ltas is not None:
+                        y = _envelope_match(y, 16000, ref_ltas)
+                else:
+                    # 비한국어: kNN 치환은 한국어 프레임으로 갈아끼워 한국인
+                    # 억양이 생긴다 → 네이티브 TTS 발음을 유지한 채 대사팩
+                    # 톤(피치·포락선)과 가벼운 로봇 질감만 입힌다
+                    xx, xsr = sf.read(req["in"], always_2d=True)
+                    xx = xx.mean(axis=1).astype(np.float32)
+                    if xsr != 16000:
+                        n2 = int(len(xx) * 16000 / xsr)
+                        y = np.interp(np.linspace(0, len(xx) - 1, n2),
+                                      np.arange(len(xx)), xx).astype(np.float32)
+                    else:
+                        y = xx
+                    f0 = _f0_median(y, 16000)
+                    ratio = min(1.15, max(0.6, 131.0 / f0)) if f0 > 0 else 1.0
+                    y = _pitch_shift(y, ratio)
+                    if ref_ltas is not None:
+                        y = _envelope_match(y, 16000, ref_ltas,
+                                            strength=0.65, floor=0.25)
+                    y = _ring_mod(y, 16000, hz=40.0, wet=0.3)
                 peak = max(abs(y).max(), 1e-9)
                 sf.write(req["out"], y / peak * 0.95, 16000)
             resp = {"ok": True, "seconds": round(len(y) / 16000, 2)}

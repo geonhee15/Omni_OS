@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.41.0",
+  version: "0.42.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -526,7 +526,11 @@ OmniOS.register("ai", {
     "- 답은 음성으로 낭독됩니다. 목록, 마크다운, 코드블록 없이 평문 문장 1~3개로 간결하게 답합니다.",
     "- 당신의 정체: 이 컴퓨터에서 실행 중인 개인 HUD 시스템 OMNI_OS의 관제 AI입니다. 아래 [실시간 상태 스냅샷]으로 모든 패널의 현재 상태를 파악하고 있으며, 앱·시스템에 대한 질문에는 그 실측값으로 답합니다.",
     "- 언어: 기본은 한국어이고 일본어·중국어·영어·스페인어·러시아어를 구사합니다. [인터페이스 언어]로 지정된 언어로만 답합니다. 존댓말·호칭 금지 규칙은 모든 언어에서 동일하게 적용합니다(정중한 어조, 호칭 없음).",
-    "- 패널 열기: 사용자가 특정 패널을 열어 달라고 요청하면(예: \"아크스캔 열어\", \"시스템 모니터 보여줘\") 짧은 확인 문장 뒤에 [[OPEN:키]] 태그를 붙입니다. 키 목록: cmd(커맨드 브리지/홈), ai(옴니 AI), clock(시계), proj(프로젝트), sys(시스템 모니터), sp1(보안 프로토콜), r3d(3D 뷰어), ino(아두이노), ce(코드 에디터), notes(노트), voice(보이스 체인저), arc(아크스캔). 태그는 화면 전환 명령이라 낭독되지 않으며, 열기 요청이 명확할 때만 붙입니다. 그 외 제어(파일 실행, 메일 확인 등)는 아직 미연동이므로 짧게 보고합니다.",
+    "- 앱 조작: 실행 요청이 명확할 때 짧은 확인 문장 뒤에 아래 태그를 붙입니다. 태그는 내부 명령이라 낭독되지 않으며, 여러 개 이어 붙일 수 있습니다.",
+    "  [[OPEN:키]] — 패널 열기. 키: cmd(커맨드 브리지/홈), ai(옴니 AI), clock(시계), proj(프로젝트), sys(시스템 모니터), sp1(보안 프로토콜), r3d(3D 뷰어), ino(아두이노), ce(코드 에디터), notes(노트), voice(보이스 체인저), arc(아크스캔)",
+    "  [[ACT:proj.editor:프로젝트이름:도구]] — 해당 프로젝트의 전용 에디터를 열고 도구를 장착. 도구: r3d(3D)/ino(아두이노)/ce(코드)/notes(노트), 도구 생략 가능. 프로젝트 이름은 [실시간 상태 스냅샷]의 프로젝트 목록에 있는 이름을 사용합니다. 예: \"아크스캔 3D 에디터 열어줘\" → [[ACT:proj.editor:ARC-SCAN:r3d]]",
+    "- 현재 시각·날짜 질문은 패널을 열 필요 없이 [실시간 상태 스냅샷]의 현재 시각으로 바로 답합니다. 시스템/보안/프로젝트 현황도 마찬가지로 스냅샷 실측값으로 답합니다.",
+    "- 그 외 제어(파일 실행, 메일 확인 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
   LOCALES: { ko: "ko-KR", ja: "ja-JP", zh: "zh-CN", en: "en-US", es: "es-ES", ru: "ru-RU" },
   LANG_NAMES: { ko: "한국어", ja: "일본어", zh: "중국어(간체)", en: "영어", es: "스페인어", ru: "러시아어" },
@@ -720,6 +724,11 @@ OmniOS.register("ai", {
   // ---- 앱 전역 상태 스냅샷 (매 질문마다 시스템 프롬프트에 주입) ----
   async gatherContext() {
     const L = [];
+    const now = new Date();
+    const DAYS = ["일", "월", "화", "수", "목", "금", "토"];
+    const p2 = (n) => String(n).padStart(2, "0");
+    L.push(`현재 시각: ${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())}`
+      + ` (${DAYS[now.getDay()]}) ${p2(now.getHours())}:${p2(now.getMinutes())}`);
     const up = Math.floor((Date.now() - OmniOS.bootTime) / 60000);
     L.push(`OMNI_OS v${OmniOS.version}, 세션 가동 ${up}분`);
     const nav = document.querySelector(".nav-item.active .nav-label");
@@ -926,6 +935,37 @@ OmniOS.register("ai", {
     }
   },
 
+  // ---- 앱 심층 액션 ([[ACT:...]] 태그 실행기) ----
+  async runAction(spec) {
+    const parts = spec.split(":").map((s) => s.trim()).filter(Boolean);
+    const key = (parts[0] || "").toLowerCase();
+    if (key === "proj.editor") {
+      // 프로젝트 전용 에디터 열기 (+선택 도구 장착)
+      const name = parts[1] || "";
+      const tool = (parts[2] || "").toLowerCase();
+      const proj = OmniOS.modules.proj;
+      if (!proj) return;
+      if (!proj._loaded && proj.load) await proj.load();
+      const q = name.toLowerCase();
+      const items = proj._items || [];
+      const item = items.find((p) => p.name.toLowerCase() === q)
+        || items.find((p) => p.name.toLowerCase().includes(q));
+      if (!item) {
+        this.logLine("sys", `프로젝트를 찾지 못했습니다: ${name}`);
+        return;
+      }
+      document.querySelector('.nav-item[data-panel="proj"]').click();
+      proj.openEditor(item);
+      if (["r3d", "ino", "ce", "notes"].includes(tool)) {
+        await proj.mountPanel(tool);
+      }
+      this.logLine("sys",
+        `프로젝트 에디터: ${item.name}${tool ? " · " + tool.toUpperCase() : ""}`);
+    } else {
+      this.logLine("sys", `알 수 없는 액션: ${spec}`);
+    }
+  },
+
   // ---- 텍스트 입력 ----
   sendFromInput() {
     const text = this.els.text.value.trim();
@@ -980,11 +1020,16 @@ OmniOS.register("ai", {
         this.refreshStatus();
         return;
       }
-      // [[OPEN:키]] 태그 추출 → 패널 전환 실행, 낭독/로그에서는 제거
+      // [[OPEN:키]] / [[ACT:...]] 태그 추출 → 실행, 낭독/로그에서는 제거
       const opens = [];
+      const acts = [];
       let reply = (r.text || "")
         .replace(/\[\[OPEN:([a-z0-9]+)\]\]/gi, (m, k) => {
           opens.push(k.toLowerCase());
+          return " ";
+        })
+        .replace(/\[\[ACT:([^\]]+)\]\]/gi, (m, s) => {
+          acts.push(s.trim());
           return " ";
         })
         .replace(/\s{2,}/g, " ").trim();
@@ -999,6 +1044,7 @@ OmniOS.register("ai", {
           this.logLine("sys", `패널 전환: ${this.PANEL_LABELS[k]}`);
         }
       }
+      for (const a of acts) await this.runAction(a);
       this.speak(reply);
     } catch (e) {
       this.history.pop();
