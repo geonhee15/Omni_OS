@@ -201,6 +201,15 @@ static NSString *ArcSavesDir(void) {
 @property (strong) NSNumber *aiTtsPendingId;          // 진행 중 요청의 msgId
 @property (strong) NSString *aiTtsPendingIn;
 @property (strong) NSString *aiTtsPendingOut;
+// OMNI_AI 외국어 음색 데몬 (seed_serve.py — Seed-VC 상주)
+@property (strong) NSTask *aiSeedTask;
+@property (strong) NSPipe *aiSeedIn;
+@property (assign) BOOL aiSeedReady;
+@property (strong) NSMutableString *aiSeedBuf;
+@property (strong) NSMutableArray *aiSeedWaiters;
+@property (strong) NSNumber *aiSeedPendingId;
+@property (strong) NSString *aiSeedPendingIn;
+@property (strong) NSString *aiSeedPendingOut;
 @end
 
 @implementation AppDelegate
@@ -294,6 +303,7 @@ static NSString *ArcSavesDir(void) {
 - (void)applicationWillTerminate:(NSNotification *)notification {
     if (self.voiceLiveTask != nil) [self.voiceLiveTask terminate];
     if (self.aiTtsTask != nil) [self.aiTtsTask terminate];
+    if (self.aiSeedTask != nil) [self.aiSeedTask terminate];
     [self.aiListener cancel];
     [self.terms closeAll]; // 좀비 zsh 방지
     SP1ResumeWatcher();
@@ -1314,6 +1324,131 @@ static BOOL OmniAINeuralAvailable(void) {
     [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" } forId:msgId];
 }
 
+// ---- 외국어 음색 데몬 (Seed-VC) — kNN과 달리 발음을 소스 그대로 보존 ----
+
+static NSString *OmniAISeedRefPath(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@".omni/omni_ai_seed_ref.wav"];
+}
+
+static BOOL OmniAISeedAvailable(void) {
+    NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    return [fm isExecutableFileAtPath:
+               [eng stringByAppendingPathComponent:@"seedvc/venv/bin/python"]]
+        && [fm fileExistsAtPath:[eng stringByAppendingPathComponent:@"seed_serve.py"]]
+        && [fm fileExistsAtPath:OmniAISeedRefPath()];
+}
+
+- (void)aiSeedEnsure:(void (^)(BOOL))done {
+    if (self.aiSeedTask != nil && self.aiSeedTask.isRunning) {
+        if (self.aiSeedReady) { done(YES); return; }
+        [self.aiSeedWaiters addObject:[done copy]];
+        return;
+    }
+    if (!OmniAISeedAvailable()) { done(NO); return; }
+    self.aiSeedReady = NO;
+    self.aiSeedBuf = [NSMutableString string];
+    if (self.aiSeedWaiters == nil) self.aiSeedWaiters = [NSMutableArray array];
+    [self.aiSeedWaiters addObject:[done copy]];
+
+    NSString *eng = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine"];
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:
+        [eng stringByAppendingPathComponent:@"seedvc/venv/bin/python"]];
+    task.arguments = @[ [eng stringByAppendingPathComponent:@"seed_serve.py"],
+                        OmniAISeedRefPath(), @"15" ];
+    NSPipe *inPipe = [NSPipe pipe];
+    NSPipe *outPipe = [NSPipe pipe];
+    NSPipe *errPipe = [NSPipe pipe];
+    task.standardInput = inPipe;
+    task.standardOutput = outPipe;
+    task.standardError = errPipe;
+    errPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+        (void)fh.availableData; // 모델 로그로 버퍼가 차지 않게 비움
+    };
+    __weak AppDelegate *weakSelf = self;
+    outPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+        NSData *d = fh.availableData;
+        if (d.length == 0) return;
+        NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+        if (s == nil) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf aiSeedConsume:s];
+        });
+    };
+    task.terminationHandler = ^(NSTask *t) {
+        outPipe.fileHandleForReading.readabilityHandler = nil;
+        errPipe.fileHandleForReading.readabilityHandler = nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppDelegate *s = weakSelf;
+            if (s == nil) return;
+            s.aiSeedReady = NO;
+            s.aiSeedTask = nil;
+            s.aiSeedIn = nil;
+            for (void (^w)(BOOL) in s.aiSeedWaiters) w(NO);
+            [s.aiSeedWaiters removeAllObjects];
+            [s aiSeedFailPending];
+        });
+    };
+    NSError *err = nil;
+    if (![task launchAndReturnError:&err]) {
+        for (void (^w)(BOOL) in self.aiSeedWaiters) w(NO);
+        [self.aiSeedWaiters removeAllObjects];
+        return;
+    }
+    self.aiSeedTask = task;
+    self.aiSeedIn = inPipe;
+}
+
+- (void)aiSeedConsume:(NSString *)chunk {
+    [self.aiSeedBuf appendString:chunk];
+    NSRange nl;
+    while ((nl = [self.aiSeedBuf rangeOfString:@"\n"]).location != NSNotFound) {
+        NSString *line = [[self.aiSeedBuf substringToIndex:nl.location]
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        [self.aiSeedBuf deleteCharactersInRange:NSMakeRange(0, nl.location + 1)];
+        if (line.length == 0) continue;
+        if ([line isEqualToString:@"READY"]) {
+            self.aiSeedReady = YES;
+            for (void (^w)(BOOL) in self.aiSeedWaiters) w(YES);
+            [self.aiSeedWaiters removeAllObjects];
+            continue;
+        }
+        NSNumber *msgId = self.aiSeedPendingId;
+        if (msgId == nil) continue;
+        NSString *inPath = self.aiSeedPendingIn, *outPath = self.aiSeedPendingOut;
+        self.aiSeedPendingId = nil;
+        self.aiSeedPendingIn = nil;
+        self.aiSeedPendingOut = nil;
+        NSData *jd = [line dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary *r = jd ? [NSJSONSerialization JSONObjectWithData:jd
+                                                               options:0 error:nil] : nil;
+        BOOL ok = [r isKindOfClass:[NSDictionary class]] && [r[@"ok"] boolValue];
+        NSData *wav = ok ? [NSData dataWithContentsOfFile:outPath] : nil;
+        [NSFileManager.defaultManager removeItemAtPath:inPath error:nil];
+        [NSFileManager.defaultManager removeItemAtPath:outPath error:nil];
+        if (wav.length == 0) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" } forId:msgId];
+        } else {
+            [self deliverPayload:@{ @"ok" : @YES, @"neural" : @YES,
+                                    @"wav" : [wav base64EncodedStringWithOptions:0] }
+                           forId:msgId];
+        }
+    }
+}
+
+- (void)aiSeedFailPending {
+    if (self.aiSeedPendingId == nil) return;
+    NSNumber *msgId = self.aiSeedPendingId;
+    if (self.aiSeedPendingIn != nil) {
+        [NSFileManager.defaultManager removeItemAtPath:self.aiSeedPendingIn error:nil];
+    }
+    self.aiSeedPendingId = nil;
+    self.aiSeedPendingIn = nil;
+    self.aiSeedPendingOut = nil;
+    [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" } forId:msgId];
+}
+
 // say 실행 → wav 파일 (완료 블록은 배경 큐에서 호출)
 - (BOOL)aiRunSay:(NSString *)text voice:(NSString *)voice rate:(NSNumber *)rate
           toFile:(NSString *)path {
@@ -1354,12 +1489,17 @@ static BOOL OmniAINeuralAvailable(void) {
                        forId:msgId];
 
     } else if ([cmd isEqualToString:@"ai.warm"]) {
-        // 패널이 열릴 때 데몬을 미리 띄워 첫 응답 지연 제거
+        // 패널이 열릴 때 데몬을 미리 띄워 첫 응답 지연 제거.
+        // seed(외국어) 데몬은 무겁기 때문에 요청됐을 때만 예열
         if (OmniAINeuralAvailable()) {
             [self aiTtsEnsure:^(BOOL ready) { (void)ready; }];
         }
+        if ([a[@"seed"] boolValue] && OmniAISeedAvailable()) {
+            [self aiSeedEnsure:^(BOOL ready) { (void)ready; }];
+        }
         [self deliverPayload:@{ @"ok" : @YES,
-                                @"neural" : @(OmniAINeuralAvailable()) } forId:msgId];
+                                @"neural" : @(OmniAINeuralAvailable()),
+                                @"seed" : @(OmniAISeedAvailable()) } forId:msgId];
 
     } else if ([cmd isEqualToString:@"ai.saveKey"]) {
         NSString *key = [a[@"key"] isKindOfClass:[NSString class]] ? a[@"key"] : nil;
@@ -1499,9 +1639,10 @@ static BOOL OmniAINeuralAvailable(void) {
             : ([lang isEqualToString:@"ko"] ? (wantNeural ? @275 : @180) : @0);
 
         if (wantNeural && OmniAINeuralAvailable()) {
-            // 신경망 경로: say(Eddy) 소스 → 대사팩 음색으로 kNN-VC 변환.
-            // Eddy의 밋밋한 기계 억양이 타겟 TTS 억양과 가장 잘 맞는다 (WavLM 실측)
-            if (self.aiTtsPendingId != nil) {
+            // 신경망 경로: say 소스 → 대사팩 음색 변환.
+            // 한국어는 kNN(음소 공간 일치, 0.6초), 비한국어는 Seed-VC(발음 보존, ~4초)
+            BOOL useSeed = ![lang isEqualToString:@"ko"] && OmniAISeedAvailable();
+            if ((useSeed ? self.aiSeedPendingId : self.aiTtsPendingId) != nil) {
                 [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_BUSY" } forId:msgId];
                 return;
             }
@@ -1521,6 +1662,36 @@ static BOOL OmniAINeuralAvailable(void) {
                     if (!said) {
                         [s deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" }
                                     forId:msgId];
+                        return;
+                    }
+                    if (useSeed) {
+                        [s aiSeedEnsure:^(BOOL ready) {
+                            if (!ready || s.aiSeedPendingId != nil) {
+                                [NSFileManager.defaultManager removeItemAtPath:tmpIn error:nil];
+                                [s deliverPayload:@{ @"ok" : @NO, @"error" : @"NEURAL_FAIL" }
+                                            forId:msgId];
+                                return;
+                            }
+                            s.aiSeedPendingId = msgId;
+                            s.aiSeedPendingIn = tmpIn;
+                            s.aiSeedPendingOut = tmpOut;
+                            NSData *req = [NSJSONSerialization dataWithJSONObject:
+                                @{ @"in" : tmpIn, @"out" : tmpOut } options:0 error:nil];
+                            NSMutableData *line = [req mutableCopy];
+                            [line appendBytes:"\n" length:1];
+                            @try {
+                                [s.aiSeedIn.fileHandleForWriting writeData:line];
+                            } @catch (NSException *e) {
+                                [s aiSeedFailPending];
+                                return;
+                            }
+                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 90 * NSEC_PER_SEC),
+                                           dispatch_get_main_queue(), ^{
+                                if ([s.aiSeedPendingId isEqualToNumber:msgId]) {
+                                    [s aiSeedFailPending];
+                                }
+                            });
+                        }];
                         return;
                     }
                     [s aiTtsEnsure:^(BOOL ready) {

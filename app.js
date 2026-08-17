@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.42.0",
+  version: "0.43.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -617,6 +617,11 @@ OmniOS.register("ai", {
         document.querySelectorAll(".ai-lang").forEach((b) =>
           b.classList.toggle("active", b === btn));
         this.lang = btn.dataset.lang;
+        // 외국어 선택 시 Seed 데몬 예열 (첫 발화 지연 제거)
+        if (this.lang !== "ko" && OmniNative.available) {
+          OmniNative.request("ai.warm",
+            JSON.stringify({ seed: true }), 8000).catch(() => {});
+        }
       });
     });
     this.els.keybtn.addEventListener("click", () => {
@@ -1062,6 +1067,28 @@ OmniOS.register("ai", {
     if (this.ctx.state === "suspended") this.ctx.resume();
   },
 
+  // 응답 텍스트의 실제 언어 감지 — LANG 토글과 응답 언어가 어긋나도
+  // (예: 한국어 모드에서 "영어로 말해봐") 항상 맞는 보이스로 낭독한다.
+  // 한국어 보이스가 외국어 텍스트를 읽으며 생기던 콩글리시·숫자 한글 낭독 차단
+  detectLang(text) {
+    const n = (re) => (text.match(re) || []).length;
+    const hangul = n(/[가-힣]/g);
+    const kana = n(/[ぁ-んァ-ヶー]/g);
+    const han = n(/[一-鿿]/g);
+    const cyr = n(/[а-яё]/gi);
+    const latin = n(/[a-z]/gi);
+    const max = Math.max(hangul, kana, han, cyr, latin);
+    if (max === 0) return this.lang;
+    if (kana >= 2 && hangul === 0) return "ja"; // 가나 = 일본어 확정 신호
+    if (hangul === max) return "ko";
+    if (kana === max || (kana > 0 && han === max)) return "ja"; // 한자+가나 = 일본어
+    if (han === max) return "zh";
+    if (cyr === max) return "ru";
+    // 라틴: 스페인어 특수문자 있으면 es, 아니면 토글이 es일 때만 es
+    if (/[ñáéíóú¿¡]/i.test(text)) return "es";
+    return this.lang === "es" ? "es" : "en";
+  },
+
   async speak(text) {
     if (!OmniNative.available) { this.setState("idle", "STANDBY", ""); return; }
     this.setState("speaking", "SPEAKING", "on");
@@ -1069,15 +1096,17 @@ OmniOS.register("ai", {
     // 낭독용 정리: 마크다운 기호 제거
     const clean = text.replace(/[*#`_~<>|]+/g, " ").replace(/\s{2,}/g, " ").trim();
     const wantNeural = this.voiceMode === "neural" && this.neural;
+    const effLang = this.detectLang(clean);
     try {
       // rate는 네이티브가 언어·경로별 기본값 결정 (ko 신경망 275 / ko DSP 180 / 그 외 기본)
+      // 외국어 신경망(Seed-VC)은 문장당 ~4초 — 타임아웃 여유 있게
       let r = await OmniNative.request("ai.speak", JSON.stringify({
-        text: clean.slice(0, 1200), neural: wantNeural, lang: this.lang,
-      }), 60000);
+        text: clean.slice(0, 1200), neural: wantNeural, lang: effLang,
+      }), 120000);
       if ((!r || !r.ok) && wantNeural) {
         // 신경망 실패 시 DSP 폴백 1회
         r = await OmniNative.request("ai.speak", JSON.stringify({
-          text: clean.slice(0, 1200), neural: false, lang: this.lang,
+          text: clean.slice(0, 1200), neural: false, lang: effLang,
         }), 60000);
       }
       if (!r || !r.ok || !r.wav) {
