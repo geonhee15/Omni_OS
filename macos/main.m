@@ -1697,7 +1697,9 @@ static NSString *OmniAIFsValidate(NSString *path) {
         }
         NSString *model = [a[@"model"] isKindOfClass:[NSString class]]
             ? a[@"model"] : @"claude-haiku-4-5-20251001";
-        NSString *system = [a[@"system"] isKindOfClass:[NSString class]] ? a[@"system"] : @"";
+        // system은 문자열 또는 블록 배열(프롬프트 캐싱 cache_control 포함) 허용
+        id system = ([a[@"system"] isKindOfClass:[NSString class]]
+                     || [a[@"system"] isKindOfClass:[NSArray class]]) ? a[@"system"] : @"";
         NSArray *messages = [a[@"messages"] isKindOfClass:[NSArray class]] ? a[@"messages"] : @[];
         NSNumber *maxTok = [a[@"maxTokens"] isKindOfClass:[NSNumber class]]
             ? a[@"maxTokens"] : @400;
@@ -1875,9 +1877,11 @@ static NSString *OmniAIFsValidate(NSString *path) {
         // 키가 없거나 요청이 실패하면 시스템 보이스로 폴백
         NSString *oaiKey = OmniAIOpenAIKey();
         if (oaiKey != nil) {
+            NSString *gptVoice = [a[@"gptVoice"] isKindOfClass:[NSString class]]
+                ? a[@"gptVoice"] : @"onyx"; // 사용자 선택 (저음 남성)
             NSDictionary *body = @{
                 @"model" : @"gpt-4o-mini-tts",
-                @"voice" : @"ash",
+                @"voice" : gptVoice,
                 @"input" : text,
                 @"instructions" :
                     @"차분하고 명료한 관제 AI 어조. 담백한 보고체로, 과장 없이 또렷하게. "

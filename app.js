@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.47.1",
+  version: "0.48.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -1307,11 +1307,23 @@ OmniOS.register("ai", {
       return;
     }
     try {
-      // 매 질문마다 앱 전역 실측 스냅샷을 수집해 프롬프트에 주입
+      // 매 질문마다 앱 전역 실측 스냅샷을 수집해 프롬프트에 주입.
+      // 고정 부분(페르소나·패널 안내·도구)은 프롬프트 캐싱으로 첫 토큰 지연 단축
       const snapshot = await this.gatherContext();
-      const system = `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}`
-        + `\n\n[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
-        + `\n\n[인터페이스 언어]\n${this.LANG_NAMES[this.lang] || "한국어"}`;
+      const system = [
+        {
+          type: "text",
+          text: `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}`,
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: `[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
+            + `\n\n[인터페이스 언어]\n${this.LANG_NAMES[this.lang] || "한국어"}`,
+        },
+      ];
+      const tools = this.FS_TOOLS.map((t, i, arr) =>
+        i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t);
       // AUTO 모드: 심층 질문만 Opus로 격상, 나머지는 Haiku (속도·비용 최적)
       let chosenModel = this.model;
       if (this.model === "auto") {
@@ -1328,7 +1340,7 @@ OmniOS.register("ai", {
           model: chosenModel,
           system,
           messages: convo,
-          tools: this.FS_TOOLS,
+          tools,
           maxTokens: 4000,
         }), 120000);
         if (!r || !r.ok || r.stop !== "tool_use") break;
@@ -1435,6 +1447,21 @@ OmniOS.register("ai", {
     return this.lang === "es" ? "es" : "en";
   },
 
+  // 낭독 텍스트를 문장 덩어리로 분할 — 덩어리별로 병렬 합성해
+  // 첫 문장이 도착하는 즉시 재생을 시작한다 (체감 지연 대폭 단축)
+  splitSentences(t) {
+    const raw = t.split(/(?<=[.!?。！？])\s+/).map((s) => s.trim()).filter(Boolean);
+    const out = [];
+    let cur = "";
+    for (const s of raw) {
+      cur = cur ? `${cur} ${s}` : s;
+      // 첫 덩어리는 짧아도 바로 분리 — 첫 소리가 최대한 빨리 나오게
+      if (out.length === 0 || cur.length >= 30) { out.push(cur); cur = ""; }
+    }
+    if (cur) out.push(cur);
+    return out.slice(0, 6);
+  },
+
   async speak(text) {
     if (!OmniNative.available) { this.setState("idle", "STANDBY", ""); return; }
     this.setState("speaking", "SPEAKING", "on");
@@ -1442,25 +1469,33 @@ OmniOS.register("ai", {
     // 낭독용 정리: 마크다운 기호 제거
     const clean = text.replace(/[*#`_~<>|]+/g, " ").replace(/\s{2,}/g, " ").trim();
     const effLang = this.detectLang(clean);
+    const gen = (this._speakGen = (this._speakGen || 0) + 1);
+    const parts = this.splitSentences(clean);
+    // 전 문장 동시 발주 — 재생은 순서대로
+    const jobs = parts.map((p) => OmniNative.request("ai.speak", JSON.stringify({
+      text: p.slice(0, 800), lang: effLang,
+    }), 60000).catch(() => null));
+    let played = false;
     try {
-      // 클린 보이스: 언어별 시스템 보이스 원본을 변조 없이 그대로 재생
-      const r = await OmniNative.request("ai.speak", JSON.stringify({
-        text: clean.slice(0, 1200), lang: effLang,
-      }), 60000);
-      if (!r || !r.ok || !r.wav) {
-        this.setInd(this.els.indTts, "FAIL", "err");
-        this.logLine("sys", `발화 실패: ${(r && r.error) || "응답 없음"}`);
-        this.setState("idle", "STANDBY", "");
-        return;
+      for (let i = 0; i < jobs.length; i++) {
+        const r = await jobs[i];
+        if (gen !== this._speakGen) return; // 중단됨
+        if (!r || !r.ok || !r.wav) {
+          if (!played) this.logLine("sys", `발화 실패: ${(r && r.error) || "응답 없음"}`);
+          continue;
+        }
+        const { x, sr } = this.parseWav(r.wav);
+        played = true;
+        await this.playChunk(x, sr);
+        if (gen !== this._speakGen) return;
       }
-      if (this.state !== "speaking") return; // 그 사이 중단됨
-      const { x, sr } = this.parseWav(r.wav);
-      this.playRobot(x, sr);
     } catch (e) {
-      this.setInd(this.els.indTts, "FAIL", "err");
       this.logLine("sys", `발화 실패: ${e.message || e}`);
-      this.setState("idle", "STANDBY", "");
     }
+    if (gen !== this._speakGen) return;
+    this.setInd(this.els.indTts, played ? (this.hasOpenAI ? "GPT" : "CLEAN") : "FAIL",
+      played ? "ok" : "err");
+    if (this.state === "speaking") this.setState("idle", "STANDBY", "");
   },
 
   parseWav(b64) {
@@ -1503,30 +1538,31 @@ OmniOS.register("ai", {
     return { x, sr };
   },
 
-  playRobot(samples, sr) {
-    this.ensureCtx();
-    const buf = this.ctx.createBuffer(1, samples.length, sr);
-    buf.copyToChannel(samples, 0);
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    if (!this._analyser) {
-      this._analyser = this.ctx.createAnalyser();
-      this._analyser.fftSize = 512;
-      this._analyser.connect(this.ctx.destination);
-    }
-    src.connect(this._analyser);
-    src.onended = () => {
-      if (this._speakSrc === src) {
-        this._speakSrc = null;
-        this.setInd(this.els.indTts, "READY", "ok");
-        if (this.state === "speaking") this.setState("idle", "STANDBY", "");
+  // 오디오 덩어리 하나 재생 — 끝나면 resolve (문장 파이프라인용)
+  playChunk(samples, sr) {
+    return new Promise((resolve) => {
+      this.ensureCtx();
+      const buf = this.ctx.createBuffer(1, samples.length, sr);
+      buf.copyToChannel(samples, 0);
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      if (!this._analyser) {
+        this._analyser = this.ctx.createAnalyser();
+        this._analyser.fftSize = 512;
+        this._analyser.connect(this.ctx.destination);
       }
-    };
-    this._speakSrc = src;
-    src.start();
+      src.connect(this._analyser);
+      src.onended = () => {
+        if (this._speakSrc === src) this._speakSrc = null;
+        resolve();
+      };
+      this._speakSrc = src;
+      src.start();
+    });
   },
 
   stopSpeak() {
+    this._speakGen = (this._speakGen || 0) + 1; // 대기 중인 재생 큐 무효화
     if (this._speakSrc) {
       try { this._speakSrc.stop(); } catch (e) { /* already stopped */ }
       this._speakSrc = null;
