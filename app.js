@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.43.0",
+  version: "0.44.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -559,8 +559,7 @@ OmniOS.register("ai", {
   history: [],
   state: "idle", // idle | listening | thinking | speaking
   hasKey: false,
-  neural: false,        // 신경망 로봇 보이스(대사팩 음색) 사용 가능 여부
-  voiceMode: "neural",  // neural | dsp
+  neural: false,        // 변조 엔진 설치 여부 (현재 휴면 — 클린 보이스 모드)
   micLevel: 0,
   _pendingLine: null,
   _partialText: "",
@@ -604,24 +603,11 @@ OmniOS.register("ai", {
         this.model = btn.dataset.model;
       });
     });
-    document.querySelectorAll(".ai-voice").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        if (btn.dataset.voice === "neural" && !this.neural) return;
-        document.querySelectorAll(".ai-voice").forEach((b) =>
-          b.classList.toggle("active", b === btn));
-        this.voiceMode = btn.dataset.voice;
-      });
-    });
     document.querySelectorAll(".ai-lang").forEach((btn) => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".ai-lang").forEach((b) =>
           b.classList.toggle("active", b === btn));
         this.lang = btn.dataset.lang;
-        // 외국어 선택 시 Seed 데몬 예열 (첫 발화 지연 제거)
-        if (this.lang !== "ko" && OmniNative.available) {
-          OmniNative.request("ai.warm",
-            JSON.stringify({ seed: true }), 8000).catch(() => {});
-        }
       });
     });
     this.els.keybtn.addEventListener("click", () => {
@@ -680,17 +666,11 @@ OmniOS.register("ai", {
       this.hasKey = !!(r && r.key);
       this.neural = !!(r && r.neural);
       this.setInd(this.els.indStt, "READY", "ok");
-      this.setInd(this.els.indTts, this.neural ? "NEURAL" : "DSP", "ok");
+      this.setInd(this.els.indTts, "CLEAN", "ok");
       this.setInd(this.els.indLlm, this.hasKey ? "READY" : "NO KEY",
         this.hasKey ? "ok" : "err");
       this.els.keystate.textContent = this.hasKey ? "CONFIGURED" : "NOT SET";
       this.els.keystate.className = `ai-keystate ${this.hasKey ? "ok" : "err"}`;
-      // 신경망 미설치면 DSP로 강제 + NEURAL 버튼 비활성 표시
-      if (!this.neural && this.voiceMode === "neural") this.voiceMode = "dsp";
-      document.querySelectorAll(".ai-voice").forEach((b) => {
-        b.classList.toggle("disabled", b.dataset.voice === "neural" && !this.neural);
-        b.classList.toggle("active", b.dataset.voice === this.voiceMode);
-      });
     } catch (e) {
       /* 브리지 타임아웃 — 표시 유지 */
     }
@@ -1095,20 +1075,12 @@ OmniOS.register("ai", {
     this.setInd(this.els.indTts, "SYNTH", "busy");
     // 낭독용 정리: 마크다운 기호 제거
     const clean = text.replace(/[*#`_~<>|]+/g, " ").replace(/\s{2,}/g, " ").trim();
-    const wantNeural = this.voiceMode === "neural" && this.neural;
     const effLang = this.detectLang(clean);
     try {
-      // rate는 네이티브가 언어·경로별 기본값 결정 (ko 신경망 275 / ko DSP 180 / 그 외 기본)
-      // 외국어 신경망(Seed-VC)은 문장당 ~4초 — 타임아웃 여유 있게
-      let r = await OmniNative.request("ai.speak", JSON.stringify({
-        text: clean.slice(0, 1200), neural: wantNeural, lang: effLang,
-      }), 120000);
-      if ((!r || !r.ok) && wantNeural) {
-        // 신경망 실패 시 DSP 폴백 1회
-        r = await OmniNative.request("ai.speak", JSON.stringify({
-          text: clean.slice(0, 1200), neural: false, lang: effLang,
-        }), 60000);
-      }
+      // 클린 보이스: 언어별 시스템 보이스 원본을 변조 없이 그대로 재생
+      const r = await OmniNative.request("ai.speak", JSON.stringify({
+        text: clean.slice(0, 1200), lang: effLang,
+      }), 60000);
       if (!r || !r.ok || !r.wav) {
         this.setInd(this.els.indTts, "FAIL", "err");
         this.setState("idle", "STANDBY", "");
@@ -1116,15 +1088,7 @@ OmniOS.register("ai", {
       }
       if (this.state !== "speaking") return; // 그 사이 중단됨
       const { x, sr } = this.parseWav(r.wav);
-      if (r.neural) {
-        // 신경망 변환 출력은 이미 대사팩 음색 — 그대로 재생
-        this.playRobot(x, sr);
-      } else {
-        // 레트로 기계 로봇 DSP 체인: 피치 다운 → 대역 제한 + 링모드 + 비트크러시
-        let y = OmniVoiceDSP.pitchShift(x, 0.85);
-        y = OmniRobotVoice.robotize(y, sr);
-        this.playRobot(y, sr);
-      }
+      this.playRobot(x, sr);
     } catch (e) {
       this.setInd(this.els.indTts, "FAIL", "err");
       this.setState("idle", "STANDBY", "");

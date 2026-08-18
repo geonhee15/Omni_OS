@@ -1489,14 +1489,8 @@ static BOOL OmniAISeedAvailable(void) {
                        forId:msgId];
 
     } else if ([cmd isEqualToString:@"ai.warm"]) {
-        // 패널이 열릴 때 데몬을 미리 띄워 첫 응답 지연 제거.
-        // seed(외국어) 데몬은 무겁기 때문에 요청됐을 때만 예열
-        if (OmniAINeuralAvailable()) {
-            [self aiTtsEnsure:^(BOOL ready) { (void)ready; }];
-        }
-        if ([a[@"seed"] boolValue] && OmniAISeedAvailable()) {
-            [self aiSeedEnsure:^(BOOL ready) { (void)ready; }];
-        }
+        // 클린 보이스 모드: 변조 데몬을 쓰지 않으므로 예열 없음 (상태만 보고).
+        // 변조 데몬 코드는 유지 — 로봇 보이스로 되돌릴 때 재활성화
         [self deliverPayload:@{ @"ok" : @YES,
                                 @"neural" : @(OmniAINeuralAvailable()),
                                 @"seed" : @(OmniAISeedAvailable()) } forId:msgId];
@@ -1620,23 +1614,20 @@ static BOOL OmniAISeedAvailable(void) {
             [self deliverPayload:@{ @"ok" : @NO, @"error" : @"bad text" } forId:msgId];
             return;
         }
-        BOOL wantNeural = [a[@"neural"] boolValue];
+        // 클린 보이스 모드: 변조 없이 언어별 최고 품질 시스템 보이스로 바로 낭독.
+        // (로봇 변조 파이프라인은 코드로 유지하되 neural 요청을 받지 않아 휴면)
+        BOOL wantNeural = NO;
         NSString *lang = [a[@"lang"] isKindOfClass:[NSString class]] ? a[@"lang"] : @"ko";
-        // 언어별 TTS 소스 보이스 — 음색 변환(kNN-VC)은 언어 무관이라 어떤 소스든
-        // 대사팩 목소리로 나온다. 러시아어만 Eddy가 없어 Milena 사용.
-        // (보이스 이름은 시스템 언어(한국어) 기준 표시명 — say -v 가 이 이름을 받음)
         NSDictionary *voices = @{
-            @"ko" : @"Eddy (한국어(대한민국))",
-            @"en" : @"Eddy (영어(미국))",
-            @"ja" : @"Eddy (일본어(일본))",
-            @"zh" : @"Eddy (중국어(중국 본토))",
-            @"es" : @"Eddy (스페인어(스페인))",
+            @"ko" : @"Yuna",
+            @"en" : @"Samantha",
+            @"ja" : @"Kyoko",
+            @"zh" : @"Tingting",
+            @"es" : @"Mónica",
             @"ru" : @"Milena",
         };
-        // 속도: 한국어는 대사팩 템포 기반 사용자 튜닝값 275, 그 외 언어는
-        // 보이스 기본 속도(0 = -r 생략)가 가장 자연스럽다
-        NSNumber *rate = [a[@"rate"] isKindOfClass:[NSNumber class]] ? a[@"rate"]
-            : ([lang isEqualToString:@"ko"] ? (wantNeural ? @275 : @180) : @0);
+        // 속도: 보이스 기본 속도(0 = -r 생략)가 가장 자연스럽다
+        NSNumber *rate = [a[@"rate"] isKindOfClass:[NSNumber class]] ? a[@"rate"] : @0;
 
         if (wantNeural && OmniAINeuralAvailable()) {
             // 신경망 경로: say 소스 → 대사팩 음색 변환.
@@ -1728,11 +1719,9 @@ static BOOL OmniAISeedAvailable(void) {
             return;
         }
 
-        // DSP 폴백 경로: say 원본을 그대로 반환 — JS가 로봇 DSP 체인 적용.
-        // 한국어는 자연스러운 Yuna, 그 외 언어는 위 매핑 보이스
-        NSString *defVoice = [lang isEqualToString:@"ko"] ? @"Yuna"
+        // 클린 발화: say 원본을 그대로 반환 — JS가 변조 없이 바로 재생
+        NSString *voice = [a[@"voice"] isKindOfClass:[NSString class]] ? a[@"voice"]
             : (voices[lang] ?: @"Yuna");
-        NSString *voice = [a[@"voice"] isKindOfClass:[NSString class]] ? a[@"voice"] : defVoice;
         __weak AppDelegate *weakSelf = self;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
