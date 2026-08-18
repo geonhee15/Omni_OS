@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.49.1",
+  version: "0.50.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -594,8 +594,12 @@ OmniOS.register("ai", {
       },
     },
   ],
-  LOCALES: { ko: "ko-KR", ja: "ja-JP", zh: "zh-CN", en: "en-US", es: "es-ES", ru: "ru-RU" },
-  LANG_NAMES: { ko: "한국어", ja: "일본어", zh: "중국어(간체)", en: "영어", es: "스페인어", ru: "러시아어" },
+  // gpt-realtime가 안정적으로 구사하는 13개 언어 (음성·텍스트 공통)
+  LANG_NAMES: {
+    ko: "한국어", en: "영어", ja: "일본어", zh: "중국어(간체)", es: "스페인어",
+    fr: "프랑스어", de: "독일어", it: "이탈리아어", pt: "포르투갈어",
+    nl: "네덜란드어", tr: "터키어", hi: "힌디어", id: "인도네시아어",
+  },
   PANEL_LABELS: {
     cmd: "COMMAND BRIDGE", ai: "OMNI_AI", clock: "CLOCK", proj: "PROJECTS",
     sys: "SYSTEM MONITOR", sp1: "SECURITY-PROTOCOL-1", r3d: "RENDER_3D",
@@ -637,9 +641,6 @@ OmniOS.register("ai", {
       state: document.getElementById("ai-state"),
       log: document.getElementById("ai-log"),
       liveBtn: document.getElementById("ai-live"),
-      listen: document.getElementById("ai-listen"),
-      listenGlyph: document.getElementById("ai-listen-glyph"),
-      listenLabel: document.getElementById("ai-listen-label"),
       text: document.getElementById("ai-text"),
       send: document.getElementById("ai-send"),
       core: document.getElementById("ai-core"),
@@ -660,7 +661,6 @@ OmniOS.register("ai", {
     window.OmniAI = this; // 네이티브 STT 푸시 수신 (OmniAI._stt)
 
     this.els.liveBtn.addEventListener("click", () => this.toggleLive());
-    this.els.listen.addEventListener("click", () => this.toggleListen());
     this.els.send.addEventListener("click", () => this.sendFromInput());
     this.els.text.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.isComposing) this.sendFromInput();
@@ -743,18 +743,14 @@ OmniOS.register("ai", {
       this.hasKey = !!(r && r.key);
       this.neural = !!(r && r.neural);
       this.hasOpenAI = !!(r && r.openai);
-      this.setInd(this.els.indStt, "READY", "ok");
-      this.setInd(this.els.indTts, this.hasOpenAI ? "GPT" : "CLEAN", "ok");
+      this.setInd(this.els.indStt, this.live ? "MARIN" : "OFF", this.live ? "ok" : "");
+      this.setInd(this.els.indTts, this.live ? "LIVE" : "TEXT", "ok");
       this.setInd(this.els.indLlm, this.hasKey ? "READY" : "NO KEY",
         this.hasKey ? "ok" : "err");
       this.els.keystate.textContent = this.hasKey ? "CONFIGURED" : "NOT SET";
       this.els.keystate.className = `ai-keystate ${this.hasKey ? "ok" : "err"}`;
       this.els.keystate2.textContent = this.hasOpenAI ? "CONFIGURED" : "NOT SET";
       this.els.keystate2.className = `ai-keystate ${this.hasOpenAI ? "ok" : "err"}`;
-      const note = document.querySelector("#panel-ai .ai-side-note");
-      if (note) {
-        note.innerHTML = `VOICE: ${this.hasOpenAI ? "GPT REALTIME-CLASS (ASH)" : "CLEAN SYSTEM TTS"}<br>LANG: KO JA ZH EN ES RU`;
-      }
     } catch (e) {
       /* 브리지 타임아웃 — 표시 유지 */
     }
@@ -765,7 +761,9 @@ OmniOS.register("ai", {
   _battWarn5: false,
 
   async batteryWatch() {
-    if (!OmniNative.available || this.live || this.state !== "idle") return;
+    if (!OmniNative.available) return;
+    // 텍스트 모드에선 대화 중이 아닐 때만, LIVE 중엔 항상 (marin이 발화)
+    if (!this.live && this.state !== "idle") return;
     let d;
     try { d = await OmniNative.request("sys.stats", null, 4000); } catch (e) { return; }
     const b = d && d.battery;
@@ -786,7 +784,20 @@ OmniOS.register("ai", {
     }
     if (msg) {
       this.logLine("omni", msg);
-      this.speak(msg);
+      if (this.live) {
+        // LIVE 세션 중이면 marin이 직접 발화
+        this.rtSend({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text",
+              text: `[시스템 알림] 다음 내용을 그대로 사용자에게 말하라: ${msg}` }],
+          },
+        });
+        this.rtSend({ type: "response.create" });
+      }
+      // 텍스트 모드에서는 로그로만 (음성은 LIVE 전용)
     }
   },
 
@@ -904,127 +915,6 @@ OmniOS.register("ai", {
     this.els.log.appendChild(line);
     this.els.log.scrollTop = this.els.log.scrollHeight;
     return line;
-  },
-
-  // ---- 음성 인식 ----
-  toggleListen() {
-    if (this.live) {
-      this.logLine("sys", "LIVE 세션 중에는 그냥 말씀하시면 됩니다.");
-      return;
-    }
-    if (this.state === "speaking") {
-      this.stopSpeak();
-      this.startListen();
-    } else if (this.state === "listening") {
-      this.finishListen();
-    } else if (this.state === "idle") {
-      this.startListen();
-    }
-    // thinking 중에는 무시
-  },
-
-  async startListen() {
-    if (!OmniNative.available) {
-      this.logLine("sys", "네이티브 브리지 오프라인 — 앱에서만 음성 인식이 동작합니다.");
-      return;
-    }
-    this.ensureCtx();
-    this._partialText = "";
-    this._lastPartialAt = 0;
-    this._listenStartAt = Date.now();
-    this.setState("listening", "LISTENING", "busy");
-    this.els.listen.classList.add("live");
-    this.els.listenGlyph.textContent = "■";
-    this.els.listenLabel.textContent = "STOP";
-    this._pendingLine = this.logLine("you", "…", true);
-    this.setInd(this.els.indStt, "LIVE", "busy");
-    this._watchdog = setInterval(() => this.checkSilence(), 250);
-    try {
-      // 최초 권한 팝업 대기까지 고려한 긴 타임아웃
-      const r = await OmniNative.request("ai.listen",
-        JSON.stringify({ locale: this.LOCALES[this.lang] || "ko-KR" }), 120000);
-      if (!r || !r.ok) {
-        const reason = (r && r.error) || "unknown";
-        const msg = reason === "SPEECH_DENIED"
-          ? "음성 인식 권한이 거부되어 있습니다. 시스템 설정 > 개인정보 보호 > 음성 인식에서 허용하십시오."
-          : reason === "MIC_DENIED"
-            ? "마이크 권한이 거부되어 있습니다. 시스템 설정 > 개인정보 보호 > 마이크에서 허용하십시오."
-            : `음성 인식을 시작하지 못했습니다: ${reason}`;
-        this.abortListen(msg);
-      }
-    } catch (e) {
-      this.abortListen("음성 인식 시작 실패: 브리지 오류");
-    }
-  },
-
-  // 침묵/무입력 감시: 말이 끝나면 자동 종료
-  checkSilence() {
-    if (this.state !== "listening") return;
-    const now = Date.now();
-    if (this._partialText && now - this._lastPartialAt > 1600) {
-      this.finishListen();
-    } else if (!this._partialText && now - this._listenStartAt > 8000) {
-      this.abortListen("입력된 음성이 없습니다.");
-      OmniNative.request("ai.listenCancel", null, 5000).catch(() => {});
-    } else if (now - this._listenStartAt > 20000) {
-      this.finishListen(); // 하드 캡
-    }
-  },
-
-  finishListen() {
-    if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
-    this.resetListenBtn();
-    // final 이벤트가 _stt로 도착할 때까지 살짝 대기 상태
-    this.setState("listening", "PROCESSING", "busy");
-    OmniNative.request("ai.listenStop", null, 5000).catch(() => {});
-  },
-
-  abortListen(msg) {
-    if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
-    this.resetListenBtn();
-    if (this._pendingLine) { this._pendingLine.remove(); this._pendingLine = null; }
-    if (msg) this.logLine("sys", msg);
-    this.setState("idle", "STANDBY", "");
-    this.setInd(this.els.indStt, "READY", "ok");
-    this.micLevel = 0;
-  },
-
-  resetListenBtn() {
-    this.els.listen.classList.remove("live");
-    this.els.listenGlyph.textContent = "◉";
-    this.els.listenLabel.textContent = "LISTEN";
-  },
-
-  // 네이티브 STT 이벤트 수신
-  _stt(ev) {
-    if (!ev || typeof ev !== "object") return;
-    if (ev.type === "level") {
-      this.micLevel = Math.min(1, (ev.rms || 0) * 6);
-    } else if (ev.type === "partial") {
-      this._partialText = ev.text || "";
-      this._lastPartialAt = Date.now();
-      if (this._pendingLine) {
-        this._pendingLine.querySelector(".txt").textContent = this._partialText || "…";
-        this.els.log.scrollTop = this.els.log.scrollHeight;
-      }
-    } else if (ev.type === "final") {
-      if (this._watchdog) { clearInterval(this._watchdog); this._watchdog = null; }
-      this.resetListenBtn();
-      this.micLevel = 0;
-      this.setInd(this.els.indStt, "READY", "ok");
-      const text = (ev.text || this._partialText || "").trim();
-      if (this._pendingLine) { this._pendingLine.remove(); this._pendingLine = null; }
-      if (text) {
-        this.send(text);
-      } else if (this.state === "listening") {
-        this.logLine("sys", "인식된 내용이 없습니다.");
-        this.setState("idle", "STANDBY", "");
-      }
-    } else if (ev.type === "state" && (ev.state === "error" || ev.state === "unavailable")) {
-      this.abortListen(ev.state === "unavailable"
-        ? "음성 인식을 사용할 수 없습니다. (ko-KR 인식기 비활성)"
-        : `음성 인식 오류: ${ev.detail || ""}`);
-    }
   },
 
   // AUTO 라우팅: 조사·분석·사고가 필요한 질문만 Opus, 일상 대화는 Haiku.
@@ -1363,12 +1253,6 @@ OmniOS.register("ai", {
       return;
     }
     if (this.state === "thinking") return;
-    if (this.state === "speaking") this.stopSpeak();
-    if (this.state === "listening") {
-      OmniNative.request("ai.listenCancel", null, 5000).catch(() => {});
-      this.abortListen(null);
-    }
-    this.ensureCtx();
     this.els.text.value = "";
     this.send(text);
   },
@@ -1387,7 +1271,7 @@ OmniOS.register("ai", {
       this.history.push({ role: "assistant", content: reply });
       this.logLine("omni", reply);
       this.setInd(this.els.indLlm, "STUB", "busy");
-      this.speak(reply);
+      this.setState("idle", "STANDBY", "");
       return;
     }
     try {
@@ -1429,16 +1313,12 @@ OmniOS.register("ai", {
           this.logLine("sys", `패널 전환: ${this.PANEL_LABELS[k]}`);
         }
       }
-      // 액션 실행 + 이중체크: 각 결과를 로그로, 실패는 음성으로도 보고
-      const fails = [];
+      // 액션 실행 + 이중체크 — 텍스트 모드는 결과를 로그로만 보고 (음성은 LIVE 전용)
       for (const a of acts) {
         const res = await this.runAction(a);
         this.logLine("sys", `${res.ok ? "OK" : "실패"} · ${res.msg}`);
-        if (!res.ok) fails.push(res.msg);
       }
-      this.speak(fails.length
-        ? `${reply} 다만 완료하지 못한 동작이 있습니다. ${fails.join(". ")}.`
-        : reply);
+      this.setState("idle", "STANDBY", "");
     } catch (e) {
       this.history.pop();
       this.logLine("sys", "응답 실패: 요청 시간 초과");
@@ -1655,8 +1535,6 @@ OmniOS.register("ai", {
       this.logLine("sys", "LIVE 모드는 앱에서만 동작합니다.");
       return;
     }
-    if (this.state === "listening") this.abortListen(null);
-    this.stopSpeak();
     const r = await OmniNative.request("ai.rtStart",
       JSON.stringify({ model: "gpt-realtime" }), 15000).catch(() => null);
     if (!r || !r.ok) {
@@ -1668,6 +1546,8 @@ OmniOS.register("ai", {
     this.live = true;
     this.els.liveBtn.classList.add("live");
     this.setState("listening", "LIVE", "on");
+    this.setInd(this.els.indStt, "MARIN", "ok");
+    this.setInd(this.els.indTts, "LIVE", "ok");
     this.rtSessionUpdate();
     await this.wireMic();
     this.logLine("sys", "LIVE 세션 시작 — 그냥 말씀하세요. (다시 누르면 종료)");
@@ -1681,7 +1561,8 @@ OmniOS.register("ai", {
       + "- 시각/날짜/시스템/보안/프로젝트 현황 → get_status (즉시). ask_brain 금지.\n"
       + "- 패널 열기 → open_panel. 앱 심층 동작(에디터·노트·파일 열기, 상태 변경, 스캔, 워처) → app_action.\n"
       + "- 조사·분석·코드·파일 내용 확인/수정 → ask_brain (Claude가 파일 도구로 실제 수행, 수 초 소요). 호출 전에 \"확인하겠습니다\" 같은 짧은 예고를 말해도 좋습니다.\n"
-      + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.";
+      + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.\n"
+      + `- 기본 응답 언어: ${this.LANG_NAMES[this.lang] || "한국어"}. 사용자가 다른 언어로 말하면 그 언어로 자연스럽게 전환합니다.`;
     this.rtSend({
       type: "session.update",
       session: {
@@ -1780,6 +1661,8 @@ OmniOS.register("ai", {
     this._rtOmniLine = null;
     this._rtOmniText = "";
     this.setState("idle", "STANDBY", "");
+    this.setInd(this.els.indStt, "OFF", "");
+    this.setInd(this.els.indTts, "TEXT", "ok");
     this.logLine("sys", `LIVE 세션 ${reason}`);
   },
 

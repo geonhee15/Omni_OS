@@ -167,11 +167,10 @@
             <span class="ai-state" id="ai-state">STANDBY</span>
           </div>
           <div class="ai-log" id="ai-log">
-            <div class="ai-hint">LISTEN을 누르고 말하거나, 아래 입력창에 명령을 입력하십시오.</div>
+            <div class="ai-hint">LIVE를 누르면 음성 대화, 아래 입력창은 텍스트 대화입니다.</div>
           </div>
           <div class="ai-input-row">
             <button class="ai-listen" id="ai-live"><span>&#9678;</span><span>LIVE</span></button>
-            <button class="ai-listen" id="ai-listen"><span id="ai-listen-glyph">&#9673;</span><span id="ai-listen-label">LISTEN</span></button>
             <input class="ai-text" id="ai-text" placeholder="명령 입력..." autocomplete="off" spellcheck="false">
             <button class="ai-sendbtn" id="ai-send">&#9655;</button>
           </div>
@@ -179,18 +178,25 @@
         <div class="ai-side">
           <canvas class="ai-core" id="ai-core"></canvas>
           <div class="ai-ind-list">
-            <div class="ai-ind"><span>STT</span><span id="ai-ind-stt">--</span></div>
+            <div class="ai-ind"><span>VOICE</span><span id="ai-ind-stt">--</span></div>
             <div class="ai-ind"><span>LLM</span><span id="ai-ind-llm">--</span></div>
-            <div class="ai-ind"><span>TTS</span><span id="ai-ind-tts">--</span></div>
+            <div class="ai-ind"><span>MODE</span><span id="ai-ind-tts">--</span></div>
           </div>
           <div class="ai-side-h">LANG</div>
           <div class="ai-modelrow ai-langrow">
             <button class="ai-model ai-lang active" data-lang="ko">KO</button>
+            <button class="ai-model ai-lang" data-lang="en">EN</button>
             <button class="ai-model ai-lang" data-lang="ja">JA</button>
             <button class="ai-model ai-lang" data-lang="zh">ZH</button>
-            <button class="ai-model ai-lang" data-lang="en">EN</button>
             <button class="ai-model ai-lang" data-lang="es">ES</button>
-            <button class="ai-model ai-lang" data-lang="ru">RU</button>
+            <button class="ai-model ai-lang" data-lang="fr">FR</button>
+            <button class="ai-model ai-lang" data-lang="de">DE</button>
+            <button class="ai-model ai-lang" data-lang="it">IT</button>
+            <button class="ai-model ai-lang" data-lang="pt">PT</button>
+            <button class="ai-model ai-lang" data-lang="nl">NL</button>
+            <button class="ai-model ai-lang" data-lang="tr">TR</button>
+            <button class="ai-model ai-lang" data-lang="hi">HI</button>
+            <button class="ai-model ai-lang" data-lang="id">ID</button>
           </div>
           <div class="ai-side-h">MODEL</div>
           <div class="ai-modelrow">
@@ -216,7 +222,7 @@
             <input id="ai-keyfield2" type="password" placeholder="sk-..." autocomplete="off">
             <button id="ai-keysave2">SAVE</button>
           </div>
-          <div class="ai-side-note">VOICE: CLEAN SYSTEM TTS<br>LANG: KO JA ZH EN ES RU</div>
+          <div class="ai-side-note">VOICE: MARIN (LIVE ONLY)<br>TEXT CHAT: TEXT OUTPUT ONLY</div>
         </div>
       </div>
     </section>
@@ -1101,7 +1107,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.49.1</span>
+      <span>v0.50.0</span>
     </footer>
   </div>
 
