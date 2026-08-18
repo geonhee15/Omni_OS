@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.48.0",
+  version: "0.49.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -636,6 +636,7 @@ OmniOS.register("ai", {
     this.els = {
       state: document.getElementById("ai-state"),
       log: document.getElementById("ai-log"),
+      liveBtn: document.getElementById("ai-live"),
       listen: document.getElementById("ai-listen"),
       listenGlyph: document.getElementById("ai-listen-glyph"),
       listenLabel: document.getElementById("ai-listen-label"),
@@ -658,6 +659,7 @@ OmniOS.register("ai", {
     };
     window.OmniAI = this; // 네이티브 STT 푸시 수신 (OmniAI._stt)
 
+    this.els.liveBtn.addEventListener("click", () => this.toggleLive());
     this.els.listen.addEventListener("click", () => this.toggleListen());
     this.els.send.addEventListener("click", () => this.sendFromInput());
     this.els.text.addEventListener("keydown", (e) => {
@@ -763,7 +765,7 @@ OmniOS.register("ai", {
   _battWarn5: false,
 
   async batteryWatch() {
-    if (!OmniNative.available || this.state !== "idle") return;
+    if (!OmniNative.available || this.live || this.state !== "idle") return;
     let d;
     try { d = await OmniNative.request("sys.stats", null, 4000); } catch (e) { return; }
     const b = d && d.battery;
@@ -906,6 +908,10 @@ OmniOS.register("ai", {
 
   // ---- 음성 인식 ----
   toggleListen() {
+    if (this.live) {
+      this.logLine("sys", "LIVE 세션 중에는 그냥 말씀하시면 됩니다.");
+      return;
+    }
     if (this.state === "speaking") {
       this.stopSpeak();
       this.startListen();
@@ -1027,6 +1033,68 @@ OmniOS.register("ai", {
     if (text.length > 90) return true;
     return /분석|조사|비교|검토|리뷰|설계|계획|전략|정리해|요약해|알아봐|찾아봐|원인|왜 |어떻게 하면|개선|추천|아키텍처|디버깅|최적화|수정해|고쳐|바꿔|만들어|작성해|구현/
       .test(text);
+  },
+
+  // Claude 에이전트 실행 — 스냅샷 주입 + 프롬프트 캐싱 + 파일 도구 루프.
+  // 턴 대화(send)와 라이브 세션의 ask_brain 이 공유한다.
+  async runClaude(messages) {
+    const snapshot = await this.gatherContext();
+    const system = [
+      {
+        type: "text",
+        text: `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}`,
+        cache_control: { type: "ephemeral" },
+      },
+      {
+        type: "text",
+        text: `[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
+          + `\n\n[인터페이스 언어]\n${this.LANG_NAMES[this.lang] || "한국어"}`,
+      },
+    ];
+    const tools = this.FS_TOOLS.map((t, i, arr) =>
+      i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t);
+    // AUTO 모드: 심층 질문만 Opus로 격상, 나머지는 Haiku (속도·비용 최적)
+    const last = messages[messages.length - 1];
+    const lastText = typeof (last && last.content) === "string" ? last.content : "";
+    let chosenModel = this.model;
+    if (this.model === "auto") {
+      const deep = this.isDeep(lastText);
+      chosenModel = deep ? "claude-opus-5" : "claude-haiku-4-5-20251001";
+      if (deep) this.logLine("sys", "라우팅: OPUS (심층 질문)");
+    }
+    // 에이전트 루프: 파일 도구 호출(stop=tool_use)이 나오면 실행 결과를
+    // 돌려주며 반복 — 옴니가 스스로 파일을 나열/읽기/수정한 뒤 답한다
+    const convo = messages.map((m) => ({ role: m.role, content: m.content }));
+    let r = null;
+    for (let round = 0; round < 8; round++) {
+      r = await OmniNative.request("ai.chat", JSON.stringify({
+        model: chosenModel,
+        system,
+        messages: convo,
+        tools,
+        maxTokens: 4000,
+      }), 120000).catch(() => null);
+      if (!r || !r.ok || r.stop !== "tool_use") break;
+      convo.push({ role: "assistant", content: r.content });
+      this.setInd(this.els.indLlm, "TOOLS", "busy");
+      const results = [];
+      for (const block of r.content) {
+        if (block.type !== "tool_use") continue;
+        this.logLine("sys", `도구 · ${block.name} ${(block.input && block.input.path) || ""}`);
+        const out = await this.execTool(block.name, block.input || {});
+        results.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: String(out).slice(0, 40000),
+        });
+      }
+      convo.push({ role: "user", content: results });
+    }
+    if (!r || !r.ok) return { ok: false, error: (r && r.error) || "요청 시간 초과" };
+    if (r.stop === "tool_use") {
+      this.logLine("sys", "도구 호출 한도(8회) 도달 — 중간 결과로 답변");
+    }
+    return { ok: true, text: (r.text || "").trim() };
   },
 
   // ---- 파일 도구 실행기 (에이전트 루프에서 호출) ----
@@ -1278,7 +1346,23 @@ OmniOS.register("ai", {
   // ---- 텍스트 입력 ----
   sendFromInput() {
     const text = this.els.text.value.trim();
-    if (!text || this.state === "thinking") return;
+    if (!text) return;
+    if (this.live) {
+      // 라이브 세션 중 텍스트 입력 → 그대로 대화에 주입
+      this.els.text.value = "";
+      this.logLine("you", text);
+      this.rtSend({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text }],
+        },
+      });
+      this.rtSend({ type: "response.create" });
+      return;
+    }
+    if (this.state === "thinking") return;
     if (this.state === "speaking") this.stopSpeak();
     if (this.state === "listening") {
       OmniNative.request("ai.listenCancel", null, 5000).catch(() => {});
@@ -1307,60 +1391,9 @@ OmniOS.register("ai", {
       return;
     }
     try {
-      // 매 질문마다 앱 전역 실측 스냅샷을 수집해 프롬프트에 주입.
-      // 고정 부분(페르소나·패널 안내·도구)은 프롬프트 캐싱으로 첫 토큰 지연 단축
-      const snapshot = await this.gatherContext();
-      const system = [
-        {
-          type: "text",
-          text: `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}`,
-          cache_control: { type: "ephemeral" },
-        },
-        {
-          type: "text",
-          text: `[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
-            + `\n\n[인터페이스 언어]\n${this.LANG_NAMES[this.lang] || "한국어"}`,
-        },
-      ];
-      const tools = this.FS_TOOLS.map((t, i, arr) =>
-        i === arr.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t);
-      // AUTO 모드: 심층 질문만 Opus로 격상, 나머지는 Haiku (속도·비용 최적)
-      let chosenModel = this.model;
-      if (this.model === "auto") {
-        const deep = this.isDeep(text);
-        chosenModel = deep ? "claude-opus-5" : "claude-haiku-4-5-20251001";
-        if (deep) this.logLine("sys", "라우팅: OPUS (심층 질문)");
-      }
-      // 에이전트 루프: 파일 도구 호출(stop=tool_use)이 나오면 실행 결과를
-      // 돌려주며 반복 — 옴니가 스스로 파일을 나열/읽기/수정한 뒤 답한다
-      const convo = this.history.map((m) => ({ role: m.role, content: m.content }));
-      let r = null;
-      for (let round = 0; round < 8; round++) {
-        r = await OmniNative.request("ai.chat", JSON.stringify({
-          model: chosenModel,
-          system,
-          messages: convo,
-          tools,
-          maxTokens: 4000,
-        }), 120000);
-        if (!r || !r.ok || r.stop !== "tool_use") break;
-        convo.push({ role: "assistant", content: r.content });
-        this.setInd(this.els.indLlm, "TOOLS", "busy");
-        const results = [];
-        for (const block of r.content) {
-          if (block.type !== "tool_use") continue;
-          this.logLine("sys", `도구 · ${block.name} ${(block.input && block.input.path) || ""}`);
-          const out = await this.execTool(block.name, block.input || {});
-          results.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: String(out).slice(0, 40000),
-          });
-        }
-        convo.push({ role: "user", content: results });
-      }
-      if (!r || !r.ok) {
-        const err = (r && r.error) || "unknown";
+      const res = await this.runClaude(this.history);
+      if (!res.ok) {
+        const err = res.error || "unknown";
         this.history.pop(); // 실패한 user 턴 되돌림
         if (err === "NO_KEY") {
           this.logLine("sys", "API 키가 없습니다. 우측 API KEY > SET에 Anthropic API 키를 저장하십시오.");
@@ -1371,10 +1404,7 @@ OmniOS.register("ai", {
         this.refreshStatus();
         return;
       }
-      if (r.stop === "tool_use") {
-        // 8라운드 초과 — 마지막 응답의 텍스트라도 사용
-        this.logLine("sys", "도구 호출 한도(8회) 도달 — 중간 결과로 답변");
-      }
+      const r = { text: res.text };
       // [[OPEN:키]] / [[ACT:...]] 태그 추출 → 실행, 낭독/로그에서는 제거
       const opens = [];
       const acts = [];
@@ -1569,6 +1599,324 @@ OmniOS.register("ai", {
     }
     this.setInd(this.els.indTts, "READY", "ok");
     if (this.state === "speaking") this.setState("idle", "STANDBY", "");
+  },
+
+  // ---- LIVE 모드: gpt-realtime 음성 세션 (ECHO 구조 이식) ----
+  // 마이크 PCM16 24kHz → 네이티브 WSS 릴레이 → 서버 VAD가 턴 감지 →
+  // marin 보이스 오디오 스트리밍 재생. 도구: ask_brain(Claude 에이전트),
+  // get_status(스냅샷 즉답), open_panel, app_action(심층 액션)
+  live: false,
+  RT_TOOLS: [
+    {
+      type: "function",
+      name: "ask_brain",
+      description: "Delegate to Claude for deep reasoning: web-grade analysis, code, file reading/editing/counting, complex multi-step questions, or anything about the user's project files. Claude has file tools for ~/Desktop. Do NOT use for chitchat, time, or app status (use get_status). Pass the user's request as 'query'. The returned text is what you should say back, naturally.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    },
+    {
+      type: "function",
+      name: "get_status",
+      description: "Instant snapshot of OMNI_OS: current time/date, CPU/GPU/memory/battery/thermal, security state, project list, active panel. Use for ANY time/date/system/project status question. Never use ask_brain for these.",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      type: "function",
+      name: "open_panel",
+      description: "Switch the app to a panel. key: cmd(home)/ai/clock/proj/sys/sp1/r3d/ino/ce/notes/voice/arc",
+      parameters: {
+        type: "object",
+        properties: { key: { type: "string" } },
+        required: ["key"],
+      },
+    },
+    {
+      type: "function",
+      name: "app_action",
+      description: "Deep in-app action. spec format (colon-separated): proj.editor:NAME:TOOL(r3d|ino|ce|notes) | proj.status:NAME:STATUS | notes.open:NOTE | ce.open:FILE | arc.connect | arc.disconnect | arc.scan:start|stop|center | sp1.watch:pause|resume",
+      parameters: {
+        type: "object",
+        properties: { spec: { type: "string" } },
+        required: ["spec"],
+      },
+    },
+  ],
+
+  rtSend(obj) {
+    OmniNative.request("ai.rtSend", JSON.stringify(obj), 10000).catch(() => {});
+  },
+
+  async toggleLive() {
+    if (this.live) { this.stopLive("종료"); return; }
+    if (!OmniNative.available) {
+      this.logLine("sys", "LIVE 모드는 앱에서만 동작합니다.");
+      return;
+    }
+    if (this.state === "listening") this.abortListen(null);
+    this.stopSpeak();
+    const r = await OmniNative.request("ai.rtStart",
+      JSON.stringify({ model: "gpt-realtime" }), 15000).catch(() => null);
+    if (!r || !r.ok) {
+      this.logLine("sys", (r && r.error) === "NO_OPENAI_KEY"
+        ? "LIVE 모드에는 OpenAI 키가 필요합니다 (OPENAI KEY // VOICE)."
+        : "LIVE 세션 시작 실패");
+      return;
+    }
+    this.live = true;
+    this.els.liveBtn.classList.add("live");
+    this.setState("listening", "LIVE", "on");
+    this.rtSessionUpdate();
+    await this.wireMic();
+    this.logLine("sys", "LIVE 세션 시작 — 그냥 말씀하세요. (다시 누르면 종료)");
+  },
+
+  rtSessionUpdate() {
+    const instructions = `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}\n\n`
+      + "[라이브 모드 규칙]\n"
+      + "- 지금은 실시간 음성 대화입니다. 답은 짧고 자연스럽게 (1~2문장 기본).\n"
+      + "- [[OPEN]]·[[ACT]] 같은 태그는 절대 말하지 않습니다 — 대신 도구를 호출합니다.\n"
+      + "- 시각/날짜/시스템/보안/프로젝트 현황 → get_status (즉시). ask_brain 금지.\n"
+      + "- 패널 열기 → open_panel. 앱 심층 동작(에디터·노트·파일 열기, 상태 변경, 스캔, 워처) → app_action.\n"
+      + "- 조사·분석·코드·파일 내용 확인/수정 → ask_brain (Claude가 파일 도구로 실제 수행, 수 초 소요). 호출 전에 \"확인하겠습니다\" 같은 짧은 예고를 말해도 좋습니다.\n"
+      + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.";
+    this.rtSend({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        model: "gpt-realtime",
+        output_modalities: ["audio"],
+        instructions,
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: 24000 },
+            transcription: { model: "whisper-1" },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.75,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+              create_response: true,
+            },
+          },
+          output: {
+            format: { type: "audio/pcm", rate: 24000 },
+            voice: "marin",
+          },
+        },
+        tools: this.RT_TOOLS,
+        tool_choice: "auto",
+      },
+    });
+  },
+
+  async wireMic() {
+    try {
+      this._rtStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+      const AC = window.AudioContext || window.webkitAudioContext;
+      try { this._rtCtx = new AC({ sampleRate: 24000 }); }
+      catch (e) { this._rtCtx = new AC(); }
+      if (this._rtCtx.state === "suspended") this._rtCtx.resume();
+      const src = this._rtCtx.createMediaStreamSource(this._rtStream);
+      const proc = this._rtCtx.createScriptProcessor(2048, 1, 1);
+      const mute = this._rtCtx.createGain();
+      mute.gain.value = 0; // ScriptProcessor 구동용 — 마이크 에코 방지
+      src.connect(proc);
+      proc.connect(mute);
+      mute.connect(this._rtCtx.destination);
+      proc.onaudioprocess = (e) => {
+        if (!this.live) return;
+        let f = e.inputBuffer.getChannelData(0);
+        const srIn = this._rtCtx.sampleRate;
+        if (srIn !== 24000) { // 폴백 컨텍스트용 리샘플
+          const n2 = Math.round(f.length * 24000 / srIn);
+          const g = new Float32Array(n2);
+          for (let i = 0; i < n2; i++) g[i] = f[Math.floor(i * srIn / 24000)];
+          f = g;
+        }
+        let rms = 0;
+        const b = new Uint8Array(f.length * 2);
+        const dv = new DataView(b.buffer);
+        for (let i = 0; i < f.length; i++) {
+          const v = Math.max(-1, Math.min(1, f[i]));
+          dv.setInt16(i * 2, v * 32767, true);
+          rms += v * v;
+        }
+        this.micLevel = Math.min(1, Math.sqrt(rms / f.length) * 6);
+        let bin = "";
+        for (let i = 0; i < b.length; i += 0x8000) {
+          bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+        }
+        this.rtSend({ type: "input_audio_buffer.append", audio: btoa(bin) });
+      };
+      this._rtProc = proc;
+      this._rtSrcNode = src;
+    } catch (e) {
+      this.logLine("sys", `마이크 연결 실패 (${e.message || e}) — 텍스트 입력으로 대화 가능`);
+    }
+  },
+
+  stopLive(reason) {
+    this.live = false;
+    try {
+      if (this._rtProc) this._rtProc.disconnect();
+      if (this._rtSrcNode) this._rtSrcNode.disconnect();
+    } catch (e) { /* 이미 해제됨 */ }
+    if (this._rtStream) {
+      this._rtStream.getTracks().forEach((t) => t.stop());
+      this._rtStream = null;
+    }
+    this._rtProc = null;
+    this._rtSrcNode = null;
+    this.rtStopPlayback();
+    OmniNative.request("ai.rtStop", null, 5000).catch(() => {});
+    this.els.liveBtn.classList.remove("live");
+    this.micLevel = 0;
+    this._rtUserLine = null;
+    this._rtOmniLine = null;
+    this._rtOmniText = "";
+    this.setState("idle", "STANDBY", "");
+    this.logLine("sys", `LIVE 세션 ${reason}`);
+  },
+
+  rtStopPlayback() {
+    for (const s of (this._rtSources || [])) {
+      try { s.stop(); } catch (e) { /* 이미 종료 */ }
+    }
+    this._rtSources = [];
+    this._rtPlayTime = 0;
+  },
+
+  rtPlayDelta(b64) {
+    if (!b64 || !this._rtCtx) return;
+    const bin = atob(b64);
+    const n = bin.length >> 1;
+    const f = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+      if (v >= 0x8000) v -= 0x10000;
+      f[i] = v / 32768;
+    }
+    const srOut = 24000;
+    const buf = this._rtCtx.createBuffer(1, n, srOut);
+    buf.copyToChannel(f, 0);
+    const src = this._rtCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(this._rtCtx.destination);
+    const t0 = Math.max(this._rtCtx.currentTime + 0.03, this._rtPlayTime || 0);
+    src.start(t0);
+    this._rtPlayTime = t0 + n / srOut;
+    if (!this._rtSources) this._rtSources = [];
+    this._rtSources.push(src);
+    src.onended = () => {
+      const i = this._rtSources.indexOf(src);
+      if (i >= 0) this._rtSources.splice(i, 1);
+    };
+  },
+
+  // 네이티브 릴레이가 푸시하는 리얼타임 이벤트
+  _rt(ev) {
+    if (!ev || typeof ev !== "object") return;
+    const t = ev.type;
+    if (t === "rt.closed") {
+      if (this.live) this.stopLive("연결 끊김");
+      return;
+    }
+    if (!this.live) return;
+    if (t === "session.created") {
+      this.logLine("sys", "LIVE 연결됨 · gpt-realtime · marin");
+    } else if (t === "input_audio_buffer.speech_started") {
+      this.rtStopPlayback(); // 사용자가 말 시작 — 재생 중이면 끊고 듣기
+      if (!this._rtUserLine) this._rtUserLine = this.logLine("you", "…", true);
+    } else if (t === "conversation.item.input_audio_transcription.completed") {
+      const text = (ev.transcript || "").trim();
+      if (this._rtUserLine) {
+        if (text) {
+          this._rtUserLine.querySelector(".txt").textContent = text;
+          this._rtUserLine.classList.remove("pending");
+        } else this._rtUserLine.remove();
+        this._rtUserLine = null;
+      } else if (text) {
+        this.logLine("you", text);
+      }
+      if (text) {
+        this.history.push({ role: "user", content: text });
+        this.trimHistory();
+      }
+    } else if (t === "response.output_audio.delta" || t === "response.audio.delta") {
+      this.rtPlayDelta(ev.delta);
+    } else if (t === "response.output_audio_transcript.delta"
+      || t === "response.audio_transcript.delta") {
+      if (!this._rtOmniLine) {
+        this._rtOmniLine = this.logLine("omni", "");
+        this._rtOmniText = "";
+      }
+      this._rtOmniText += ev.delta || "";
+      this._rtOmniLine.querySelector(".txt").textContent = this._rtOmniText;
+      this.els.log.scrollTop = this.els.log.scrollHeight;
+    } else if (t === "response.output_audio_transcript.done"
+      || t === "response.audio_transcript.done") {
+      if (this._rtOmniText) {
+        this.history.push({ role: "assistant", content: this._rtOmniText });
+        this.trimHistory();
+      }
+      this._rtOmniLine = null;
+      this._rtOmniText = "";
+    } else if (t === "response.function_call_arguments.done") {
+      let args = {};
+      try { args = JSON.parse(ev.arguments || "{}"); } catch (e) { /* 무시 */ }
+      this.handleRtTool(ev.call_id, ev.name, args);
+    } else if (t === "error") {
+      this.logLine("sys", `LIVE 오류: ${(ev.error && ev.error.message) || ""}`);
+    }
+  },
+
+  async handleRtTool(callId, name, args) {
+    let output = "";
+    if (name === "ask_brain") {
+      this.logLine("sys", `도구 · ask_brain: ${(args.query || "").slice(0, 60)}`);
+      this.setInd(this.els.indLlm, "BRAIN", "busy");
+      const res = await this.runClaude([
+        ...this.history,
+        { role: "user", content: args.query || "" },
+      ]);
+      output = res.ok ? res.text : `실패: ${res.error}`;
+      this.setInd(this.els.indLlm, "READY", "ok");
+    } else if (name === "get_status") {
+      output = await this.gatherContext();
+    } else if (name === "open_panel") {
+      const k = (args.key || "").toLowerCase();
+      const btn = document.querySelector(`.nav-item[data-panel="${k}"]`);
+      if (btn && this.PANEL_LABELS[k]) {
+        btn.click();
+        this.logLine("sys", `패널 전환: ${this.PANEL_LABELS[k]}`);
+        output = "OK";
+      } else output = `unknown panel: ${k}`;
+    } else if (name === "app_action") {
+      const res = await this.runAction(args.spec || "");
+      this.logLine("sys", `${res.ok ? "OK" : "실패"} · ${res.msg}`);
+      output = res.msg;
+    } else {
+      output = `unknown tool: ${name}`;
+    }
+    this.rtSend({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: String(output).slice(0, 12000),
+      },
+    });
+    this.rtSend({ type: "response.create" });
+  },
+
+  trimHistory() {
+    while (this.history.length > 16) this.history.shift();
+    if (this.history[0] && this.history[0].role !== "user") this.history.shift();
   },
 
   // ---- 코어 비주얼라이저 ----

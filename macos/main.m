@@ -201,6 +201,8 @@ static NSString *ArcSavesDir(void) {
 @property (strong) NSNumber *aiTtsPendingId;          // 진행 중 요청의 msgId
 @property (strong) NSString *aiTtsPendingIn;
 @property (strong) NSString *aiTtsPendingOut;
+// OMNI_AI 리얼타임 음성 세션 (gpt-realtime WSS 릴레이 — 키는 네이티브에만)
+@property (strong) NSURLSessionWebSocketTask *aiRtTask;
 // OMNI_AI 외국어 음색 데몬 (seed_serve.py — Seed-VC 상주)
 @property (strong) NSTask *aiSeedTask;
 @property (strong) NSPipe *aiSeedIn;
@@ -304,6 +306,7 @@ static NSString *ArcSavesDir(void) {
     if (self.voiceLiveTask != nil) [self.voiceLiveTask terminate];
     if (self.aiTtsTask != nil) [self.aiTtsTask terminate];
     if (self.aiSeedTask != nil) [self.aiSeedTask terminate];
+    [self.aiRtTask cancel];
     [self.aiListener cancel];
     [self.terms closeAll]; // 좀비 zsh 방지
     SP1ResumeWatcher();
@@ -1486,6 +1489,44 @@ static BOOL OmniAISeedAvailable(void) {
     return task.terminationStatus == 0 && size > 100;
 }
 
+// ---- OMNI_AI 리얼타임 수신 루프 — arc 릴레이와 같은 패턴 ----
+- (void)aiRtReceiveLoop:(NSURLSessionWebSocketTask *)task {
+    __weak AppDelegate *weakSelf = self;
+    [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *msg,
+                                                NSError *error) {
+        AppDelegate *s = weakSelf;
+        if (s == nil || task != s.aiRtTask) return; // 새 세션으로 대체됨
+        if (error != nil) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [s.webView evaluateJavaScript:
+                    @"window.OmniAI && OmniAI._rt({type:\"rt.closed\"})"
+                          completionHandler:nil];
+            });
+            return;
+        }
+        if (msg.type == NSURLSessionWebSocketMessageTypeString && msg.string != nil) {
+            // JSON 재직렬화로 스크립트 주입 차단 (arc 릴레이와 동일)
+            NSData *raw = [msg.string dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = raw ? [NSJSONSerialization JSONObjectWithData:raw
+                                                              options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) {
+                NSData *safe = [NSJSONSerialization dataWithJSONObject:parsed
+                                                               options:0 error:nil];
+                NSString *json = [[NSString alloc] initWithData:safe
+                                                       encoding:NSUTF8StringEncoding];
+                if (json != nil) {
+                    NSString *js = [NSString stringWithFormat:
+                        @"window.OmniAI && OmniAI._rt(%@)", json];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [s.webView evaluateJavaScript:js completionHandler:nil];
+                    });
+                }
+            }
+        }
+        [s aiRtReceiveLoop:task];
+    }];
+}
+
 // ---- OMNI_AI 파일 도구 — 에이전트 루프가 쓰는 파일 시스템 접근 ----
 // 사용자 승인 범위: ~/Desktop 아래 전체 (프로젝트·노트·작업 폴더 포함)
 
@@ -1684,6 +1725,42 @@ static NSString *OmniAIFsValidate(NSString *path) {
 
     } else if ([cmd isEqualToString:@"ai.listenCancel"]) {
         [self.aiListener cancel];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.rtStart"]) {
+        // gpt-realtime WSS 세션 시작 — 이벤트는 OmniAI._rt(...) 로 푸시
+        NSString *oai = OmniAIOpenAIKey();
+        if (oai == nil) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NO_OPENAI_KEY" } forId:msgId];
+            return;
+        }
+        [self.aiRtTask cancel];
+        NSString *model = [a[@"model"] isKindOfClass:[NSString class]]
+            ? a[@"model"] : @"gpt-realtime";
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:
+            [NSString stringWithFormat:@"wss://api.openai.com/v1/realtime?model=%@", model]]];
+        [req setValue:[@"Bearer " stringByAppendingString:oai]
+            forHTTPHeaderField:@"authorization"];
+        NSURLSessionWebSocketTask *task = [NSURLSession.sharedSession webSocketTaskWithRequest:req];
+        self.aiRtTask = task;
+        [task resume];
+        [self aiRtReceiveLoop:task];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.rtSend"]) {
+        // JS가 만든 이벤트 JSON을 그대로 전송 (audio append, session.update 등)
+        if (self.aiRtTask == nil || arg == nil) {
+            [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
+            return;
+        }
+        NSURLSessionWebSocketMessage *msg =
+            [[NSURLSessionWebSocketMessage alloc] initWithString:arg];
+        [self.aiRtTask sendMessage:msg completionHandler:^(NSError *error) { (void)error; }];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.rtStop"]) {
+        [self.aiRtTask cancel];
+        self.aiRtTask = nil;
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
 
     } else if ([cmd hasPrefix:@"ai.fs"]) {

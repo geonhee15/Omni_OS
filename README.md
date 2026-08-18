@@ -59,6 +59,13 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   한자/키릴/라틴 스크립트 분석)로 LANG 토글과 응답 언어가 어긋나도 ("영어로 말해봐")
   항상 맞는 언어의 보이스로 낭독. 심층 액션(전 패널 레지스트리 + 실행 후 검증·실패 음성 보고): `proj.editor`(에디터+도구), `proj.status`(상태 변경), `notes.open`(노트 검색·생성), `ce.open`(파일 재귀 검색), `arc.connect/disconnect`, `arc.scan:start·stop·center`, `sp1.watch:pause·resume` —
   "아크스캔 3D 에디터 열어줘" 같은 패널 내부 체인 실행, 시각·시스템 현황은 스냅샷으로 즉답.
+  **LIVE 모드**(ECHO 이식): LIVE 버튼 한 번으로 `gpt-realtime` 상시 음성 세션 —
+  마이크 PCM 24kHz를 네이티브 WSS 릴레이로 스트리밍, 서버 VAD(0.75/500ms)가 턴을
+  감지하고 **marin** 보이스가 즉시 응답(말 끊고 끼어들기 가능). 세션 도구:
+  `get_status`(스냅샷 즉답) · `open_panel` · `app_action`(심층 액션) ·
+  **`ask_brain`**(Claude 에이전트 위임 — 파일 도구·Opus 라우팅 포함, 결과를 marin이
+  낭독). 라이브 중 텍스트 입력도 대화에 주입되고, 전사가 턴 히스토리에 쌓여
+  ask_brain과 맥락을 공유한다.
   **파일 도구 에이전트**: Claude tool use 기반 4종 도구(list_dir·read_file·edit_file·write_file,
   `~/Desktop` 아래 전체 — 네이티브 경로 검증)로 옴니가 스스로 파일을 나열·읽기·수정 —
   "3d 모델 몇 개야"는 직접 세서 답하고, "이 파일 이 부분 고쳐줘"는 읽고 정확 치환(유일
