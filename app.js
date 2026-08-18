@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.49.0",
+  version: "0.49.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -6265,8 +6265,11 @@ OmniOS.register("notes", {
         // 사이드바로 열면 무조건 메인 Notes 볼트 (프로젝트 이식 상태가 아니면)
         if (!this.els.panel.classList.contains("pj-embedded")) this.openMain();
         setTimeout(() => this._cm && this._cm.refresh(), 50);
+        this.checkExternal(); // 패널 진입 즉시 외부 변경 반영
       }
     });
+    // 외부 수정 자동 반영 (다른 에디터·옴니 AI의 edit_file 등)
+    setInterval(() => this.checkExternal(), 3000);
     // 프리뷰의 위키링크 클릭 → 해당 노트 열기 (없으면 생성)
     this.els.preview.addEventListener("click", (e) => {
       const a = e.target.closest("a.wikilink");
@@ -6679,6 +6682,69 @@ OmniOS.register("notes", {
     if (node) node.classList.add("active");
     this.setMode(this._mode); // 현재 모드 유지 (프리뷰면 다시 렌더)
     setTimeout(() => cm.refresh(), 0);
+  },
+
+  // ── 외부 변경 감시: 열린 노트는 디스크 내용과 diff 후 리로드(편집 중이면
+  // 건너뜀), 트리는 파일 목록 시그니처가 바뀌었을 때만 재스캔 ──
+  _watchTick: 0,
+  _treeSig: null,
+
+  async checkExternal() {
+    if (!OmniNative.available || !this._vault) return;
+    if (!this.els.panel.classList.contains("active")) return;
+    // 1) 열린 노트 내용 — 매 틱 (사용자가 편집 중이면 덮어쓰지 않음)
+    if (this._cur && this._cm && !this._dirty) {
+      try {
+        const r = await OmniNative.request("ce.read",
+          JSON.stringify({ path: this._cur }), 8000);
+        if (r && r.ok && typeof r.text === "string"
+            && r.text !== this._cm.getValue() && !this._dirty) {
+          const scroll = this._cm.getScrollInfo();
+          const cursor = this._cm.getCursor();
+          this._cm.setValue(r.text);
+          this._dirty = false; // setValue의 change 이벤트가 dirty를 세우므로 리셋
+          clearTimeout(this._saveT);
+          this._cm.setCursor(cursor);
+          this._cm.scrollTo(scroll.left, scroll.top);
+          this.setMode(this._mode); // 프리뷰 모드면 다시 렌더
+          this.flash("EXTERNAL CHANGE LOADED", "ok");
+        }
+      } catch (e) { /* 삭제/일시 오류 — 무시 */ }
+    }
+    // 2) 트리 — 3틱(9초)마다 얕은 시그니처 비교로 생성/삭제 반영
+    this._watchTick = (this._watchTick + 1) % 3;
+    if (this._watchTick !== 0) return;
+    try {
+      const sig = await this.treeSignature();
+      if (sig !== null) {
+        if (this._treeSig !== null && sig !== this._treeSig) {
+          await this.rescan();
+          const node = this._cur && this.els.tree.querySelector(
+            `.ce-node[data-path="${CSS.escape(this._cur)}"]`);
+          if (node) node.classList.add("active");
+        }
+        this._treeSig = sig;
+      }
+    } catch (e) { /* 무시 */ }
+  },
+
+  async treeSignature() {
+    // 볼트 루트 + 1단계 하위 폴더의 항목명 목록 (가벼운 변경 감지용)
+    const parts = [];
+    const root = await OmniNative.request("ce.tree",
+      JSON.stringify({ path: this._vault }), 8000).catch(() => null);
+    if (!root || !root.ok) return null;
+    const entries = root.entries || [];
+    parts.push(entries.map((e) => e.name).join(","));
+    for (const e of entries.slice(0, 12)) {
+      if (!e.dir) continue;
+      const sub = await OmniNative.request("ce.tree",
+        JSON.stringify({ path: `${this._vault}/${e.name}` }), 8000).catch(() => null);
+      if (sub && sub.ok) {
+        parts.push(`${e.name}:${(sub.entries || []).map((x) => x.name).join(",")}`);
+      }
+    }
+    return parts.join("|");
   },
 
   async openByName(name) {
