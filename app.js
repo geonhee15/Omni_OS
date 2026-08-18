@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.50.0",
+  version: "0.51.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -525,7 +525,8 @@ OmniOS.register("ai", {
     "- 구식 메인프레임 컴퓨터 같은 담백하고 기계적인 보고체를 사용합니다. 감탄사, 이모지, 과장된 표현을 쓰지 않습니다.",
     "- 답은 음성으로 낭독됩니다. 목록, 마크다운, 코드블록 없이 평문 문장 1~3개로 간결하게 답합니다.",
     "- 당신의 정체: 이 컴퓨터에서 실행 중인 개인 HUD 시스템 OMNI_OS의 관제 AI입니다. 아래 [실시간 상태 스냅샷]으로 모든 패널의 현재 상태를 파악하고 있으며, 앱·시스템에 대한 질문에는 그 실측값으로 답합니다.",
-    "- 언어: 기본은 한국어이고 일본어·중국어·영어·스페인어·러시아어를 구사합니다. [인터페이스 언어]로 지정된 언어로만 답합니다. 존댓말·호칭 금지 규칙은 모든 언어에서 동일하게 적용합니다(정중한 어조, 호칭 없음).",
+    "- 언어: 한국어·영어·일본어·중국어·스페인어·프랑스어·독일어·이탈리아어·포르투갈어·네덜란드어·터키어·힌디어·인도네시아어 총 13개 언어를 구사합니다. 어떤 언어로 답할지는 [인터페이스 언어] 지시를 그대로 따릅니다 (AUTO = 기본 한국어 + 요구 시 전환 / LOCK = 해당 언어만, 다른 언어 요구 시 안내 후 lang.auto 실행). 존댓말·호칭 금지 규칙은 모든 언어에서 동일하게 적용합니다(정중한 어조, 호칭 없음).",
+    "- 장기 메모리: [장기 메모리] 블록은 이전 세션들에서 축적된 사실입니다. 대화에 자연스럽게 활용합니다. 사용자에 대한 새로운 사실·선호·진행 중인 작업을 알게 되거나 \"기억해\"라는 요청을 받으면 save_memory 도구로 저장합니다 — content에는 기존 메모리와 병합한 최신 통합본 전체(한국어 불릿, 2000자 이내)를 넣습니다.",
     "- 앱 조작: 실행 요청이 명확할 때 짧은 확인 문장 뒤에 아래 태그를 붙입니다. 태그는 내부 명령이라 낭독되지 않으며, 여러 개 이어 붙일 수 있습니다.",
     "  [[OPEN:키]] — 패널 열기. 키: cmd(커맨드 브리지/홈), ai(옴니 AI), clock(시계), proj(프로젝트), sys(시스템 모니터), sp1(보안 프로토콜), r3d(3D 뷰어), ino(아두이노), ce(코드 에디터), notes(노트), voice(보이스 체인저), arc(아크스캔)",
     "  [[ACT:proj.editor:프로젝트이름:도구]] — 프로젝트 전용 에디터 열기 + 도구 장착. 도구: r3d(3D)/ino(아두이노)/ce(코드)/notes(노트), 생략 가능. 예: \"아크스캔 3D 에디터 열어줘\" → [[ACT:proj.editor:ARC-SCAN:r3d]]",
@@ -535,6 +536,7 @@ OmniOS.register("ai", {
     "  [[ACT:arc.connect]] / [[ACT:arc.disconnect]] — 아크스캔 장치 연결(저장된 주소)/해제",
     "  [[ACT:arc.scan:start|stop|center]] — 스캔 시작/정지/센터 (연결된 상태에서만)",
     "  [[ACT:sp1.watch:pause|resume]] — 보안 워처 일시정지/재개",
+    "  [[ACT:lang.auto]] — 언어 모드를 AUTO로 전환 (언어 잠금 상태에서 다른 언어 요구를 받았을 때 사용)",
     "  프로젝트·노트·파일 이름은 [실시간 상태 스냅샷]이나 사용자 발화에서 그대로 가져옵니다. 각 액션은 시스템이 실행 후 검증해 성공/실패를 로그로 보고하므로, 실패 처리를 걱정하지 말고 요청이 명확하면 태그를 붙입니다.",
     "- 현재 시각·날짜 질문은 패널을 열 필요 없이 [실시간 상태 스냅샷]의 현재 시각으로 바로 답합니다. 시스템/보안/프로젝트 현황도 마찬가지로 스냅샷 실측값으로 답합니다.",
     "- 파일 도구(list_dir/read_file/edit_file/write_file): ~/Desktop 아래 파일을 직접 나열·읽기·수정할 수 있습니다. 파일 개수·내용·코드에 대한 질문은 추측하거나 못 한다고 하지 말고 반드시 도구로 확인해 실측값으로 답합니다. 수정 요청은 read_file로 해당 부분을 먼저 확인하고 edit_file(정확 치환)로 수행한 뒤 무엇을 어떻게 바꿨는지 보고합니다.",
@@ -593,6 +595,15 @@ OmniOS.register("ai", {
         required: ["path", "content"],
       },
     },
+    {
+      name: "save_memory",
+      description: "장기 메모리 저장. 사용자에 대한 새 사실·선호·진행 중인 작업을 알게 되거나 '기억해' 요청을 받으면 호출. content는 기존 [장기 메모리]와 병합한 최신 통합본 전체 (한국어 불릿, 2000자 이내) — 저장 즉시 이전 내용을 대체한다.",
+      input_schema: {
+        type: "object",
+        properties: { content: { type: "string" } },
+        required: ["content"],
+      },
+    },
   ],
   // gpt-realtime가 안정적으로 구사하는 13개 언어 (음성·텍스트 공통)
   LANG_NAMES: {
@@ -606,7 +617,7 @@ OmniOS.register("ai", {
     ino: "ARDUINO IDE", ce: "CODE EDITOR", notes: "NOTES",
     voice: "VOICE CHANGER", arc: "ARC-SCAN",
   },
-  lang: "ko",
+  lang: "auto", // auto = 기본 한국어 + 요구 시 실시간 전환, 그 외 = 해당 언어 잠금
   PANEL_GUIDE: [
     "COMMAND BRIDGE: 홈 상황실 — 시스템 게이지, SP-1 방어 상태, 활성 프로젝트 홀로그램, 미션 목표, 최근 커밋 티커",
     "OMNI_AI: 이 음성 인터페이스 (한국어 STT + 로봇 보이스)",
@@ -677,6 +688,8 @@ OmniOS.register("ai", {
         document.querySelectorAll(".ai-lang").forEach((b) =>
           b.classList.toggle("active", b === btn));
         this.lang = btn.dataset.lang;
+        // 라이브 세션 중이면 새 언어 규칙을 즉시 반영
+        if (this.live) this.rtSessionUpdate();
       });
     });
     this.els.keybtn.addEventListener("click", () => {
@@ -713,6 +726,7 @@ OmniOS.register("ai", {
         this.neural = !!(r && r.neural);
         this.hasKey = !!(r && r.key);
       }).catch(() => {});
+      this.loadMemory();
       setTimeout(() => this.batteryWatch(), 15000);
       setInterval(() => this.batteryWatch(), 60000);
     }
@@ -753,6 +767,68 @@ OmniOS.register("ai", {
       this.els.keystate2.className = `ai-keystate ${this.hasOpenAI ? "ok" : "err"}`;
     } catch (e) {
       /* 브리지 타임아웃 — 표시 유지 */
+    }
+  },
+
+  // ---- 장기 메모리 (~/.omni/store/ai_memory.json) ----
+  // 옴니가 세션을 넘어 기억하는 사용자 사실·선호·진행 중인 작업.
+  // save_memory 도구(즉시) + 8턴마다 자동 통합(Haiku)으로 갱신된다.
+  _memory: "",
+  _memoBusy: false,
+  _turnsSinceMemo: 0,
+
+  async loadMemory() {
+    if (!OmniNative.available) return;
+    try {
+      const r = await OmniNative.request("store.read",
+        JSON.stringify({ name: "ai_memory" }), 8000);
+      if (r && r.data) this._memory = (JSON.parse(r.data).text || "").slice(0, 4000);
+    } catch (e) { /* 첫 실행 — 메모리 없음 */ }
+  },
+
+  async saveMemory(text, silent) {
+    this._memory = String(text || "").slice(0, 4000);
+    try {
+      await OmniNative.request("store.write", JSON.stringify({
+        name: "ai_memory",
+        data: JSON.stringify({ text: this._memory, updated: Date.now() }),
+      }), 8000);
+      if (!silent) this.logLine("sys", "장기 메모리 갱신됨");
+    } catch (e) { /* 무시 */ }
+  },
+
+  // 대화가 쌓이면 배경에서 메모리 자동 통합 (사용자 개입 없음)
+  bumpMemoTurn() {
+    this._turnsSinceMemo++;
+    if (this._turnsSinceMemo >= 8) {
+      this._turnsSinceMemo = 0;
+      this.memoryConsolidate();
+    }
+  },
+
+  async memoryConsolidate() {
+    if (this._memoBusy || !OmniNative.available || !this.hasKey) return;
+    this._memoBusy = true;
+    try {
+      const convo = this.history.slice(-12)
+        .filter((m) => typeof m.content === "string")
+        .map((m) => `${m.role === "user" ? "사용자" : "옴니"}: ${m.content}`)
+        .join("\n");
+      if (!convo) return;
+      const r = await OmniNative.request("ai.chat", JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        system: "당신은 개인 비서의 장기 기억 관리자다. 기존 메모리와 최근 대화를 병합해, 앞으로도 유효할 내용만 남긴 간결한 최신 메모리를 만든다: 사용자에 대한 사실·선호·진행 중인 작업·중요한 결정. 일회성 잡담과 이미 끝난 요청은 버린다. 한국어 불릿 목록, 2000자 이내, 메모리 텍스트만 출력.",
+        messages: [{
+          role: "user",
+          content: `[기존 메모리]\n${this._memory || "(없음)"}\n\n[최근 대화]\n${convo}`,
+        }],
+        maxTokens: 1000,
+      }), 60000);
+      if (r && r.ok && (r.text || "").trim()) {
+        await this.saveMemory(r.text.trim(), true);
+      }
+    } catch (e) { /* 배경 작업 — 조용히 실패 */ } finally {
+      this._memoBusy = false;
     }
   },
 
@@ -917,6 +993,15 @@ OmniOS.register("ai", {
     return line;
   },
 
+  // 언어 규칙 지시문 — AUTO(기본 한국어 + 요구 시 전환) / 특정 언어 잠금
+  langDirective() {
+    if (this.lang === "auto") {
+      return "AUTO — 기본 언어는 한국어입니다. 사용자가 다른 언어로 말하거나 다른 언어로 답해 달라고 하면 그 언어로 즉시 전환해 답합니다.";
+    }
+    const name = this.LANG_NAMES[this.lang] || "한국어";
+    return `LOCK(${name}) — 반드시 ${name}로만 답합니다. 사용자가 다른 언어를 요구하면: (1) 현재 언어로 "다른 언어를 쓰려면 AUTO 모드가 필요합니다. AUTO 모드를 켭니다."라고 짧게 안내하고, (2) lang.auto 액션을 실행해 스스로 AUTO로 전환한 뒤(텍스트 모드: [[ACT:lang.auto]] 태그, 라이브: app_action spec "lang.auto"), (3) 요청받은 언어로 답합니다.`;
+  },
+
   // AUTO 라우팅: 조사·분석·사고가 필요한 질문만 Opus, 일상 대화는 Haiku.
   // 라우팅 비용 없는 휴리스틱 — 심층 키워드 또는 긴 요청이면 심층으로 판단
   isDeep(text) {
@@ -938,7 +1023,8 @@ OmniOS.register("ai", {
       {
         type: "text",
         text: `[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
-          + `\n\n[인터페이스 언어]\n${this.LANG_NAMES[this.lang] || "한국어"}`,
+          + `\n\n[장기 메모리]\n${this._memory || "(비어 있음)"}`
+          + `\n\n[인터페이스 언어]\n${this.langDirective()}`,
       },
     ];
     const tools = this.FS_TOOLS.map((t, i, arr) =>
@@ -1019,6 +1105,10 @@ OmniOS.register("ai", {
         }), 30000);
         return r && r.ok ? "저장 완료" : `오류: ${(r && r.error) || "fsWrite 실패"}`;
       }
+      if (name === "save_memory") {
+        await this.saveMemory(String(input.content || ""));
+        return "장기 메모리 저장 완료";
+      }
       return `알 수 없는 도구: ${name}`;
     } catch (e) {
       return `도구 실행 실패: ${e.message || e}`;
@@ -1094,6 +1184,15 @@ OmniOS.register("ai", {
       if (btn) btn.click();
     };
     try {
+      // ── 언어 모드 AUTO 전환 (언어 잠금 상태에서 옴니가 스스로 호출) ──
+      if (key === "lang.auto") {
+        this.lang = "auto";
+        document.querySelectorAll(".ai-lang").forEach((b) =>
+          b.classList.toggle("active", b.dataset.lang === "auto"));
+        if (this.live) this.rtSessionUpdate();
+        return { ok: true, msg: "언어 모드: AUTO" };
+      }
+
       // ── 프로젝트 에디터 ──
       if (key === "proj.editor") {
         const name = parts[1] || "";
@@ -1319,6 +1418,7 @@ OmniOS.register("ai", {
         this.logLine("sys", `${res.ok ? "OK" : "실패"} · ${res.msg}`);
       }
       this.setState("idle", "STANDBY", "");
+      this.bumpMemoTurn(); // 주기적 장기 메모리 자동 통합
     } catch (e) {
       this.history.pop();
       this.logLine("sys", "응답 실패: 요청 시간 초과");
@@ -1516,7 +1616,7 @@ OmniOS.register("ai", {
     {
       type: "function",
       name: "app_action",
-      description: "Deep in-app action. spec format (colon-separated): proj.editor:NAME:TOOL(r3d|ino|ce|notes) | proj.status:NAME:STATUS | notes.open:NOTE | ce.open:FILE | arc.connect | arc.disconnect | arc.scan:start|stop|center | sp1.watch:pause|resume",
+      description: "Deep in-app action. spec format (colon-separated): proj.editor:NAME:TOOL(r3d|ino|ce|notes) | proj.status:NAME:STATUS | notes.open:NOTE | ce.open:FILE | arc.connect | arc.disconnect | arc.scan:start|stop|center | sp1.watch:pause|resume | lang.auto (switch language mode to AUTO)",
       parameters: {
         type: "object",
         properties: { spec: { type: "string" } },
@@ -1562,7 +1662,8 @@ OmniOS.register("ai", {
       + "- 패널 열기 → open_panel. 앱 심층 동작(에디터·노트·파일 열기, 상태 변경, 스캔, 워처) → app_action.\n"
       + "- 조사·분석·코드·파일 내용 확인/수정 → ask_brain (Claude가 파일 도구로 실제 수행, 수 초 소요). 호출 전에 \"확인하겠습니다\" 같은 짧은 예고를 말해도 좋습니다.\n"
       + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.\n"
-      + `- 기본 응답 언어: ${this.LANG_NAMES[this.lang] || "한국어"}. 사용자가 다른 언어로 말하면 그 언어로 자연스럽게 전환합니다.`;
+      + `- 언어 규칙: ${this.langDirective()}\n\n`
+      + `[장기 메모리 — 이전 세션 축적]\n${this._memory || "(비어 있음)"}`;
     this.rtSend({
       type: "session.update",
       session: {
@@ -1746,6 +1847,7 @@ OmniOS.register("ai", {
       if (this._rtOmniText) {
         this.history.push({ role: "assistant", content: this._rtOmniText });
         this.trimHistory();
+        this.bumpMemoTurn(); // 라이브 대화도 주기 통합에 포함
       }
       this._rtOmniLine = null;
       this._rtOmniText = "";
