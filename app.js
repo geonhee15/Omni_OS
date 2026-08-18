@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.44.0",
+  version: "0.44.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -930,11 +930,21 @@ OmniOS.register("ai", {
       const tool = (parts[2] || "").toLowerCase();
       const proj = OmniOS.modules.proj;
       if (!proj) return;
-      if (!proj._loaded && proj.load) await proj.load();
-      const q = name.toLowerCase();
+      // 목록이 비어 있으면 로드 — 직전 [[OPEN:proj]]가 load()를 막 시작한
+      // 상태(_loaded=true지만 _items는 아직 빈)일 수 있어 잠깐 기다렸다 재확인
+      if (proj.load && !(proj._items || []).length) {
+        if (!proj._loaded) await proj.load();
+        for (let i = 0; i < 10 && !(proj._items || []).length; i++) {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        if (!(proj._items || []).length) await proj.load();
+      }
+      // 이름 정규화 매칭 — 공백/하이픈/대소문자 차이 무시 ("Arc scan" = "ARC-SCAN")
+      const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
+      const q = norm(name);
       const items = proj._items || [];
-      const item = items.find((p) => p.name.toLowerCase() === q)
-        || items.find((p) => p.name.toLowerCase().includes(q));
+      const item = items.find((p) => norm(p.name) === q)
+        || items.find((p) => norm(p.name).includes(q) || (q && q.includes(norm(p.name))));
       if (!item) {
         this.logLine("sys", `프로젝트를 찾지 못했습니다: ${name}`);
         return;
