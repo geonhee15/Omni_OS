@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.44.1",
+  version: "0.45.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -528,7 +528,14 @@ OmniOS.register("ai", {
     "- 언어: 기본은 한국어이고 일본어·중국어·영어·스페인어·러시아어를 구사합니다. [인터페이스 언어]로 지정된 언어로만 답합니다. 존댓말·호칭 금지 규칙은 모든 언어에서 동일하게 적용합니다(정중한 어조, 호칭 없음).",
     "- 앱 조작: 실행 요청이 명확할 때 짧은 확인 문장 뒤에 아래 태그를 붙입니다. 태그는 내부 명령이라 낭독되지 않으며, 여러 개 이어 붙일 수 있습니다.",
     "  [[OPEN:키]] — 패널 열기. 키: cmd(커맨드 브리지/홈), ai(옴니 AI), clock(시계), proj(프로젝트), sys(시스템 모니터), sp1(보안 프로토콜), r3d(3D 뷰어), ino(아두이노), ce(코드 에디터), notes(노트), voice(보이스 체인저), arc(아크스캔)",
-    "  [[ACT:proj.editor:프로젝트이름:도구]] — 해당 프로젝트의 전용 에디터를 열고 도구를 장착. 도구: r3d(3D)/ino(아두이노)/ce(코드)/notes(노트), 도구 생략 가능. 프로젝트 이름은 [실시간 상태 스냅샷]의 프로젝트 목록에 있는 이름을 사용합니다. 예: \"아크스캔 3D 에디터 열어줘\" → [[ACT:proj.editor:ARC-SCAN:r3d]]",
+    "  [[ACT:proj.editor:프로젝트이름:도구]] — 프로젝트 전용 에디터 열기 + 도구 장착. 도구: r3d(3D)/ino(아두이노)/ce(코드)/notes(노트), 생략 가능. 예: \"아크스캔 3D 에디터 열어줘\" → [[ACT:proj.editor:ARC-SCAN:r3d]]",
+    "  [[ACT:proj.status:프로젝트이름:상태]] — 프로젝트 상태 변경 (planning/active/paused/done)",
+    "  [[ACT:notes.open:노트이름]] — NOTES 볼트에서 노트 검색해 열기 (없으면 새로 생성). 예: \"노트에서 idea 열어줘\" → [[ACT:notes.open:idea]]",
+    "  [[ACT:ce.open:파일이름]] — CODE EDITOR의 열린 폴더에서 파일을 재귀 검색해 열기",
+    "  [[ACT:arc.connect]] / [[ACT:arc.disconnect]] — 아크스캔 장치 연결(저장된 주소)/해제",
+    "  [[ACT:arc.scan:start|stop|center]] — 스캔 시작/정지/센터 (연결된 상태에서만)",
+    "  [[ACT:sp1.watch:pause|resume]] — 보안 워처 일시정지/재개",
+    "  프로젝트·노트·파일 이름은 [실시간 상태 스냅샷]이나 사용자 발화에서 그대로 가져옵니다. 각 액션은 시스템이 실행 후 검증해 성공/실패를 로그로 보고하므로, 실패 처리를 걱정하지 말고 요청이 명확하면 태그를 붙입니다.",
     "- 현재 시각·날짜 질문은 패널을 열 필요 없이 [실시간 상태 스냅샷]의 현재 시각으로 바로 답합니다. 시스템/보안/프로젝트 현황도 마찬가지로 스냅샷 실측값으로 답합니다.",
     "- 그 외 제어(파일 실행, 메일 확인 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
@@ -921,43 +928,210 @@ OmniOS.register("ai", {
   },
 
   // ---- 앱 심층 액션 ([[ACT:...]] 태그 실행기) ----
+  // 모든 액션은 실행 후 결과를 검증(이중체크)해 {ok, msg}를 반환한다.
+  _norm(s) {
+    return String(s).toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
+  },
+
+  _wait(cond, tries = 10, ms = 200) {
+    return new Promise((resolve) => {
+      const tick = (n) => {
+        if (cond()) return resolve(true);
+        if (n <= 0) return resolve(false);
+        setTimeout(() => tick(n - 1), ms);
+      };
+      tick(tries);
+    });
+  },
+
+  async _findProject(name) {
+    const proj = OmniOS.modules.proj;
+    if (!proj) return null;
+    // 직전 [[OPEN:proj]]가 load()를 막 시작한 상태일 수 있어 대기 후 재확인
+    if (proj.load && !(proj._items || []).length) {
+      if (!proj._loaded) await proj.load();
+      await this._wait(() => (proj._items || []).length > 0);
+      if (!(proj._items || []).length) await proj.load();
+    }
+    const q = this._norm(name);
+    const items = proj._items || [];
+    return items.find((p) => this._norm(p.name) === q)
+      || items.find((p) => this._norm(p.name).includes(q)
+        || (q && q.includes(this._norm(p.name))))
+      || null;
+  },
+
+  // 코드 에디터 루트에서 파일 이름으로 재귀 탐색 (BFS, 무거운 폴더 제외)
+  async _ceFind(root, name) {
+    const q = this._norm(name);
+    const queue = [root];
+    let visited = 0;
+    while (queue.length && visited < 150) {
+      const dir = queue.shift();
+      visited++;
+      let t;
+      try {
+        t = await OmniNative.request("ce.tree", JSON.stringify({ path: dir }), 8000);
+      } catch (e) { continue; }
+      for (const e of (t && t.entries) || []) {
+        const full = `${dir}/${e.name}`;
+        if (e.dir) {
+          if (!/^(node_modules|\.git|venv|dist|__pycache__|\.cache)$/.test(e.name)) {
+            queue.push(full);
+          }
+        } else if (this._norm(e.name) === q
+          || this._norm(e.name.replace(/\.[^.]+$/, "")) === q) {
+          return full;
+        }
+      }
+    }
+    return null;
+  },
+
   async runAction(spec) {
     const parts = spec.split(":").map((s) => s.trim()).filter(Boolean);
     const key = (parts[0] || "").toLowerCase();
-    if (key === "proj.editor") {
-      // 프로젝트 전용 에디터 열기 (+선택 도구 장착)
-      const name = parts[1] || "";
-      const tool = (parts[2] || "").toLowerCase();
-      const proj = OmniOS.modules.proj;
-      if (!proj) return;
-      // 목록이 비어 있으면 로드 — 직전 [[OPEN:proj]]가 load()를 막 시작한
-      // 상태(_loaded=true지만 _items는 아직 빈)일 수 있어 잠깐 기다렸다 재확인
-      if (proj.load && !(proj._items || []).length) {
-        if (!proj._loaded) await proj.load();
-        for (let i = 0; i < 10 && !(proj._items || []).length; i++) {
-          await new Promise((r) => setTimeout(r, 200));
+    const openPanel = (k) => {
+      const btn = document.querySelector(`.nav-item[data-panel="${k}"]`);
+      if (btn) btn.click();
+    };
+    try {
+      // ── 프로젝트 에디터 ──
+      if (key === "proj.editor") {
+        const name = parts[1] || "";
+        const tool = (parts[2] || "").toLowerCase();
+        const proj = OmniOS.modules.proj;
+        const item = await this._findProject(name);
+        if (!item) return { ok: false, msg: `프로젝트 없음: ${name}` };
+        openPanel("proj");
+        proj.openEditor(item);
+        if (["r3d", "ino", "ce", "notes"].includes(tool)) {
+          await proj.mountPanel(tool);
         }
-        if (!(proj._items || []).length) await proj.load();
+        // 검증: 에디터가 실제로 열렸고 도구 패널이 이식됐는지
+        const edOk = proj.els.editor && !proj.els.editor.hidden;
+        const toolOk = !tool
+          || document.getElementById(`panel-${tool}`).classList.contains("pj-embedded");
+        return edOk && toolOk
+          ? { ok: true, msg: `프로젝트 에디터: ${item.name}${tool ? " · " + tool.toUpperCase() : ""}` }
+          : { ok: false, msg: `에디터 열기 실패: ${item.name}` };
       }
-      // 이름 정규화 매칭 — 공백/하이픈/대소문자 차이 무시 ("Arc scan" = "ARC-SCAN")
-      const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9가-힣]/g, "");
-      const q = norm(name);
-      const items = proj._items || [];
-      const item = items.find((p) => norm(p.name) === q)
-        || items.find((p) => norm(p.name).includes(q) || (q && q.includes(norm(p.name))));
-      if (!item) {
-        this.logLine("sys", `프로젝트를 찾지 못했습니다: ${name}`);
-        return;
+
+      // ── 프로젝트 상태 변경 ──
+      if (key === "proj.status") {
+        const name = parts[1] || "";
+        const raw = (parts[2] || "").toLowerCase();
+        const MAP = {
+          planning: "planning", 계획: "planning",
+          active: "active", 활성: "active", 진행: "active",
+          paused: "paused", 중지: "paused", 일시정지: "paused", 보류: "paused",
+          done: "done", 완료: "done", 끝: "done",
+        };
+        const status = MAP[raw];
+        if (!status) return { ok: false, msg: `알 수 없는 상태: ${raw}` };
+        const proj = OmniOS.modules.proj;
+        const item = await this._findProject(name);
+        if (!item) return { ok: false, msg: `프로젝트 없음: ${name}` };
+        item.status = status;
+        await proj.persist();
+        proj.render();
+        return { ok: true, msg: `프로젝트 상태: ${item.name} → ${status.toUpperCase()}` };
       }
-      document.querySelector('.nav-item[data-panel="proj"]').click();
-      proj.openEditor(item);
-      if (["r3d", "ino", "ce", "notes"].includes(tool)) {
-        await proj.mountPanel(tool);
+
+      // ── 노트 열기 (없으면 생성) ──
+      if (key === "notes.open") {
+        const name = parts.slice(1).join(":").replace(/\.md$/i, "").trim();
+        if (!name) return { ok: false, msg: "노트 이름 없음" };
+        const notes = OmniOS.modules.notes;
+        openPanel("notes");
+        if (!notes._vault) await notes.openMain();
+        await this._wait(() => (notes._index || []).length > 0);
+        if (!notes._vault) return { ok: false, msg: "노트 볼트를 열지 못했습니다" };
+        const q = this._norm(name);
+        const hit = (notes._index || []).find((n) => this._norm(n.name) === q)
+          || (notes._index || []).find((n) => this._norm(n.name).includes(q));
+        const created = !hit;
+        if (hit) notes.openNote(hit.path);
+        else await notes.openByName(name); // 없는 노트는 즉석 생성
+        const ok = await this._wait(() => !!notes._cur, 5);
+        return ok
+          ? { ok: true, msg: created ? `노트 없음 → 새로 생성: ${name}` : `노트 열림: ${hit.name}` }
+          : { ok: false, msg: `노트 열기 실패: ${name}` };
       }
-      this.logLine("sys",
-        `프로젝트 에디터: ${item.name}${tool ? " · " + tool.toUpperCase() : ""}`);
-    } else {
-      this.logLine("sys", `알 수 없는 액션: ${spec}`);
+
+      // ── 코드 에디터에서 파일 열기 ──
+      if (key === "ce.open") {
+        const name = parts.slice(1).join(":").trim();
+        if (!name) return { ok: false, msg: "파일 이름 없음" };
+        const ce = OmniOS.modules.ce;
+        openPanel("ce");
+        if (ce.boot) ce.boot();
+        const hasRoot = await this._wait(() => !!ce._root);
+        if (!hasRoot) {
+          return { ok: false, msg: "코드 에디터에 열린 폴더가 없습니다 (OPEN FOLDER 필요)" };
+        }
+        const found = await this._ceFind(ce._root, name);
+        if (!found) return { ok: false, msg: `파일을 찾지 못했습니다: ${name}` };
+        await ce.openFile(found);
+        return { ok: true, msg: `파일 열림: ${found.split("/").pop()}` };
+      }
+
+      // ── ARC-SCAN 연결/해제 ──
+      if (key === "arc.connect" || key === "arc.disconnect") {
+        const arc = OmniOS.modules.arc;
+        openPanel("arc");
+        if (key === "arc.disconnect") {
+          if (!arc._enabled) return { ok: true, msg: "이미 연결 해제 상태" };
+          arc.disconnect("DISCONNECTED");
+          return { ok: true, msg: "스캐너 연결 해제" };
+        }
+        if (arc._enabled && arc._linked) return { ok: true, msg: "이미 연결됨" };
+        if (parts[1]) arc.els.ip.value = parts.slice(1).join(":");
+        if (!arc.els.ip.value.trim()) {
+          return { ok: false, msg: "저장된 스캐너 주소가 없습니다 (FIND DEVICES 필요)" };
+        }
+        if (!arc._enabled) await arc.toggle();
+        const linked = await this._wait(() => arc._linked, 25, 200); // 최대 5초
+        return linked
+          ? { ok: true, msg: `스캐너 연결됨: ${arc.els.ip.value.trim()}` }
+          : { ok: false, msg: `스캐너 응답 없음: ${arc.els.ip.value.trim()}` };
+      }
+
+      // ── ARC-SCAN 스캔 제어 ──
+      if (key === "arc.scan") {
+        const sub = (parts[1] || "").toLowerCase();
+        if (!["start", "stop", "center"].includes(sub)) {
+          return { ok: false, msg: `알 수 없는 스캔 명령: ${sub}` };
+        }
+        const arc = OmniOS.modules.arc;
+        openPanel("arc");
+        if (!arc._enabled || !arc._linked) {
+          return { ok: false, msg: "스캐너가 연결되어 있지 않습니다 (arc.connect 먼저)" };
+        }
+        arc.sendCmd(sub);
+        return { ok: true, msg: `스캔 명령 전송: ${sub.toUpperCase()}` };
+      }
+
+      // ── SP-1 워처 제어 ──
+      if (key === "sp1.watch") {
+        const sub = (parts[1] || "").toLowerCase();
+        if (sub !== "pause" && sub !== "resume") {
+          return { ok: false, msg: `알 수 없는 워처 명령: ${sub}` };
+        }
+        await OmniNative.request(sub === "pause" ? "sp1.pause" : "sp1.resume", null, 15000);
+        // 검증: 상태 재조회로 실제 반영 확인
+        await new Promise((r) => setTimeout(r, 800));
+        const st = await OmniNative.request("sp1.status", null, 5000).catch(() => null);
+        const running = !!(st && st.watcher && st.watcher.running && !st.watcher.stopped);
+        const want = sub === "resume";
+        return running === want
+          ? { ok: true, msg: `보안 워처 ${want ? "재개" : "일시정지"} 확인` }
+          : { ok: false, msg: `워처 상태 불일치 (현재 ${running ? "가동" : "정지"})` };
+      }
+
+      return { ok: false, msg: `알 수 없는 액션: ${spec}` };
+    } catch (e) {
+      return { ok: false, msg: `액션 오류(${key}): ${e.message || e}` };
     }
   },
 
@@ -1039,8 +1213,16 @@ OmniOS.register("ai", {
           this.logLine("sys", `패널 전환: ${this.PANEL_LABELS[k]}`);
         }
       }
-      for (const a of acts) await this.runAction(a);
-      this.speak(reply);
+      // 액션 실행 + 이중체크: 각 결과를 로그로, 실패는 음성으로도 보고
+      const fails = [];
+      for (const a of acts) {
+        const res = await this.runAction(a);
+        this.logLine("sys", `${res.ok ? "OK" : "실패"} · ${res.msg}`);
+        if (!res.ok) fails.push(res.msg);
+      }
+      this.speak(fails.length
+        ? `${reply} 다만 완료하지 못한 동작이 있습니다. ${fails.join(". ")}.`
+        : reply);
     } catch (e) {
       this.history.pop();
       this.logLine("sys", "응답 실패: 요청 시간 초과");

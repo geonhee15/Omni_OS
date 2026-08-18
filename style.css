@@ -3224,10 +3224,14 @@ input.vc-name {
 /* ---------- panel: OMNI_AI ---------- */
 .panel-ai { padding: 26px 30px; }
 .ai-wrap {
+  /* .panel.active(display:flex)의 유일한 아이템 — flex:1 없으면 내용 폭만
+     차지해 전체화면에서 오른쪽이 비는 문제가 생긴다 */
+  flex: 1;
   display: flex;
   gap: 18px;
   height: 100%;
   min-height: 0;
+  min-width: 0;
 }
 .ai-main {
   flex: 1;
