@@ -1182,6 +1182,19 @@ static NSString *OmniAIReadKey(void) {
     return key.length > 10 ? key : nil;
 }
 
+static NSString *OmniAIOpenAIKeyPath(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@".omni/openai.key"];
+}
+
+static NSString *OmniAIOpenAIKey(void) {
+    NSString *raw = [NSString stringWithContentsOfFile:OmniAIOpenAIKeyPath()
+                                              encoding:NSUTF8StringEncoding
+                                                 error:nil];
+    NSString *key = [raw stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return key.length > 10 ? key : nil;
+}
+
 // evaluateJavaScript 인라인용 JSON 문자열 (U+2028/2029 이스케이프)
 static NSString *OmniAIJSON(NSDictionary *obj) {
     NSData *d = [NSJSONSerialization dataWithJSONObject:obj options:0 error:nil];
@@ -1606,6 +1619,7 @@ static NSString *OmniAIFsValidate(NSString *path) {
     if ([cmd isEqualToString:@"ai.status"]) {
         [self deliverPayload:@{ @"ok" : @YES,
                                 @"key" : @(OmniAIReadKey() != nil),
+                                @"openai" : @(OmniAIOpenAIKey() != nil),
                                 @"neural" : @(OmniAINeuralAvailable()),
                                 @"listening" : @(self.aiListener.running) }
                        forId:msgId];
@@ -1625,15 +1639,18 @@ static NSString *OmniAIFsValidate(NSString *path) {
             [self deliverPayload:@{ @"ok" : @NO, @"error" : @"invalid key" } forId:msgId];
             return;
         }
+        BOOL isOpenAI = [a[@"provider"] isKindOfClass:[NSString class]]
+            && [a[@"provider"] isEqualToString:@"openai"];
+        NSString *keyPath = isOpenAI ? OmniAIOpenAIKeyPath() : OmniAIKeyPath();
         NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@".omni"];
         [NSFileManager.defaultManager createDirectoryAtPath:dir
                                 withIntermediateDirectories:YES attributes:nil error:nil];
         NSError *err = nil;
-        BOOL ok = [key writeToFile:OmniAIKeyPath() atomically:YES
+        BOOL ok = [key writeToFile:keyPath atomically:YES
                           encoding:NSUTF8StringEncoding error:&err];
         if (ok) {
             [NSFileManager.defaultManager setAttributes:@{ NSFilePosixPermissions : @0600 }
-                                           ofItemAtPath:OmniAIKeyPath() error:nil];
+                                           ofItemAtPath:keyPath error:nil];
         }
         [self deliverPayload:@{ @"ok" : @(ok),
                                 @"error" : err.localizedDescription ?: @"" } forId:msgId];
@@ -1852,26 +1869,71 @@ static NSString *OmniAIFsValidate(NSString *path) {
             return;
         }
 
-        // 클린 발화: say 원본을 그대로 반환 — JS가 변조 없이 바로 재생
         NSString *voice = [a[@"voice"] isKindOfClass:[NSString class]] ? a[@"voice"]
             : (voices[lang] ?: @"Yuna");
-        __weak AppDelegate *weakSelf = self;
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
-                [NSString stringWithFormat:@"omni_ai_tts_%@.wav", NSUUID.UUID.UUIDString]];
-            BOOL said = [weakSelf aiRunSay:text voice:voice rate:rate toFile:tmp];
-            NSData *wav = said ? [NSData dataWithContentsOfFile:tmp] : nil;
-            [NSFileManager.defaultManager removeItemAtPath:tmp error:nil];
-            if (wav.length == 0) {
-                [weakSelf deliverPayload:@{ @"ok" : @NO, @"error" : @"tts failed" }
-                                   forId:msgId];
-                return;
-            }
-            [weakSelf deliverPayload:@{ @"ok" : @YES, @"neural" : @NO,
-                                        @"wav" : [wav base64EncodedStringWithOptions:0] }
-                               forId:msgId];
-        });
+        // GPT 보이스 우선 (gpt-4o-mini-tts — 리얼타임 계열 음성, 다국어 자동) —
+        // 키가 없거나 요청이 실패하면 시스템 보이스로 폴백
+        NSString *oaiKey = OmniAIOpenAIKey();
+        if (oaiKey != nil) {
+            NSDictionary *body = @{
+                @"model" : @"gpt-4o-mini-tts",
+                @"voice" : @"ash",
+                @"input" : text,
+                @"instructions" :
+                    @"차분하고 명료한 관제 AI 어조. 담백한 보고체로, 과장 없이 또렷하게. "
+                    @"입력 텍스트의 언어 그대로 읽는다.",
+                @"response_format" : @"wav",
+            };
+            NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body
+                                                               options:0 error:nil];
+            NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
+                [NSURL URLWithString:@"https://api.openai.com/v1/audio/speech"]];
+            req.HTTPMethod = @"POST";
+            req.HTTPBody = bodyData;
+            req.timeoutInterval = 45;
+            [req setValue:@"application/json" forHTTPHeaderField:@"content-type"];
+            [req setValue:[@"Bearer " stringByAppendingString:oaiKey]
+                forHTTPHeaderField:@"authorization"];
+            __weak AppDelegate *weakSelf = self;
+            [[NSURLSession.sharedSession dataTaskWithRequest:req
+                completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
+                NSInteger status = [(NSHTTPURLResponse *)resp statusCode];
+                BOOL isWav = data.length > 1000
+                    && memcmp(data.bytes, "RIFF", 4) == 0;
+                if (error == nil && status == 200 && isWav) {
+                    [weakSelf deliverPayload:@{ @"ok" : @YES, @"neural" : @NO,
+                        @"engine" : @"gpt",
+                        @"wav" : [data base64EncodedStringWithOptions:0] } forId:msgId];
+                } else {
+                    [weakSelf aiSpeakSay:text voice:voice rate:rate msgId:msgId];
+                }
+            }] resume];
+            return;
+        }
+        [self aiSpeakSay:text voice:voice rate:rate msgId:msgId];
     }
+}
+
+// 시스템 보이스(say) 클린 발화 — GPT 보이스 폴백 겸 기본 경로
+- (void)aiSpeakSay:(NSString *)text voice:(NSString *)voice rate:(NSNumber *)rate
+             msgId:(NSNumber *)msgId {
+    __weak AppDelegate *weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"omni_ai_tts_%@.wav", NSUUID.UUID.UUIDString]];
+        BOOL said = [weakSelf aiRunSay:text voice:voice rate:rate toFile:tmp];
+        NSData *wav = said ? [NSData dataWithContentsOfFile:tmp] : nil;
+        [NSFileManager.defaultManager removeItemAtPath:tmp error:nil];
+        if (wav.length == 0) {
+            [weakSelf deliverPayload:@{ @"ok" : @NO, @"error" : @"tts failed" }
+                               forId:msgId];
+            return;
+        }
+        [weakSelf deliverPayload:@{ @"ok" : @YES, @"neural" : @NO,
+                                    @"engine" : @"say",
+                                    @"wav" : [wav base64EncodedStringWithOptions:0] }
+                           forId:msgId];
+    });
 }
 
 - (void)deliverPayload:(NSDictionary *)payload forId:(NSNumber *)msgId {

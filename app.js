@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.46.0",
+  version: "0.47.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -617,7 +617,7 @@ OmniOS.register("ai", {
     "VOICE CHANGER: 음성 학습 + 음색 전이 (DSP/신경망/ULTRA, 라이브 변조)",
     "ARC-SCAN: 자작 회전 라이다(ESP32+ToF 7ch) 실시간 3D 스캔 뷰어 — 평면도, 방 크기 추정, PLY 저장",
   ].join("\n"),
-  model: "claude-haiku-4-5-20251001",
+  model: "auto", // auto = 심층 질문만 Opus, 나머지 Haiku
   history: [],
   state: "idle", // idle | listening | thinking | speaking
   hasKey: false,
@@ -650,6 +650,11 @@ OmniOS.register("ai", {
       keyinput: document.getElementById("ai-keyinput"),
       keyfield: document.getElementById("ai-keyfield"),
       keysave: document.getElementById("ai-keysave"),
+      keystate2: document.getElementById("ai-keystate2"),
+      keybtn2: document.getElementById("ai-keybtn2"),
+      keyinput2: document.getElementById("ai-keyinput2"),
+      keyfield2: document.getElementById("ai-keyfield2"),
+      keysave2: document.getElementById("ai-keysave2"),
     };
     window.OmniAI = this; // 네이티브 STT 푸시 수신 (OmniAI._stt)
 
@@ -679,6 +684,14 @@ OmniOS.register("ai", {
     this.els.keysave.addEventListener("click", () => this.saveKey());
     this.els.keyfield.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.saveKey();
+    });
+    this.els.keybtn2.addEventListener("click", () => {
+      this.els.keyinput2.classList.toggle("open");
+      if (this.els.keyinput2.classList.contains("open")) this.els.keyfield2.focus();
+    });
+    this.els.keysave2.addEventListener("click", () => this.saveKey2());
+    this.els.keyfield2.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.saveKey2();
     });
 
     document.addEventListener("omni:panel", (e) => {
@@ -727,12 +740,15 @@ OmniOS.register("ai", {
       const r = await OmniNative.request("ai.status", null, 5000);
       this.hasKey = !!(r && r.key);
       this.neural = !!(r && r.neural);
+      this.hasOpenAI = !!(r && r.openai);
       this.setInd(this.els.indStt, "READY", "ok");
-      this.setInd(this.els.indTts, "CLEAN", "ok");
+      this.setInd(this.els.indTts, this.hasOpenAI ? "GPT" : "CLEAN", "ok");
       this.setInd(this.els.indLlm, this.hasKey ? "READY" : "NO KEY",
         this.hasKey ? "ok" : "err");
       this.els.keystate.textContent = this.hasKey ? "CONFIGURED" : "NOT SET";
       this.els.keystate.className = `ai-keystate ${this.hasKey ? "ok" : "err"}`;
+      this.els.keystate2.textContent = this.hasOpenAI ? "CONFIGURED" : "NOT SET";
+      this.els.keystate2.className = `ai-keystate ${this.hasOpenAI ? "ok" : "err"}`;
     } catch (e) {
       /* 브리지 타임아웃 — 표시 유지 */
     }
@@ -837,7 +853,26 @@ OmniOS.register("ai", {
       if (r && r.ok) {
         this.els.keyfield.value = "";
         this.els.keyinput.classList.remove("open");
-        this.logLine("sys", "API 키가 저장되었습니다.");
+        this.logLine("sys", "Claude API 키가 저장되었습니다.");
+        this.refreshStatus();
+      } else {
+        this.logLine("sys", `키 저장 실패: ${(r && r.error) || "unknown"}`);
+      }
+    } catch (e) {
+      this.logLine("sys", "키 저장 실패: 브리지 오류");
+    }
+  },
+
+  async saveKey2() {
+    const key = this.els.keyfield2.value.trim();
+    if (!key) return;
+    try {
+      const r = await OmniNative.request("ai.saveKey",
+        JSON.stringify({ key, provider: "openai" }), 8000);
+      if (r && r.ok) {
+        this.els.keyfield2.value = "";
+        this.els.keyinput2.classList.remove("open");
+        this.logLine("sys", "OpenAI 키가 저장되었습니다 — GPT 보이스 활성.");
         this.refreshStatus();
       } else {
         this.logLine("sys", `키 저장 실패: ${(r && r.error) || "unknown"}`);
@@ -980,6 +1015,14 @@ OmniOS.register("ai", {
         ? "음성 인식을 사용할 수 없습니다. (ko-KR 인식기 비활성)"
         : `음성 인식 오류: ${ev.detail || ""}`);
     }
+  },
+
+  // AUTO 라우팅: 조사·분석·사고가 필요한 질문만 Opus, 일상 대화는 Haiku.
+  // 라우팅 비용 없는 휴리스틱 — 심층 키워드 또는 긴 요청이면 심층으로 판단
+  isDeep(text) {
+    if (text.length > 90) return true;
+    return /분석|조사|비교|검토|리뷰|설계|계획|전략|정리해|요약해|알아봐|찾아봐|원인|왜 |어떻게 하면|개선|추천|아키텍처|디버깅|최적화|수정해|고쳐|바꿔|만들어|작성해|구현/
+      .test(text);
   },
 
   // ---- 파일 도구 실행기 (에이전트 루프에서 호출) ----
@@ -1265,13 +1308,20 @@ OmniOS.register("ai", {
       const system = `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}`
         + `\n\n[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
         + `\n\n[인터페이스 언어]\n${this.LANG_NAMES[this.lang] || "한국어"}`;
+      // AUTO 모드: 심층 질문만 Opus로 격상, 나머지는 Haiku (속도·비용 최적)
+      let chosenModel = this.model;
+      if (this.model === "auto") {
+        const deep = this.isDeep(text);
+        chosenModel = deep ? "claude-opus-5" : "claude-haiku-4-5-20251001";
+        if (deep) this.logLine("sys", "라우팅: OPUS (심층 질문)");
+      }
       // 에이전트 루프: 파일 도구 호출(stop=tool_use)이 나오면 실행 결과를
       // 돌려주며 반복 — 옴니가 스스로 파일을 나열/읽기/수정한 뒤 답한다
       const convo = this.history.map((m) => ({ role: m.role, content: m.content }));
       let r = null;
       for (let round = 0; round < 8; round++) {
         r = await OmniNative.request("ai.chat", JSON.stringify({
-          model: this.model,
+          model: chosenModel,
           system,
           messages: convo,
           tools: this.FS_TOOLS,
