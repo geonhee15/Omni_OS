@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.47.0",
+  version: "0.47.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -749,6 +749,10 @@ OmniOS.register("ai", {
       this.els.keystate.className = `ai-keystate ${this.hasKey ? "ok" : "err"}`;
       this.els.keystate2.textContent = this.hasOpenAI ? "CONFIGURED" : "NOT SET";
       this.els.keystate2.className = `ai-keystate ${this.hasOpenAI ? "ok" : "err"}`;
+      const note = document.querySelector("#panel-ai .ai-side-note");
+      if (note) {
+        note.innerHTML = `VOICE: ${this.hasOpenAI ? "GPT REALTIME-CLASS (ASH)" : "CLEAN SYSTEM TTS"}<br>LANG: KO JA ZH EN ES RU`;
+      }
     } catch (e) {
       /* 브리지 타임아웃 — 표시 유지 */
     }
@@ -1445,6 +1449,7 @@ OmniOS.register("ai", {
       }), 60000);
       if (!r || !r.ok || !r.wav) {
         this.setInd(this.els.indTts, "FAIL", "err");
+        this.logLine("sys", `발화 실패: ${(r && r.error) || "응답 없음"}`);
         this.setState("idle", "STANDBY", "");
         return;
       }
@@ -1453,6 +1458,7 @@ OmniOS.register("ai", {
       this.playRobot(x, sr);
     } catch (e) {
       this.setInd(this.els.indTts, "FAIL", "err");
+      this.logLine("sys", `발화 실패: ${e.message || e}`);
       this.setState("idle", "STANDBY", "");
     }
   },
@@ -1465,7 +1471,11 @@ OmniOS.register("ai", {
     let off = 12, sr = 22050, ch = 1, bits = 16, fmt = 1, data = null;
     while (off + 8 <= bytes.length) {
       const id = String.fromCharCode(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]);
-      const sz = dv.getUint32(off + 4, true);
+      let sz = dv.getUint32(off + 4, true);
+      // 스트리밍 생성 WAV(GPT TTS 등)는 크기 필드가 0xFFFFFFFF 자리표시자 —
+      // 실제 남은 바이트로 클램프해야 파싱이 터지지 않는다
+      const remaining = bytes.length - (off + 8);
+      if (sz > remaining) sz = remaining;
       if (id === "fmt ") {
         fmt = dv.getUint16(off + 8, true);
         ch = dv.getUint16(off + 10, true);
