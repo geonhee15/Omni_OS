@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.51.0",
+  version: "0.51.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -1662,7 +1662,8 @@ OmniOS.register("ai", {
       + "- 패널 열기 → open_panel. 앱 심층 동작(에디터·노트·파일 열기, 상태 변경, 스캔, 워처) → app_action.\n"
       + "- 조사·분석·코드·파일 내용 확인/수정 → ask_brain (Claude가 파일 도구로 실제 수행, 수 초 소요). 호출 전에 \"확인하겠습니다\" 같은 짧은 예고를 말해도 좋습니다.\n"
       + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.\n"
-      + `- 언어 규칙: ${this.langDirective()}\n\n`
+      + `- 언어 규칙: ${this.langDirective()}\n`
+      + "- 다국어 발음 규칙 (매우 중요): 어떤 언어를 말하든 반드시 그 언어의 원어민 발음과 억양으로 발화합니다. 한 응답 안에서 여러 언어를 오갈 때는 언어 전환 지점마다 아주 짧게 멈춘 뒤 완전히 새 언어의 원어민 모드로 전환합니다 — 직전 언어(특히 한국어)의 억양·리듬을 절대 다음 언어로 끌고 가지 않습니다. 프랑스어는 프랑스인처럼, 힌디어는 인도인처럼, 각 구간을 독립적으로 발음합니다. 여러 언어 시연을 요청받으면 언어당 한 문장으로 짧게 말합니다.\n\n"
       + `[장기 메모리 — 이전 세션 축적]\n${this._memory || "(비어 있음)"}`;
     this.rtSend({
       type: "session.update",
