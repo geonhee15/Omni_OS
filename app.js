@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.45.0",
+  version: "0.46.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -537,8 +537,63 @@ OmniOS.register("ai", {
     "  [[ACT:sp1.watch:pause|resume]] — 보안 워처 일시정지/재개",
     "  프로젝트·노트·파일 이름은 [실시간 상태 스냅샷]이나 사용자 발화에서 그대로 가져옵니다. 각 액션은 시스템이 실행 후 검증해 성공/실패를 로그로 보고하므로, 실패 처리를 걱정하지 말고 요청이 명확하면 태그를 붙입니다.",
     "- 현재 시각·날짜 질문은 패널을 열 필요 없이 [실시간 상태 스냅샷]의 현재 시각으로 바로 답합니다. 시스템/보안/프로젝트 현황도 마찬가지로 스냅샷 실측값으로 답합니다.",
-    "- 그 외 제어(파일 실행, 메일 확인 등)는 아직 미연동이므로 짧게 보고합니다.",
+    "- 파일 도구(list_dir/read_file/edit_file/write_file): ~/Desktop 아래 파일을 직접 나열·읽기·수정할 수 있습니다. 파일 개수·내용·코드에 대한 질문은 추측하거나 못 한다고 하지 말고 반드시 도구로 확인해 실측값으로 답합니다. 수정 요청은 read_file로 해당 부분을 먼저 확인하고 edit_file(정확 치환)로 수행한 뒤 무엇을 어떻게 바꿨는지 보고합니다.",
+    "- 경로 규칙: 프로젝트 폴더는 ~/Desktop/Important/Omni_OS/Projects/<프로젝트이름>/{3d,arduino,code,notes}, 노트 볼트는 ~/Desktop/Important/Omni_OS/Notes, 스캔 저장은 ~/Desktop/Important/Omni_OS/ARC-SCAN-SAVES. (~는 사용자 홈 — 절대 경로로 쓸 때는 /Users/geonhee)",
+    "- 그 외 제어(메일 확인, 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
+  // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
+  FS_TOOLS: [
+    {
+      name: "list_dir",
+      description: "디렉토리 내용을 나열한다 (~/Desktop 아래만 접근 가능). recursive=true면 하위 폴더까지 전부.",
+      input_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "절대 경로" },
+          recursive: { type: "boolean" },
+        },
+        required: ["path"],
+      },
+    },
+    {
+      name: "read_file",
+      description: "텍스트 파일을 읽는다. offset(시작 줄 번호, 0부터)과 limit(줄 수, 기본 400)으로 부분 읽기 가능.",
+      input_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          offset: { type: "number" },
+          limit: { type: "number" },
+        },
+        required: ["path"],
+      },
+    },
+    {
+      name: "edit_file",
+      description: "파일에서 old 문자열을 new로 치환한다. old는 파일 안에서 정확히 1번만 나타나야 하며(0회/다회면 실패), 들여쓰기까지 원문과 동일해야 한다.",
+      input_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          old: { type: "string" },
+          new: { type: "string" },
+        },
+        required: ["path", "old", "new"],
+      },
+    },
+    {
+      name: "write_file",
+      description: "파일을 통째로 쓴다 (덮어쓰기, 상위 폴더 자동 생성). 새 파일 생성에 사용.",
+      input_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+        },
+        required: ["path", "content"],
+      },
+    },
+  ],
   LOCALES: { ko: "ko-KR", ja: "ja-JP", zh: "zh-CN", en: "en-US", es: "es-ES", ru: "ru-RU" },
   LANG_NAMES: { ko: "한국어", ja: "일본어", zh: "중국어(간체)", en: "영어", es: "스페인어", ru: "러시아어" },
   PANEL_LABELS: {
@@ -927,6 +982,44 @@ OmniOS.register("ai", {
     }
   },
 
+  // ---- 파일 도구 실행기 (에이전트 루프에서 호출) ----
+  async execTool(name, input) {
+    try {
+      if (name === "list_dir") {
+        const r = await OmniNative.request("ai.fsList", JSON.stringify({
+          path: input.path, recursive: !!input.recursive,
+        }), 30000);
+        if (!r || !r.ok) return `오류: ${(r && r.error) || "fsList 실패"}`;
+        if (!r.entries.length) return "(비어 있음)";
+        const lines = r.entries.map((e) =>
+          `${e.dir ? "[D]" : "[F]"} ${e.path}${e.dir ? "" : ` (${e.size}B)`}`);
+        return (r.truncated ? "(항목 800개 초과 — 일부만 표시)\n" : "") + lines.join("\n");
+      }
+      if (name === "read_file") {
+        const r = await OmniNative.request("ai.fsRead", JSON.stringify({
+          path: input.path, offset: input.offset || 0, limit: input.limit || 400,
+        }), 30000);
+        if (!r || !r.ok) return `오류: ${(r && r.error) || "fsRead 실패"}`;
+        return `(총 ${r.totalLines}줄, ${r.offset}줄부터)\n${r.text}`;
+      }
+      if (name === "edit_file") {
+        const r = await OmniNative.request("ai.fsEdit", JSON.stringify({
+          path: input.path, old: input.old, new: input.new,
+        }), 30000);
+        return r && r.ok ? "수정 완료" : `오류: ${(r && r.error) || "fsEdit 실패"}`;
+      }
+      if (name === "write_file") {
+        const r = await OmniNative.request("ai.fsWrite", JSON.stringify({
+          path: input.path, content: input.content,
+        }), 30000);
+        return r && r.ok ? "저장 완료" : `오류: ${(r && r.error) || "fsWrite 실패"}`;
+      }
+      return `알 수 없는 도구: ${name}`;
+    } catch (e) {
+      return `도구 실행 실패: ${e.message || e}`;
+    }
+  },
+
   // ---- 앱 심층 액션 ([[ACT:...]] 태그 실행기) ----
   // 모든 액션은 실행 후 결과를 검증(이중체크)해 {ok, msg}를 반환한다.
   _norm(s) {
@@ -1172,11 +1265,34 @@ OmniOS.register("ai", {
       const system = `${this.PERSONA}\n\n[패널 안내]\n${this.PANEL_GUIDE}`
         + `\n\n[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
         + `\n\n[인터페이스 언어]\n${this.LANG_NAMES[this.lang] || "한국어"}`;
-      const r = await OmniNative.request("ai.chat", JSON.stringify({
-        model: this.model,
-        system,
-        messages: this.history,
-      }), 90000);
+      // 에이전트 루프: 파일 도구 호출(stop=tool_use)이 나오면 실행 결과를
+      // 돌려주며 반복 — 옴니가 스스로 파일을 나열/읽기/수정한 뒤 답한다
+      const convo = this.history.map((m) => ({ role: m.role, content: m.content }));
+      let r = null;
+      for (let round = 0; round < 8; round++) {
+        r = await OmniNative.request("ai.chat", JSON.stringify({
+          model: this.model,
+          system,
+          messages: convo,
+          tools: this.FS_TOOLS,
+          maxTokens: 4000,
+        }), 120000);
+        if (!r || !r.ok || r.stop !== "tool_use") break;
+        convo.push({ role: "assistant", content: r.content });
+        this.setInd(this.els.indLlm, "TOOLS", "busy");
+        const results = [];
+        for (const block of r.content) {
+          if (block.type !== "tool_use") continue;
+          this.logLine("sys", `도구 · ${block.name} ${(block.input && block.input.path) || ""}`);
+          const out = await this.execTool(block.name, block.input || {});
+          results.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: String(out).slice(0, 40000),
+          });
+        }
+        convo.push({ role: "user", content: results });
+      }
       if (!r || !r.ok) {
         const err = (r && r.error) || "unknown";
         this.history.pop(); // 실패한 user 턴 되돌림
@@ -1188,6 +1304,10 @@ OmniOS.register("ai", {
         this.setState("idle", "STANDBY", "");
         this.refreshStatus();
         return;
+      }
+      if (r.stop === "tool_use") {
+        // 8라운드 초과 — 마지막 응답의 텍스트라도 사용
+        this.logLine("sys", "도구 호출 한도(8회) 도달 — 중간 결과로 답변");
       }
       // [[OPEN:키]] / [[ACT:...]] 태그 추출 → 실행, 낭독/로그에서는 제거
       const opens = [];

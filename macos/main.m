@@ -1473,6 +1473,128 @@ static BOOL OmniAISeedAvailable(void) {
     return task.terminationStatus == 0 && size > 100;
 }
 
+// ---- OMNI_AI 파일 도구 — 에이전트 루프가 쓰는 파일 시스템 접근 ----
+// 사용자 승인 범위: ~/Desktop 아래 전체 (프로젝트·노트·작업 폴더 포함)
+
+static NSString *OmniAIFsValidate(NSString *path) {
+    NSString *std = path.stringByStandardizingPath;
+    if (std == nil) return nil;
+    NSString *root = [NSHomeDirectory() stringByAppendingPathComponent:@"Desktop"];
+    if ([std isEqualToString:root] || [std hasPrefix:[root stringByAppendingString:@"/"]]) {
+        return std;
+    }
+    return nil;
+}
+
+- (void)handleAIFs:(NSString *)cmd a:(NSDictionary *)a msgId:(NSNumber *)msgId {
+    NSString *reqPath = [a[@"path"] isKindOfClass:[NSString class]] ? a[@"path"] : nil;
+    NSString *path = reqPath ? OmniAIFsValidate(reqPath) : nil;
+    if (path == nil) {
+        [self deliverPayload:@{ @"ok" : @NO,
+            @"error" : @"path outside allowed root (~/Desktop)" } forId:msgId];
+        return;
+    }
+    NSFileManager *fm = NSFileManager.defaultManager;
+
+    if ([cmd isEqualToString:@"ai.fsList"]) {
+        BOOL recursive = [a[@"recursive"] boolValue];
+        NSMutableArray *out = [NSMutableArray array];
+        NSMutableArray *queue = [NSMutableArray arrayWithObject:path];
+        NSSet *skip = [NSSet setWithArray:@[ @"node_modules", @".git", @"venv",
+            @"dist", @"__pycache__", @".cache", @"seedvc" ]];
+        while (queue.count > 0 && out.count < 800) {
+            NSString *dir = queue.firstObject;
+            [queue removeObjectAtIndex:0];
+            for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+                if ([name hasPrefix:@"."]) continue;
+                NSString *full = [dir stringByAppendingPathComponent:name];
+                BOOL isDir = NO;
+                [fm fileExistsAtPath:full isDirectory:&isDir];
+                unsigned long long size = isDir ? 0
+                    : [[fm attributesOfItemAtPath:full error:nil] fileSize];
+                [out addObject:@{ @"path" : full, @"dir" : @(isDir), @"size" : @(size) }];
+                if (isDir && recursive && ![skip containsObject:name]) {
+                    [queue addObject:full];
+                }
+                if (out.count >= 800) break;
+            }
+        }
+        [self deliverPayload:@{ @"ok" : @YES, @"entries" : out,
+                                @"truncated" : @(out.count >= 800) } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.fsRead"]) {
+        NSString *text = [NSString stringWithContentsOfFile:path
+                                                   encoding:NSUTF8StringEncoding error:nil];
+        if (text == nil) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"unreadable (binary or missing)" }
+                           forId:msgId];
+            return;
+        }
+        NSArray *lines = [text componentsSeparatedByString:@"\n"];
+        NSInteger offset = [a[@"offset"] isKindOfClass:[NSNumber class]]
+            ? [a[@"offset"] integerValue] : 0;
+        NSInteger limit = [a[@"limit"] isKindOfClass:[NSNumber class]]
+            ? [a[@"limit"] integerValue] : 400;
+        offset = MAX(0, MIN(offset, (NSInteger)lines.count));
+        limit = MAX(1, MIN(limit, 1200));
+        NSRange r = NSMakeRange(offset, MIN(limit, (NSInteger)lines.count - offset));
+        NSString *slice = [[lines subarrayWithRange:r] componentsJoinedByString:@"\n"];
+        if (slice.length > 80000) slice = [slice substringToIndex:80000];
+        [self deliverPayload:@{ @"ok" : @YES, @"text" : slice,
+                                @"totalLines" : @(lines.count),
+                                @"offset" : @(offset) } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.fsWrite"]) {
+        NSString *content = [a[@"content"] isKindOfClass:[NSString class]] ? a[@"content"] : nil;
+        if (content == nil) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"no content" } forId:msgId];
+            return;
+        }
+        [fm createDirectoryAtPath:path.stringByDeletingLastPathComponent
+      withIntermediateDirectories:YES attributes:nil error:nil];
+        NSError *err = nil;
+        BOOL ok = [content writeToFile:path atomically:YES
+                              encoding:NSUTF8StringEncoding error:&err];
+        [self deliverPayload:@{ @"ok" : @(ok),
+            @"error" : err.localizedDescription ?: @"" } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.fsEdit"]) {
+        NSString *oldT = [a[@"old"] isKindOfClass:[NSString class]] ? a[@"old"] : nil;
+        NSString *newT = [a[@"new"] isKindOfClass:[NSString class]] ? a[@"new"] : @"";
+        NSString *text = [NSString stringWithContentsOfFile:path
+                                                   encoding:NSUTF8StringEncoding error:nil];
+        if (text == nil || oldT.length == 0) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"file unreadable or empty old" }
+                           forId:msgId];
+            return;
+        }
+        // 정확 일치 1회 치환 — 0회/다회면 실패 (엉뚱한 곳 수정 방지)
+        NSUInteger count = 0, pos = 0;
+        while (YES) {
+            NSRange found = [text rangeOfString:oldT options:0
+                                          range:NSMakeRange(pos, text.length - pos)];
+            if (found.location == NSNotFound) break;
+            count++;
+            pos = found.location + found.length;
+            if (count > 1) break;
+        }
+        if (count != 1) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : count == 0
+                ? @"old text not found" : @"old text matches multiple places" } forId:msgId];
+            return;
+        }
+        NSString *updated = [text stringByReplacingOccurrencesOfString:oldT
+                                                            withString:newT
+                                                               options:0
+                                                                 range:NSMakeRange(0, text.length)];
+        NSError *err = nil;
+        BOOL ok = [updated writeToFile:path atomically:YES
+                              encoding:NSUTF8StringEncoding error:&err];
+        [self deliverPayload:@{ @"ok" : @(ok),
+            @"error" : err.localizedDescription ?: @"" } forId:msgId];
+    }
+}
+
 - (void)handleAI:(NSString *)cmd arg:(NSString *)arg msgId:(NSNumber *)msgId {
     NSDictionary *a = nil;
     if (arg != nil) {
@@ -1547,6 +1669,9 @@ static BOOL OmniAISeedAvailable(void) {
         [self.aiListener cancel];
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
 
+    } else if ([cmd hasPrefix:@"ai.fs"]) {
+        [self handleAIFs:cmd a:a msgId:msgId];
+
     } else if ([cmd isEqualToString:@"ai.chat"]) {
         NSString *key = OmniAIReadKey();
         if (key == nil) {
@@ -1557,10 +1682,14 @@ static BOOL OmniAISeedAvailable(void) {
             ? a[@"model"] : @"claude-haiku-4-5-20251001";
         NSString *system = [a[@"system"] isKindOfClass:[NSString class]] ? a[@"system"] : @"";
         NSArray *messages = [a[@"messages"] isKindOfClass:[NSArray class]] ? a[@"messages"] : @[];
-        NSDictionary *body = @{ @"model" : model,
-                                @"max_tokens" : @400,
-                                @"system" : system,
-                                @"messages" : messages };
+        NSNumber *maxTok = [a[@"maxTokens"] isKindOfClass:[NSNumber class]]
+            ? a[@"maxTokens"] : @400;
+        NSMutableDictionary *body = [@{ @"model" : model,
+                                        @"max_tokens" : maxTok,
+                                        @"system" : system,
+                                        @"messages" : messages } mutableCopy];
+        // 파일 도구 등 tool use 지원 — 도구 정의는 JS가 전달
+        if ([a[@"tools"] isKindOfClass:[NSArray class]]) body[@"tools"] = a[@"tools"];
         NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
         if (bodyData == nil) {
             [self deliverPayload:@{ @"ok" : @NO, @"error" : @"bad request" } forId:msgId];
@@ -1597,15 +1726,19 @@ static BOOL OmniAISeedAvailable(void) {
                 return;
             }
             NSMutableString *text = [NSMutableString string];
-            if ([r[@"content"] isKindOfClass:[NSArray class]]) {
-                for (NSDictionary *item in r[@"content"]) {
-                    if ([item isKindOfClass:[NSDictionary class]]
-                        && [item[@"text"] isKindOfClass:[NSString class]]) {
-                        [text appendString:item[@"text"]];
-                    }
+            NSArray *content = [r[@"content"] isKindOfClass:[NSArray class]]
+                ? r[@"content"] : @[];
+            for (NSDictionary *item in content) {
+                if ([item isKindOfClass:[NSDictionary class]]
+                    && [item[@"text"] isKindOfClass:[NSString class]]) {
+                    [text appendString:item[@"text"]];
                 }
             }
-            [self deliverPayload:@{ @"ok" : @YES, @"text" : text } forId:msgId];
+            // 에이전트 루프용: content 블록 배열 + stop_reason 그대로 전달
+            [self deliverPayload:@{ @"ok" : @YES,
+                                    @"text" : text,
+                                    @"content" : content,
+                                    @"stop" : r[@"stop_reason"] ?: @"" } forId:msgId];
         }] resume];
 
     } else if ([cmd isEqualToString:@"ai.speak"]) {

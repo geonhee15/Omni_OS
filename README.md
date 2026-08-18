@@ -59,6 +59,10 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
   한자/키릴/라틴 스크립트 분석)로 LANG 토글과 응답 언어가 어긋나도 ("영어로 말해봐")
   항상 맞는 언어의 보이스로 낭독. 심층 액션(전 패널 레지스트리 + 실행 후 검증·실패 음성 보고): `proj.editor`(에디터+도구), `proj.status`(상태 변경), `notes.open`(노트 검색·생성), `ce.open`(파일 재귀 검색), `arc.connect/disconnect`, `arc.scan:start·stop·center`, `sp1.watch:pause·resume` —
   "아크스캔 3D 에디터 열어줘" 같은 패널 내부 체인 실행, 시각·시스템 현황은 스냅샷으로 즉답.
+  **파일 도구 에이전트**: Claude tool use 기반 4종 도구(list_dir·read_file·edit_file·write_file,
+  `~/Desktop` 아래 전체 — 네이티브 경로 검증)로 옴니가 스스로 파일을 나열·읽기·수정 —
+  "3d 모델 몇 개야"는 직접 세서 답하고, "이 파일 이 부분 고쳐줘"는 읽고 정확 치환(유일
+  일치 강제)으로 수정 후 보고. 도구 호출은 라운드당 로그 표시, 최대 8라운드.
 - **CLOCK** — 중앙 디지털 시계 (시간 / 날짜 / 업타임), 회전 링 HUD
 - **RENDER_3D** — three.js 기반 3D 모델 뷰어. STL·OBJ/MTL·GLTF/GLB·FBX·PLY·3MF·DAE에 더해
   **STEP/IGES/BREP**(OpenCascade WASM, 원본 CAD 색상·조립 좌표 유지)를
