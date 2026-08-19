@@ -35,9 +35,19 @@ for size in 16 32 64 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
-# 5. ad-hoc 서명 (확장 속성이 남아 있으면 서명이 거부되므로 먼저 제거)
+# 5. 서명 (확장 속성이 남아 있으면 서명이 거부되므로 먼저 제거)
+# 고정 인증서("Omni Dev Signing", scripts/setup_signing.sh로 1회 생성)가 있으면
+# 그걸로 서명 — TCC 권한(전체 디스크 접근·손쉬운 접근)이 리빌드에도 유지된다.
+# 없으면 ad-hoc 폴백 (권한이 빌드마다 풀림)
 xattr -cr "$APP"
-codesign --force --deep --sign - "$APP"
+SIGN_ID="Omni Dev Signing"
+if security find-identity -p codesigning -v 2>/dev/null | grep -q "$SIGN_ID"; then
+  codesign --force --deep --sign "$SIGN_ID" "$APP"
+  echo "서명: $SIGN_ID (고정 신원 — TCC 권한 유지)"
+else
+  codesign --force --deep --sign - "$APP"
+  echo "서명: ad-hoc (권한이 리빌드마다 풀림 — scripts/setup_signing.sh 권장)"
+fi
 
 # 6. dist/로 복사
 rm -rf "$DEST"

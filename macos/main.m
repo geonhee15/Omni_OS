@@ -1539,11 +1539,25 @@ static BOOL OmniAISeedAvailable(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *dbPath = [NSHomeDirectory() stringByAppendingPathComponent:
             @"Library/Group Containers/group.com.apple.usernoted/db2/db"];
+        // 진단: 파일 접근 자체가 막히면 TCC(전체 디스크 접근) 문제,
+        // 열리는데 sqlite가 실패하면 다른 원인 — 구분해서 보고
+        errno = 0;
+        if (access(dbPath.UTF8String, R_OK) != 0) {
+            int e = errno;
+            [self deliverPayload:@{ @"ok" : @NO,
+                @"error" : (e == EPERM || e == EACCES) ? @"FDA_REQUIRED"
+                    : [NSString stringWithFormat:@"DB_ACCESS: %s", strerror(e)] }
+                           forId:msgId];
+            return;
+        }
         sqlite3 *db = NULL;
         if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READONLY, NULL)
             != SQLITE_OK) {
+            NSString *msg = db != NULL
+                ? [NSString stringWithFormat:@"SQLITE: %s", sqlite3_errmsg(db)]
+                : @"SQLITE: open failed";
             if (db != NULL) sqlite3_close(db);
-            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"FDA_REQUIRED" } forId:msgId];
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : msg } forId:msgId];
             return;
         }
         // Core Data 타임스탬프(2001-01-01 기준 초) 컷오프
