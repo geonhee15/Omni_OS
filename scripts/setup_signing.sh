@@ -32,9 +32,12 @@ extendedKeyUsage=critical,codeSigning
 basicConstraints=critical,CA:false
 EOF
 
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
+# macOS 내장 openssl(LibreSSL) 강제 — Homebrew OpenSSL 3의 새 PKCS12 형식은
+# 키체인 import가 못 읽는다 (MAC verification failed)
+OSSL=/usr/bin/openssl
+"$OSSL" req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
   -days 3650 -nodes -config cfg
-openssl pkcs12 -export -out id.p12 -inkey key.pem -in cert.pem -passout pass:omnitemp
+"$OSSL" pkcs12 -export -out id.p12 -inkey key.pem -in cert.pem -passout pass:omnitemp
 
 # 로그인 키체인에 개인키+인증서 등록 (codesign이 쓸 수 있게)
 security import id.p12 -k ~/Library/Keychains/login.keychain-db \
