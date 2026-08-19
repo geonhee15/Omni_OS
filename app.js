@@ -541,7 +541,8 @@ OmniOS.register("ai", {
     "- 현재 시각·날짜 질문은 패널을 열 필요 없이 [실시간 상태 스냅샷]의 현재 시각으로 바로 답합니다. 시스템/보안/프로젝트 현황도 마찬가지로 스냅샷 실측값으로 답합니다.",
     "- 파일 도구(list_dir/read_file/edit_file/write_file): ~/Desktop 아래 파일을 직접 나열·읽기·수정할 수 있습니다. 파일 개수·내용·코드에 대한 질문은 추측하거나 못 한다고 하지 말고 반드시 도구로 확인해 실측값으로 답합니다. 수정 요청은 read_file로 해당 부분을 먼저 확인하고 edit_file(정확 치환)로 수행한 뒤 무엇을 어떻게 바꿨는지 보고합니다.",
     "- 경로 규칙: 프로젝트 폴더는 ~/Desktop/Important/Omni_OS/Projects/<프로젝트이름>/{3d,arduino,code,notes}, 노트 볼트는 ~/Desktop/Important/Omni_OS/Notes, 스캔 저장은 ~/Desktop/Important/Omni_OS/ARC-SCAN-SAVES. (~는 사용자 홈 — 절대 경로로 쓸 때는 /Users/geonhee)",
-    "- 그 외 제어(메일 확인, 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
+    "- 카카오톡·앱 알림 확인: \"카톡 온 거 확인해줘\" 류 요청은 check_notifications 도구(app:'kakao')로 최근 알림을 읽어 보낸 사람과 내용을 간결히 요약 보고합니다. 다른 앱 알림도 app을 비우면 전체 조회됩니다. 알림이 떴던 메시지만 보이는 한계를 알고 있습니다. 메시지 발신은 미지원입니다.",
+    "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
   // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
   FS_TOOLS: [
@@ -593,6 +594,18 @@ OmniOS.register("ai", {
           content: { type: "string" },
         },
         required: ["path", "content"],
+      },
+    },
+    {
+      name: "check_notifications",
+      description: "최근 macOS 알림을 읽는다 — 카카오톡 메시지 확인 등. app에 'kakao'를 주면 카카오톡만, 비우면 전체 앱(지메일 등 포함). hours는 최근 N시간(기본 24). 결과 각 줄: [시각] (앱) 보낸사람/방: 내용 미리보기. 알림이 떴던 메시지만 보인다(음소거한 방 제외).",
+      input_schema: {
+        type: "object",
+        properties: {
+          app: { type: "string", description: "'kakao' 또는 번들ID 일부, 비우면 전체" },
+          hours: { type: "number" },
+        },
+        required: [],
       },
     },
     {
@@ -1108,6 +1121,23 @@ OmniOS.register("ai", {
       if (name === "save_memory") {
         await this.saveMemory(String(input.content || ""));
         return "장기 메모리 저장 완료";
+      }
+      if (name === "check_notifications") {
+        const r = await OmniNative.request("ai.notifRecent", JSON.stringify({
+          bundle: input.app || "", hours: input.hours || 24,
+        }), 20000);
+        if (!r || !r.ok) {
+          return (r && r.error) === "FDA_REQUIRED"
+            ? "오류: 알림을 읽으려면 전체 디스크 접근 권한이 필요합니다. 사용자에게 이렇게 안내하라: 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에서 Omni OS를 켜고 앱을 재시작해 주십시오."
+            : `오류: ${(r && r.error) || "알림 조회 실패"}`;
+        }
+        if (!r.items || !r.items.length) return "(해당 기간 알림 없음)";
+        return r.items.map((i) => {
+          const d = new Date(i.ts * 1000);
+          const t = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+          const app = /kakao/i.test(i.app) ? "카톡" : i.app.split(".").pop();
+          return `[${t}] (${app}) ${i.title}${i.subtitle ? ` / ${i.subtitle}` : ""}: ${i.body}`;
+        }).join("\n");
       }
       return `알 수 없는 도구: ${name}`;
     } catch (e) {

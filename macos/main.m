@@ -5,6 +5,7 @@
 #import "sysmon.h"
 #import "code_editor.h"
 #import "omni_ai.h"
+#import <sqlite3.h>
 #import <CommonCrypto/CommonDigest.h>
 
 // ── 오너 잠금 ──
@@ -1527,6 +1528,69 @@ static BOOL OmniAISeedAvailable(void) {
     }];
 }
 
+// ---- OMNI_AI 알림 센터 리더 — 카톡 등 앱 알림 확인 (전체 디스크 접근 필요) ----
+// 카톡은 개인 메시지 공식 API가 없어, 맥 알림 센터 DB(usernoted)의
+// 보낸사람+미리보기를 읽는 방식이 유일하게 견고하다. 읽기 전용.
+
+- (void)handleAINotif:(NSDictionary *)a msgId:(NSNumber *)msgId {
+    NSString *bundle = [a[@"bundle"] isKindOfClass:[NSString class]] ? a[@"bundle"] : nil;
+    double hours = [a[@"hours"] isKindOfClass:[NSNumber class]]
+        ? [a[@"hours"] doubleValue] : 24.0;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *dbPath = [NSHomeDirectory() stringByAppendingPathComponent:
+            @"Library/Group Containers/group.com.apple.usernoted/db2/db"];
+        sqlite3 *db = NULL;
+        if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READONLY, NULL)
+            != SQLITE_OK) {
+            if (db != NULL) sqlite3_close(db);
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"FDA_REQUIRED" } forId:msgId];
+            return;
+        }
+        // Core Data 타임스탬프(2001-01-01 기준 초) 컷오프
+        double cutoff = [NSDate.date timeIntervalSinceReferenceDate] - hours * 3600.0;
+        const char *sql =
+            "SELECT app.identifier, record.delivered_date, record.data "
+            "FROM record JOIN app ON record.app_id = app.app_id "
+            "WHERE record.delivered_date > ? ORDER BY record.delivered_date DESC LIMIT 200";
+        sqlite3_stmt *stmt = NULL;
+        NSMutableArray *out = [NSMutableArray array];
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_double(stmt, 1, cutoff);
+            while (sqlite3_step(stmt) == SQLITE_ROW && out.count < 100) {
+                const char *ident = (const char *)sqlite3_column_text(stmt, 0);
+                NSString *app = ident ? [NSString stringWithUTF8String:ident] : @"";
+                if (bundle.length > 0
+                    && ![app.lowercaseString containsString:bundle.lowercaseString]) {
+                    continue;
+                }
+                double ts = sqlite3_column_double(stmt, 1);
+                const void *blob = sqlite3_column_blob(stmt, 2);
+                int blobLen = sqlite3_column_bytes(stmt, 2);
+                NSString *title = @"", *subtitle = @"", *body = @"";
+                if (blob != NULL && blobLen > 0) {
+                    NSData *data = [NSData dataWithBytes:blob length:blobLen];
+                    NSDictionary *plist = [NSPropertyListSerialization
+                        propertyListWithData:data options:NSPropertyListImmutable
+                                      format:NULL error:NULL];
+                    NSDictionary *req = [plist[@"req"] isKindOfClass:[NSDictionary class]]
+                        ? plist[@"req"] : @{};
+                    title = [req[@"titl"] isKindOfClass:[NSString class]] ? req[@"titl"] : @"";
+                    subtitle = [req[@"subt"] isKindOfClass:[NSString class]] ? req[@"subt"] : @"";
+                    body = [req[@"body"] isKindOfClass:[NSString class]] ? req[@"body"] : @"";
+                }
+                if (title.length == 0 && body.length == 0) continue;
+                [out addObject:@{ @"app" : app,
+                                  @"ts" : @(ts + NSTimeIntervalSince1970),
+                                  @"title" : title, @"subtitle" : subtitle,
+                                  @"body" : body }];
+            }
+            sqlite3_finalize(stmt);
+        }
+        sqlite3_close(db);
+        [self deliverPayload:@{ @"ok" : @YES, @"items" : out } forId:msgId];
+    });
+}
+
 // ---- OMNI_AI 파일 도구 — 에이전트 루프가 쓰는 파일 시스템 접근 ----
 // 사용자 승인 범위: ~/Desktop 아래 전체 (프로젝트·노트·작업 폴더 포함)
 
@@ -1762,6 +1826,9 @@ static NSString *OmniAIFsValidate(NSString *path) {
         [self.aiRtTask cancel];
         self.aiRtTask = nil;
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.notifRecent"]) {
+        [self handleAINotif:a msgId:msgId];
 
     } else if ([cmd hasPrefix:@"ai.fs"]) {
         [self handleAIFs:cmd a:a msgId:msgId];
