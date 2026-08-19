@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.52.0",
+  version: "0.52.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -1653,6 +1653,18 @@ OmniOS.register("ai", {
         required: ["spec"],
       },
     },
+    {
+      type: "function",
+      name: "check_notifications",
+      description: "최근 macOS 알림 확인 — \"카톡 온 거 확인해줘\" 등 메시지/알림 질문에 사용. app:'kakao'면 카카오톡만, 비우면 전체 앱. hours 기본 24. 결과를 보낸 사람과 내용 중심으로 간결하게 요약해 말한다. 권한 오류 응답이 오면 그 안내를 그대로 전한다.",
+      parameters: {
+        type: "object",
+        properties: {
+          app: { type: "string" },
+          hours: { type: "number" },
+        },
+      },
+    },
   ],
 
   rtSend(obj) {
@@ -1916,6 +1928,9 @@ OmniOS.register("ai", {
       const res = await this.runAction(args.spec || "");
       this.logLine("sys", `${res.ok ? "OK" : "실패"} · ${res.msg}`);
       output = res.msg;
+    } else if (name === "check_notifications") {
+      this.logLine("sys", `도구 · check_notifications ${(args.app || "전체")}`);
+      output = await this.execTool("check_notifications", args || {});
     } else {
       output = `unknown tool: ${name}`;
     }
