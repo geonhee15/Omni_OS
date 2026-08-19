@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.52.1",
+  version: "0.53.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -528,7 +528,7 @@ OmniOS.register("ai", {
     "- 언어: 한국어·영어·일본어·중국어·스페인어·프랑스어·독일어·이탈리아어·포르투갈어·네덜란드어·터키어·힌디어·인도네시아어 총 13개 언어를 구사합니다. 어떤 언어로 답할지는 [인터페이스 언어] 지시를 그대로 따릅니다 (AUTO = 기본 한국어 + 요구 시 전환 / LOCK = 해당 언어만, 다른 언어 요구 시 안내 후 lang.auto 실행). 존댓말·호칭 금지 규칙은 모든 언어에서 동일하게 적용합니다(정중한 어조, 호칭 없음).",
     "- 장기 메모리: [장기 메모리] 블록은 이전 세션들에서 축적된 사실입니다. 대화에 자연스럽게 활용합니다. 사용자에 대한 새로운 사실·선호·진행 중인 작업을 알게 되거나 \"기억해\"라는 요청을 받으면 save_memory 도구로 저장합니다 — content에는 기존 메모리와 병합한 최신 통합본 전체(한국어 불릿, 2000자 이내)를 넣습니다.",
     "- 앱 조작: 실행 요청이 명확할 때 짧은 확인 문장 뒤에 아래 태그를 붙입니다. 태그는 내부 명령이라 낭독되지 않으며, 여러 개 이어 붙일 수 있습니다.",
-    "  [[OPEN:키]] — 패널 열기. 키: cmd(커맨드 브리지/홈), ai(옴니 AI), clock(시계), proj(프로젝트), sys(시스템 모니터), sp1(보안 프로토콜), r3d(3D 뷰어), ino(아두이노), ce(코드 에디터), notes(노트), voice(보이스 체인저), arc(아크스캔)",
+    "  [[OPEN:키]] — 패널 열기. 키: cmd(커맨드 브리지/홈), ai(옴니 AI), notif(알림), clock(시계), proj(프로젝트), sys(시스템 모니터), sp1(보안 프로토콜), r3d(3D 뷰어), ino(아두이노), ce(코드 에디터), notes(노트), voice(보이스 체인저), arc(아크스캔)",
     "  [[ACT:proj.editor:프로젝트이름:도구]] — 프로젝트 전용 에디터 열기 + 도구 장착. 도구: r3d(3D)/ino(아두이노)/ce(코드)/notes(노트), 생략 가능. 예: \"아크스캔 3D 에디터 열어줘\" → [[ACT:proj.editor:ARC-SCAN:r3d]]",
     "  [[ACT:proj.status:프로젝트이름:상태]] — 프로젝트 상태 변경 (planning/active/paused/done)",
     "  [[ACT:notes.open:노트이름]] — NOTES 볼트에서 노트 검색해 열기 (없으면 새로 생성). 예: \"노트에서 idea 열어줘\" → [[ACT:notes.open:idea]]",
@@ -625,7 +625,8 @@ OmniOS.register("ai", {
     nl: "네덜란드어", tr: "터키어", hi: "힌디어", id: "인도네시아어",
   },
   PANEL_LABELS: {
-    cmd: "COMMAND BRIDGE", ai: "OMNI_AI", clock: "CLOCK", proj: "PROJECTS",
+    cmd: "COMMAND BRIDGE", ai: "OMNI_AI", notif: "NOTIFICATIONS",
+    clock: "CLOCK", proj: "PROJECTS",
     sys: "SYSTEM MONITOR", sp1: "SECURITY-PROTOCOL-1", r3d: "RENDER_3D",
     ino: "ARDUINO IDE", ce: "CODE EDITOR", notes: "NOTES",
     voice: "VOICE CHANGER", arc: "ARC-SCAN",
@@ -633,7 +634,8 @@ OmniOS.register("ai", {
   lang: "auto", // auto = 기본 한국어 + 요구 시 실시간 전환, 그 외 = 해당 언어 잠금
   PANEL_GUIDE: [
     "COMMAND BRIDGE: 홈 상황실 — 시스템 게이지, SP-1 방어 상태, 활성 프로젝트 홀로그램, 미션 목표, 최근 커밋 티커",
-    "OMNI_AI: 이 음성 인터페이스 (한국어 STT + 로봇 보이스)",
+    "OMNI_AI: 이 음성 인터페이스",
+    "NOTIFICATIONS: 앱 알림 수집 패널 — 카카오톡 메시지 알림 피드 (자동 갱신, 새 알림 하이라이트)",
     "CLOCK: 시계/업타임 HUD",
     "PROJECTS: 프로젝트 등록부 — 상태/우선순위/목표일 관리, 패널 연결, 전용 에디터",
     "SYSTEM MONITOR: CPU/GPU/메모리/디스크/네트워크/배터리 실시간 대시보드",
@@ -1131,6 +1133,9 @@ OmniOS.register("ai", {
             ? "오류: 알림을 읽으려면 전체 디스크 접근 권한이 필요합니다. 사용자에게 이렇게 안내하라: 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에서 Omni OS를 켜고 앱을 재시작해 주십시오."
             : `오류: ${(r && r.error) || "알림 조회 실패"}`;
         }
+        // 알림 확인 요청 → NOTIFICATIONS 패널로 자동 전환 (최신 항목 하이라이트)
+        const notif = OmniOS.modules.notif;
+        if (notif) notif.showFromAI();
         if (!r.items || !r.items.length) return "(해당 기간 알림 없음)";
         return r.items.map((i) => {
           const d = new Date(i.ts * 1000);
@@ -1636,7 +1641,7 @@ OmniOS.register("ai", {
     {
       type: "function",
       name: "open_panel",
-      description: "Switch the app to a panel. key: cmd(home)/ai/clock/proj/sys/sp1/r3d/ino/ce/notes/voice/arc",
+      description: "Switch the app to a panel. key: cmd(home)/ai/notif(notifications)/clock/proj/sys/sp1/r3d/ino/ce/notes/voice/arc",
       parameters: {
         type: "object",
         properties: { key: { type: "string" } },
@@ -2032,6 +2037,134 @@ OmniOS.register("ai", {
       }
       g.globalAlpha = 1;
     }
+  },
+});
+
+// ---------- module: NOTIFICATIONS (앱 알림 수집 — 현재 카카오톡 섹션) ----------
+OmniOS.register("notif", {
+  _items: [],
+  _lastSeen: 0,
+  _seenTimer: null,
+  _err: null,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      panel: $("panel-notif"),
+      list: $("nf-kakao-list"),
+      count: $("nf-kakao-count"),
+      updated: $("nf-updated"),
+      refresh: $("nf-refresh"),
+      dot: $("nf-nav-dot"),
+    };
+    this._lastSeen = Number(localStorage.getItem("omni.notif.seen") || 0);
+    this.els.refresh.addEventListener("click", () => this.refresh());
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "notif") {
+        this.refresh();
+        // 하이라이트를 잠깐 보여준 뒤 읽음 처리
+        clearTimeout(this._seenTimer);
+        this._seenTimer = setTimeout(() => this.markSeen(), 10000);
+      } else {
+        clearTimeout(this._seenTimer);
+        if (!this.els.panel.classList.contains("active")) this.markSeen();
+      }
+    });
+    if (OmniNative.available) {
+      // 배경 폴링: 패널이 닫혀 있어도 새 알림을 nav 점으로 표시
+      setInterval(() => this.refresh(true), 60000);
+      // 패널이 보이는 동안엔 더 자주
+      setInterval(() => {
+        if (this.els.panel.classList.contains("active")) this.refresh(true);
+      }, 15000);
+      setTimeout(() => this.refresh(true), 5000);
+    }
+  },
+
+  async refresh(silent) {
+    if (!OmniNative.available) {
+      this._err = "브라우저 개발 모드 — 알림은 앱에서만 조회됩니다";
+      this.render();
+      return;
+    }
+    try {
+      const r = await OmniNative.request("ai.notifRecent",
+        JSON.stringify({ bundle: "kakao", hours: 48 }), 20000);
+      if (!r || !r.ok) {
+        this._err = (r && r.error) === "FDA_REQUIRED"
+          ? "전체 디스크 접근 권한 필요 — 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에서 Omni OS를 허용한 뒤 앱을 재시작하십시오."
+          : `조회 실패: ${(r && r.error) || "unknown"}`;
+      } else {
+        this._err = null;
+        this._items = r.items || [];
+        this.els.updated.textContent =
+          `UPDATED ${new Date().toTimeString().slice(0, 5)}`;
+      }
+    } catch (e) {
+      if (!silent) this._err = "조회 실패: 브리지 오류";
+    }
+    this.render();
+  },
+
+  render() {
+    const list = this.els.list;
+    list.textContent = "";
+    if (this._err) {
+      const d = document.createElement("div");
+      d.className = "nf-err";
+      d.textContent = this._err;
+      list.appendChild(d);
+      this.els.count.textContent = "0";
+      this.els.dot.classList.remove("on");
+      return;
+    }
+    this.els.count.textContent = String(this._items.length);
+    if (!this._items.length) {
+      const d = document.createElement("div");
+      d.className = "nf-empty";
+      d.textContent = "NO NOTIFICATIONS (최근 48시간)";
+      list.appendChild(d);
+      this.els.dot.classList.remove("on");
+      return;
+    }
+    let hasNew = false;
+    const today = new Date().toDateString();
+    for (const it of this._items) {
+      const isNew = it.ts * 1000 > this._lastSeen;
+      if (isNew) hasNew = true;
+      const row = document.createElement("div");
+      row.className = `nf-item${isNew ? " new" : ""}`;
+      const d = new Date(it.ts * 1000);
+      const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      const t = document.createElement("span");
+      t.className = "t";
+      t.textContent = d.toDateString() === today
+        ? hm : `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+      const who = document.createElement("span");
+      who.className = "who";
+      who.textContent = it.title + (it.subtitle ? ` · ${it.subtitle}` : "");
+      const msg = document.createElement("span");
+      msg.className = "msg";
+      msg.textContent = it.body;
+      row.append(t, who, msg);
+      list.appendChild(row);
+    }
+    // nav 점: 패널이 안 보일 때만 (보고 있는 중엔 하이라이트가 대신함)
+    this.els.dot.classList.toggle("on",
+      hasNew && !this.els.panel.classList.contains("active"));
+  },
+
+  markSeen() {
+    if (!this._items.length) return;
+    this._lastSeen = Date.now();
+    localStorage.setItem("omni.notif.seen", String(this._lastSeen));
+    this.render();
+  },
+
+  // 옴니가 "카톡 확인" 도구를 실행했을 때 — 패널로 점프 + 최신 하이라이트
+  showFromAI() {
+    const btn = document.querySelector('.nav-item[data-panel="notif"]');
+    if (btn) btn.click(); // omni:panel 핸들러가 refresh + 읽음 타이머 처리
   },
 });
 

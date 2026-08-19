@@ -41,6 +41,11 @@
         <span class="nav-icon">&#9004;</span>
         <span class="nav-label">OMNI_AI</span>
       </button>
+      <button class="nav-item" data-panel="notif">
+        <span class="nav-icon">&#9638;</span>
+        <span class="nav-label">NOTIFICATIONS</span>
+        <span class="nav-dot" id="nf-nav-dot"></span>
+      </button>
       <button class="nav-item" data-panel="clock">
         <span class="nav-icon">&#9711;</span>
         <span class="nav-label">CLOCK</span>
@@ -224,6 +229,30 @@
             <button id="ai-keysave2">SAVE</button>
           </div>
           <div class="ai-side-note">VOICE: MARIN (LIVE ONLY)<br>TEXT CHAT: TEXT OUTPUT ONLY</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- panel: NOTIFICATIONS (앱 알림 수집 — 현재 카카오톡) -->
+    <section class="panel panel-notif" id="panel-notif">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">NOTIFICATIONS</span>
+          <span class="nf-sub" id="nf-sub">KAKAOTALK FEED</span>
+          <span class="ts-spacer"></span>
+          <span class="nf-updated" id="nf-updated"></span>
+          <button class="nf-btn" id="nf-refresh">REFRESH</button>
+        </div>
+        <div class="nf-body">
+          <div class="nf-section">
+            <div class="nf-sec-h">
+              <span>KAKAOTALK</span>
+              <span class="nf-count" id="nf-kakao-count">0</span>
+            </div>
+            <div class="nf-list" id="nf-kakao-list">
+              <div class="nf-empty">NO NOTIFICATIONS</div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -1106,9 +1135,9 @@
     <footer class="bottombar">
       <span id="uptime">UPTIME 00:00:00</span>
       <span class="divider">|</span>
-      <span>MODULES: CMD &middot; AI &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
+      <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.52.1</span>
+      <span>v0.53.0</span>
     </footer>
   </div>
 
