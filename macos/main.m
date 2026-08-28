@@ -1190,7 +1190,9 @@ static NSString *ArcSavesDir(void) {
         [self.arcTask cancel];
         self.arcTask = nil;
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
-    } else if ([cmd hasPrefix:@"ai."]) {
+    } else if ([cmd hasPrefix:@"ai."] || [cmd hasPrefix:@"omnia."]) {
+        // 오미니아(omnia.*) 명령도 같은 핸들러에서 처리한다 — 접두사가 달라
+        // 분기에 도달하지 못하던 문제 수정
         [self handleAI:cmd arg:arg msgId:msgId];
     } else if ([cmd hasPrefix:@"arduino."]) {
         [self handleArduino:cmd arg:arg msgId:msgId];
@@ -1985,7 +1987,10 @@ static NSString *OmniAIFsValidate(NSString *path) {
                 }
             }
             [self deliverPayload:@{ @"ok" : @(error == nil && names.count > 0),
-                                    @"models" : names } forId:msgId];
+                                    @"models" : names,
+                                    @"error" : error.localizedDescription ?: @"",
+                                    @"status" : @([(NSHTTPURLResponse *)resp statusCode]) }
+                           forId:msgId];
         }] resume];
 
     } else if ([cmd isEqualToString:@"omnia.chat"]) {

@@ -2287,6 +2287,7 @@ OmniOS.register("omnia", {
     const r = await OmniNative.request("omnia.status", null, 8000).catch(() => null);
     if (!r || !r.ok) {
       this.setState("LLM OFF", "err");
+      if (r && r.error) this.logLine("sys", `진단: ${r.error}`);
       this.logLine("sys", "로컬 LLM이 응답하지 않습니다. 자동 시작이 등록돼 있으면 잠시 후 복구됩니다 — 계속 실패하면 터미널에서 `bash scripts/setup_ollama_agent.sh`를 실행해 주십시오.");
       return;
     }

@@ -28,6 +28,28 @@
 	<string>Microphone is used for voice recording in VOICE CHANGER and voice commands in OMNI_AI.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Speech recognition converts your voice into commands for OMNI_AI.</string>
+	<!-- 오미니아: 로컬 LLM(127.0.0.1:11434)만 평문 HTTP 허용.
+	     외부 도메인의 평문 통신은 ATS 기본값대로 계속 차단된다. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- 루프백/로컬 네트워크 리소스 허용 (애플 권장 방식 — IP 예외 도메인은
+		     무시되는 경우가 있어 이 플래그가 실제로 동작하는 열쇠) -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
