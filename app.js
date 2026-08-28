@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.53.0",
+  version: "0.54.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -635,7 +635,7 @@ OmniOS.register("ai", {
   PANEL_GUIDE: [
     "COMMAND BRIDGE: 홈 상황실 — 시스템 게이지, SP-1 방어 상태, 활성 프로젝트 홀로그램, 미션 목표, 최근 커밋 티커",
     "OMNI_AI: 이 음성 인터페이스",
-    "NOTIFICATIONS: 앱 알림 수집 패널 — 카카오톡 메시지 알림 피드 (자동 갱신, 새 알림 하이라이트)",
+    "NOTIFICATIONS: 앱 알림 수집 패널 — 카카오톡·지메일 섹션 (자동 갱신, 새 알림 하이라이트, 클릭하면 원본 앱 열림)",
     "CLOCK: 시계/업타임 HUD",
     "PROJECTS: 프로젝트 등록부 — 상태/우선순위/목표일 관리, 패널 연결, 전용 에디터",
     "SYSTEM MONITOR: CPU/GPU/메모리/디스크/네트워크/배터리 실시간 대시보드",
@@ -2051,8 +2051,10 @@ OmniOS.register("notif", {
     const $ = (id) => document.getElementById(id);
     this.els = {
       panel: $("panel-notif"),
-      list: $("nf-kakao-list"),
-      count: $("nf-kakao-count"),
+      kakaoList: $("nf-kakao-list"),
+      kakaoCount: $("nf-kakao-count"),
+      gmailList: $("nf-gmail-list"),
+      gmailCount: $("nf-gmail-count"),
       updated: $("nf-updated"),
       refresh: $("nf-refresh"),
       dot: $("nf-nav-dot"),
@@ -2081,6 +2083,13 @@ OmniOS.register("notif", {
     }
   },
 
+  // 섹션 분류: 카카오톡 / 지메일(Apple Mail 또는 브라우저의 Gmail 알림)
+  _isKakao(it) { return /kakao/i.test(it.app); },
+  _isGmail(it) {
+    return /\bmail\b|apple\.mail|gmail/i.test(it.app)
+      || /gmail/i.test(`${it.title} ${it.subtitle}`);
+  },
+
   async refresh(silent) {
     if (!OmniNative.available) {
       this._err = "브라우저 개발 모드 — 알림은 앱에서만 조회됩니다";
@@ -2088,8 +2097,9 @@ OmniOS.register("notif", {
       return;
     }
     try {
+      // 전체 앱 알림을 한 번에 받아 섹션은 클라이언트에서 분류
       const r = await OmniNative.request("ai.notifRecent",
-        JSON.stringify({ bundle: "kakao", hours: 48 }), 20000);
+        JSON.stringify({ bundle: "", hours: 48 }), 20000);
       if (!r || !r.ok) {
         this._err = (r && r.error) === "FDA_REQUIRED"
           ? "전체 디스크 접근 권한 필요 — 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에서 Omni OS를 허용한 뒤 앱을 재시작하십시오."
@@ -2106,34 +2116,39 @@ OmniOS.register("notif", {
     this.render();
   },
 
-  render() {
-    const list = this.els.list;
-    list.textContent = "";
-    if (this._err) {
-      const d = document.createElement("div");
-      d.className = "nf-err";
-      d.textContent = this._err;
-      list.appendChild(d);
-      this.els.count.textContent = "0";
-      this.els.dot.classList.remove("on");
-      return;
+  // 알림 클릭 → 원본 앱/서비스 열기
+  openItem(it) {
+    if (this._isKakao(it)) {
+      OmniNative.request("open.app",
+        JSON.stringify({ bundle: "com.kakao.KakaoTalkMac" }), 8000).catch(() => {});
+    } else if (/apple\.mail/i.test(it.app)) {
+      OmniNative.request("open.app",
+        JSON.stringify({ bundle: "com.apple.mail" }), 8000).catch(() => {});
+    } else if (this._isGmail(it)) {
+      OmniNative.request("open.url",
+        JSON.stringify({ url: "https://mail.google.com" }), 8000).catch(() => {});
     }
-    this.els.count.textContent = String(this._items.length);
-    if (!this._items.length) {
+  },
+
+  renderSection(listEl, countEl, items) {
+    listEl.textContent = "";
+    countEl.textContent = String(items.length);
+    if (!items.length) {
       const d = document.createElement("div");
       d.className = "nf-empty";
       d.textContent = "NO NOTIFICATIONS (최근 48시간)";
-      list.appendChild(d);
-      this.els.dot.classList.remove("on");
-      return;
+      listEl.appendChild(d);
+      return false;
     }
     let hasNew = false;
     const today = new Date().toDateString();
-    for (const it of this._items) {
+    for (const it of items) {
       const isNew = it.ts * 1000 > this._lastSeen;
       if (isNew) hasNew = true;
       const row = document.createElement("div");
       row.className = `nf-item${isNew ? " new" : ""}`;
+      row.title = "클릭하면 앱에서 열기";
+      row.addEventListener("click", () => this.openItem(it));
       const d = new Date(it.ts * 1000);
       const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
       const t = document.createElement("span");
@@ -2147,11 +2162,34 @@ OmniOS.register("notif", {
       msg.className = "msg";
       msg.textContent = it.body;
       row.append(t, who, msg);
-      list.appendChild(row);
+      listEl.appendChild(row);
     }
+    return hasNew;
+  },
+
+  render() {
+    if (this._err) {
+      for (const [list, count] of [
+        [this.els.kakaoList, this.els.kakaoCount],
+        [this.els.gmailList, this.els.gmailCount],
+      ]) {
+        list.textContent = "";
+        const d = document.createElement("div");
+        d.className = "nf-err";
+        d.textContent = this._err;
+        list.appendChild(d);
+        count.textContent = "0";
+      }
+      this.els.dot.classList.remove("on");
+      return;
+    }
+    const kakao = this._items.filter((it) => this._isKakao(it));
+    const gmail = this._items.filter((it) => !this._isKakao(it) && this._isGmail(it));
+    const newK = this.renderSection(this.els.kakaoList, this.els.kakaoCount, kakao);
+    const newG = this.renderSection(this.els.gmailList, this.els.gmailCount, gmail);
     // nav 점: 패널이 안 보일 때만 (보고 있는 중엔 하이라이트가 대신함)
     this.els.dot.classList.toggle("on",
-      hasNew && !this.els.panel.classList.contains("active"));
+      (newK || newG) && !this.els.panel.classList.contains("active"));
   },
 
   markSeen() {

@@ -3492,3 +3492,5 @@ input.vc-name {
 .nf-item.new .who { color: #eafcff; }
 .nf-item.new .msg { color: #ffffff; }
 .nf-item.new .t { color: var(--cyan); }
+.nf-item { cursor: pointer; transition: border-color 0.15s; }
+.nf-item:hover { border-color: var(--cyan-soft); opacity: 1; }

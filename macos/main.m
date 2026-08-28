@@ -937,6 +937,32 @@ static NSString *ArcSavesDir(void) {
         } else {
             [self deliverPayload:@{ @"ok" : @NO, @"err" : @"unknown ce command" } forId:msgId];
         }
+    } else if ([cmd isEqualToString:@"open.app"]) {
+        // 알림 클릭 → 원본 앱 열기 (허용 목록 한정)
+        NSDictionary *oa = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) oa = parsed;
+        }
+        NSString *bundle = [oa[@"bundle"] isKindOfClass:[NSString class]] ? oa[@"bundle"] : @"";
+        NSArray *allowed = @[ @"com.kakao.KakaoTalkMac", @"com.apple.mail" ];
+        if (![allowed containsObject:bundle]) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"not allowed" } forId:msgId];
+            return;
+        }
+        NSURL *appURL = [NSWorkspace.sharedWorkspace
+            URLForApplicationWithBundleIdentifier:bundle];
+        if (appURL == nil) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"app not found" } forId:msgId];
+            return;
+        }
+        NSWorkspaceOpenConfiguration *conf = [NSWorkspaceOpenConfiguration configuration];
+        [NSWorkspace.sharedWorkspace openApplicationAtURL:appURL
+                                            configuration:conf
+                                        completionHandler:nil];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
     } else if ([cmd isEqualToString:@"open.url"]) {
         // 기본 브라우저로 링크 열기 — http(s)만 허용
         NSString *urlStr = nil;
