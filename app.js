@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.55.2",
+  version: "0.56.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -541,7 +541,7 @@ OmniOS.register("ai", {
     "- 현재 시각·날짜 질문은 패널을 열 필요 없이 [실시간 상태 스냅샷]의 현재 시각으로 바로 답합니다. 시스템/보안/프로젝트 현황도 마찬가지로 스냅샷 실측값으로 답합니다.",
     "- 파일 도구(list_dir/read_file/edit_file/write_file): ~/Desktop 아래 파일을 직접 나열·읽기·수정할 수 있습니다. 파일 개수·내용·코드에 대한 질문은 추측하거나 못 한다고 하지 말고 반드시 도구로 확인해 실측값으로 답합니다. 수정 요청은 read_file로 해당 부분을 먼저 확인하고 edit_file(정확 치환)로 수행한 뒤 무엇을 어떻게 바꿨는지 보고합니다.",
     "- 경로 규칙: 프로젝트 폴더는 ~/Desktop/Important/Omni_OS/Projects/<프로젝트이름>/{3d,arduino,code,notes}, 노트 볼트는 ~/Desktop/Important/Omni_OS/Notes, 스캔 저장은 ~/Desktop/Important/Omni_OS/ARC-SCAN-SAVES. (~는 사용자 홈 — 절대 경로로 쓸 때는 /Users/geonhee)",
-    "- 카카오톡·앱 알림 확인: \"카톡 온 거 확인해줘\" 류 요청은 check_notifications 도구(app:'kakao')로 최근 알림을 읽어 보낸 사람과 내용을 간결히 요약 보고합니다. 다른 앱 알림도 app을 비우면 전체 조회됩니다. 알림이 떴던 메시지만 보이는 한계를 알고 있습니다. 메시지 발신은 미지원입니다.",
+    "- 카카오톡·디스코드·앱 알림 확인: \"카톡/디스코드 온 거 확인해줘\" 류 요청은 check_notifications 도구(app:'kakao' 또는 'discord')로 최근 알림을 읽어 보낸 사람과 내용을 간결히 요약 보고합니다. 다른 앱 알림도 app을 비우면 전체 조회됩니다. 알림이 떴던 메시지만 보이는 한계를 알고 있습니다. 메시지 발신은 미지원입니다.",
     "- 지메일 확인: \"메일 확인해줘\" 류 요청은 check_gmail 도구로 받은편지함을 직접 읽어(IMAP, 알림 무관) 보낸 사람·제목·안읽음 여부를 요약 보고합니다. 메일 발송은 미지원입니다.",
     "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
@@ -599,7 +599,7 @@ OmniOS.register("ai", {
     },
     {
       name: "check_notifications",
-      description: "최근 macOS 알림을 읽는다 — 카카오톡 메시지 확인 등. app에 'kakao'를 주면 카카오톡만, 비우면 전체 앱(지메일 등 포함). hours는 최근 N시간(기본 24). 결과 각 줄: [시각] (앱) 보낸사람/방: 내용 미리보기. 알림이 떴던 메시지만 보인다(음소거한 방 제외).",
+      description: "최근 macOS 알림을 읽는다 — 카카오톡·디스코드 메시지 확인 등. app에 'kakao'/'discord'를 주면 해당 앱만, 비우면 전체 앱. hours는 최근 N시간(기본 24). 결과 각 줄: [시각] (앱) 보낸사람/방: 내용 미리보기. 알림이 떴던 메시지만 보인다(음소거한 방 제외).",
       input_schema: {
         type: "object",
         properties: {
@@ -645,7 +645,7 @@ OmniOS.register("ai", {
   PANEL_GUIDE: [
     "COMMAND BRIDGE: 홈 상황실 — 시스템 게이지, SP-1 방어 상태, 활성 프로젝트 홀로그램, 미션 목표, 최근 커밋 티커",
     "OMNI_AI: 이 음성 인터페이스",
-    "NOTIFICATIONS: 앱 알림 수집 패널 — 카카오톡·지메일 섹션 (자동 갱신, 새 알림 하이라이트, 클릭하면 원본 앱 열림)",
+    "NOTIFICATIONS: 앱 알림 수집 패널 — 카카오톡·지메일·디스코드 섹션 (자동 갱신, 새 알림 하이라이트, 클릭하면 원본 앱 열림)",
     "CLOCK: 시계/업타임 HUD",
     "PROJECTS: 프로젝트 등록부 — 상태/우선순위/목표일 관리, 패널 연결, 전용 에디터",
     "SYSTEM MONITOR: CPU/GPU/메모리/디스크/네트워크/배터리 실시간 대시보드",
@@ -1700,7 +1700,7 @@ OmniOS.register("ai", {
     {
       type: "function",
       name: "check_notifications",
-      description: "최근 macOS 알림 확인 — \"카톡 온 거 확인해줘\" 등 메시지/알림 질문에 사용. app:'kakao'면 카카오톡만, 비우면 전체 앱. hours 기본 24. 결과를 보낸 사람과 내용 중심으로 간결하게 요약해 말한다. 권한 오류 응답이 오면 그 안내를 그대로 전한다.",
+      description: "최근 macOS 알림 확인 — \"카톡/디스코드 온 거 확인해줘\" 등 메시지/알림 질문에 사용. app:'kakao'는 카카오톡, 'discord'는 디스코드, 비우면 전체 앱. hours 기본 24. 결과를 보낸 사람과 내용 중심으로 간결하게 요약해 말한다. 권한 오류 응답이 오면 그 안내를 그대로 전한다.",
       parameters: {
         type: "object",
         properties: {
@@ -2103,6 +2103,8 @@ OmniOS.register("notif", {
       gmailSave: $("nf-gmail-save"),
       gmailAdd: $("nf-gmail-add"),
       gmailReset: $("nf-gmail-reset"),
+      discordList: $("nf-discord-list"),
+      discordCount: $("nf-discord-count"),
       updated: $("nf-updated"),
       refresh: $("nf-refresh"),
       dot: $("nf-nav-dot"),
@@ -2141,6 +2143,7 @@ OmniOS.register("notif", {
   },
 
   _isKakao(it) { return /kakao/i.test(it.app); },
+  _isDiscord(it) { return /discord/i.test(it.app); },
   _gmailItems: [],
   _gmailErr: null,
   _gmailNeedSetup: false,
@@ -2152,10 +2155,10 @@ OmniOS.register("notif", {
       this.render();
       return;
     }
-    // 카톡(알림 DB)과 지메일(IMAP 직결)을 병렬 조회
+    // 알림 DB(카톡·디스코드 등)와 지메일(IMAP 직결)을 병렬 조회
     const [notif, gmail] = await Promise.all([
       OmniNative.request("ai.notifRecent",
-        JSON.stringify({ bundle: "kakao", hours: 48 }), 20000).catch(() => null),
+        JSON.stringify({ bundle: "", hours: 48 }), 20000).catch(() => null),
       OmniNative.request("ai.gmailRecent",
         JSON.stringify({ hours: 48 }), 30000).catch(() => null),
     ]);
@@ -2217,6 +2220,9 @@ OmniOS.register("notif", {
     if (this._isKakao(it)) {
       OmniNative.request("open.app",
         JSON.stringify({ bundle: "com.kakao.KakaoTalkMac" }), 8000).catch(() => {});
+    } else if (this._isDiscord(it)) {
+      OmniNative.request("open.app",
+        JSON.stringify({ bundle: "com.hnc.Discord" }), 8000).catch(() => {});
     } else if (it.src === "imap") {
       // authuser로 해당 계정을 지정 + 메시지 ID 딥링크로 그 메일 바로 열기
       let url = "https://mail.google.com/mail/";
@@ -2280,13 +2286,17 @@ OmniOS.register("notif", {
   },
 
   render() {
-    // 카카오톡 (알림 DB)
+    // 카카오톡·디스코드 (알림 DB)
     let newK = false;
+    let newD = false;
     if (this._err) {
       this.renderError(this.els.kakaoList, this.els.kakaoCount, this._err);
+      this.renderError(this.els.discordList, this.els.discordCount, this._err);
     } else {
       newK = this.renderSection(this.els.kakaoList, this.els.kakaoCount,
         this._items.filter((it) => this._isKakao(it)));
+      newD = this.renderSection(this.els.discordList, this.els.discordCount,
+        this._items.filter((it) => this._isDiscord(it)));
     }
     // 지메일 (IMAP)
     let newG = false;
@@ -2308,7 +2318,7 @@ OmniOS.register("notif", {
     }
     // nav 점: 패널이 안 보일 때만 (보고 있는 중엔 하이라이트가 대신함)
     this.els.dot.classList.toggle("on",
-      (newK || newG) && !this.els.panel.classList.contains("active"));
+      (newK || newG || newD) && !this.els.panel.classList.contains("active"));
   },
 
   markSeen() {

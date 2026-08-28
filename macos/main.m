@@ -946,7 +946,8 @@ static NSString *ArcSavesDir(void) {
             if ([parsed isKindOfClass:[NSDictionary class]]) oa = parsed;
         }
         NSString *bundle = [oa[@"bundle"] isKindOfClass:[NSString class]] ? oa[@"bundle"] : @"";
-        NSArray *allowed = @[ @"com.kakao.KakaoTalkMac", @"com.apple.mail" ];
+        NSArray *allowed = @[ @"com.kakao.KakaoTalkMac", @"com.apple.mail",
+                              @"com.hnc.Discord" ];
         if (![allowed containsObject:bundle]) {
             [self deliverPayload:@{ @"ok" : @NO, @"error" : @"not allowed" } forId:msgId];
             return;
