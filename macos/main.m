@@ -182,7 +182,8 @@ static NSString *ArcSavesDir(void) {
     return dir;
 }
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, WKScriptMessageHandler, WKUIDelegate>
+@interface AppDelegate : NSObject <NSApplicationDelegate, WKScriptMessageHandler,
+                                   WKUIDelegate, NSURLSessionDataDelegate>
 @property (strong) NSWindow *window;
 @property (strong) WKWebView *webView;
 @property (strong) OmniSchemeHandler *schemeHandler;
@@ -204,6 +205,10 @@ static NSString *ArcSavesDir(void) {
 @property (strong) NSString *aiTtsPendingOut;
 // OMNI_AI 리얼타임 음성 세션 (gpt-realtime WSS 릴레이 — 키는 네이티브에만)
 @property (strong) NSURLSessionWebSocketTask *aiRtTask;
+// 오미니아 — 로컬 LLM(Ollama) 스트리밍 세션
+@property (strong) NSURLSession *omniaSession;
+@property (strong) NSNumber *omniaTurn;
+@property (strong) NSMutableString *omniaBuf;
 // OMNI_AI 외국어 음색 데몬 (seed_serve.py — Seed-VC 상주)
 @property (strong) NSTask *aiSeedTask;
 @property (strong) NSPipe *aiSeedIn;
@@ -1517,6 +1522,64 @@ static BOOL OmniAISeedAvailable(void) {
     return task.terminationStatus == 0 && size > 100;
 }
 
+// ---- 오미니아 스트리밍 수신 (Ollama NDJSON) ----
+// 줄 단위 JSON을 파싱해 토큰을 즉시 OmniaAI._tok 으로, 종료 시 _done 으로 푸시
+
+- (void)omniaPushJS:(NSString *)js {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.webView evaluateJavaScript:js completionHandler:nil];
+    });
+}
+
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+    didReceiveData:(NSData *)data {
+    if (session != self.omniaSession) return;
+    NSString *chunk = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (chunk == nil) return;
+    [self.omniaBuf appendString:chunk];
+    NSRange nl;
+    while ((nl = [self.omniaBuf rangeOfString:@"\n"]).location != NSNotFound) {
+        NSString *line = [self.omniaBuf substringToIndex:nl.location];
+        [self.omniaBuf deleteCharactersInRange:NSMakeRange(0, nl.location + 1)];
+        NSData *ld = [line dataUsingEncoding:NSUTF8StringEncoding];
+        id parsed = ld.length ? [NSJSONSerialization JSONObjectWithData:ld
+                                                                options:0 error:nil] : nil;
+        if (![parsed isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *msg = [parsed[@"message"] isKindOfClass:[NSDictionary class]]
+            ? parsed[@"message"] : nil;
+        NSString *tok = [msg[@"content"] isKindOfClass:[NSString class]]
+            ? msg[@"content"] : nil;
+        if (tok.length > 0) {
+            NSData *safe = [NSJSONSerialization dataWithJSONObject:@{ @"t" : tok }
+                                                          options:0 error:nil];
+            NSString *json = [[NSString alloc] initWithData:safe encoding:NSUTF8StringEncoding];
+            [self omniaPushJS:[NSString stringWithFormat:
+                @"window.OmniaAI && OmniaAI._tok(%@, %@)", json, self.omniaTurn ?: @0]];
+        }
+        if ([parsed[@"done"] boolValue]) {
+            [self omniaPushJS:[NSString stringWithFormat:
+                @"window.OmniaAI && OmniaAI._done(%@)", self.omniaTurn ?: @0]];
+        }
+    }
+}
+
+- (void)URLSession:(NSURLSession *)session
+              task:(NSURLSessionTask *)task
+didCompleteWithError:(NSError *)error {
+    if (session != self.omniaSession) return;
+    if (error != nil) {
+        NSData *safe = [NSJSONSerialization dataWithJSONObject:
+            @{ @"e" : error.localizedDescription ?: @"error" } options:0 error:nil];
+        NSString *json = [[NSString alloc] initWithData:safe encoding:NSUTF8StringEncoding];
+        [self omniaPushJS:[NSString stringWithFormat:
+            @"window.OmniaAI && OmniaAI._err(%@, %@)", json, self.omniaTurn ?: @0]];
+    } else {
+        [self omniaPushJS:[NSString stringWithFormat:
+            @"window.OmniaAI && OmniaAI._done(%@)", self.omniaTurn ?: @0]];
+    }
+}
+
 // ---- OMNI_AI 리얼타임 수신 루프 — arc 릴레이와 같은 패턴 ----
 - (void)aiRtReceiveLoop:(NSURLSessionWebSocketTask *)task {
     __weak AppDelegate *weakSelf = self;
@@ -1905,6 +1968,114 @@ static NSString *OmniAIFsValidate(NSString *path) {
 
     } else if ([cmd isEqualToString:@"ai.notifRecent"]) {
         [self handleAINotif:a msgId:msgId];
+
+    } else if ([cmd isEqualToString:@"omnia.status"]) {
+        // 로컬 LLM(Ollama) 준비 상태 — 미기동이면 JS가 안내
+        NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:11434/api/tags"];
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+        req.timeoutInterval = 3;
+        [[NSURLSession.sharedSession dataTaskWithRequest:req
+            completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
+            id parsed = data ? [NSJSONSerialization JSONObjectWithData:data
+                                                               options:0 error:nil] : nil;
+            NSMutableArray *names = [NSMutableArray array];
+            if ([parsed isKindOfClass:[NSDictionary class]]) {
+                for (NSDictionary *m in parsed[@"models"]) {
+                    if ([m[@"name"] isKindOfClass:[NSString class]]) [names addObject:m[@"name"]];
+                }
+            }
+            [self deliverPayload:@{ @"ok" : @(error == nil && names.count > 0),
+                                    @"models" : names } forId:msgId];
+        }] resume];
+
+    } else if ([cmd isEqualToString:@"omnia.chat"]) {
+        // 로컬 LLM 대화 — 토큰을 OmniaAI._tok 으로 스트리밍 (키 없음, 완전 로컬)
+        NSString *model = [a[@"model"] isKindOfClass:[NSString class]]
+            ? a[@"model"] : @"qwen3.6-aggressive-local:latest";
+        NSArray *messages = [a[@"messages"] isKindOfClass:[NSArray class]] ? a[@"messages"] : @[];
+        NSNumber *turn = [a[@"turn"] isKindOfClass:[NSNumber class]] ? a[@"turn"] : @0;
+        NSDictionary *body = @{ @"model" : model, @"messages" : messages,
+                                @"stream" : @YES };
+        NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
+            [NSURL URLWithString:@"http://127.0.0.1:11434/api/chat"]];
+        req.HTTPMethod = @"POST";
+        req.HTTPBody = bodyData;
+        req.timeoutInterval = 600;
+        [req setValue:@"application/json" forHTTPHeaderField:@"content-type"];
+        __weak AppDelegate *weakSelf = self;
+        // NSURLSession 스트리밍: 델리게이트 없이 dataTask로 받되 줄 단위 JSON을 파싱해
+        // 중간 토큰을 즉시 밀어 넣기 위해 별도 큐에서 청크를 읽는다
+        if (self.omniaSession == nil) {
+            NSURLSessionConfiguration *cfg =
+                [NSURLSessionConfiguration defaultSessionConfiguration];
+            self.omniaSession = [NSURLSession sessionWithConfiguration:cfg
+                delegate:self delegateQueue:nil];
+        }
+        self.omniaBuf = [NSMutableString string];
+        NSURLSessionDataTask *task = [self.omniaSession dataTaskWithRequest:req];
+        self.omniaTurn = turn;
+        [task resume];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+        (void)weakSelf;
+
+    } else if ([cmd isEqualToString:@"omnia.stop"]) {
+        [self.omniaSession invalidateAndCancel];
+        self.omniaSession = nil;
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"omnia.run"]) {
+        // 오미니아 터미널 실행 — JS가 사용자 승인을 받은 뒤에만 호출한다
+        NSString *script = [a[@"script"] isKindOfClass:[NSString class]] ? a[@"script"] : nil;
+        if (script.length == 0) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"empty" } forId:msgId];
+            return;
+        }
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:@"/bin/zsh"];
+            task.arguments = @[ @"-lc", script ];
+            task.currentDirectoryURL = [NSURL fileURLWithPath:NSHomeDirectory()];
+            NSPipe *outPipe = [NSPipe pipe];
+            task.standardOutput = outPipe;
+            task.standardError = outPipe;
+            NSError *err = nil;
+            if (![task launchAndReturnError:&err]) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : err.localizedDescription ?: @"launch failed" } forId:msgId];
+                return;
+            }
+            // 60초 안전 타임아웃
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC),
+                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                if (task.isRunning) [task terminate];
+            });
+            NSData *outData = [outPipe.fileHandleForReading readDataToEndOfFile];
+            [task waitUntilExit];
+            NSString *out = [[NSString alloc] initWithData:outData
+                encoding:NSUTF8StringEncoding] ?: @"";
+            if (out.length > 20000) out = [out substringToIndex:20000];
+            [self deliverPayload:@{ @"ok" : @YES, @"output" : out,
+                                    @"code" : @(task.terminationStatus) } forId:msgId];
+        });
+
+    } else if ([cmd isEqualToString:@"omnia.save"]) {
+        // 오미니아가 만든 코드/스크립트를 파일로 저장 (다운로드 대체 — 저장 위치 선택)
+        NSString *name = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : @"omnia.txt";
+        NSString *content = [a[@"content"] isKindOfClass:[NSString class]] ? a[@"content"] : @"";
+        NSSavePanel *panel = [NSSavePanel savePanel];
+        panel.nameFieldStringValue = name.lastPathComponent;
+        [panel beginWithCompletionHandler:^(NSModalResponse result) {
+            if (result != NSModalResponseOK || panel.URL == nil) {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"cancelled" } forId:msgId];
+                return;
+            }
+            NSError *werr = nil;
+            BOOL ok = [content writeToURL:panel.URL atomically:YES
+                                 encoding:NSUTF8StringEncoding error:&werr];
+            [self deliverPayload:@{ @"ok" : @(ok), @"path" : panel.URL.path ?: @"" }
+                           forId:msgId];
+        }];
 
     } else if ([cmd isEqualToString:@"ai.gmailRecent"]) {
         // Gmail IMAP 리더 (scripts/gmail_helper.py — 읽기 전용, 표준 라이브러리만)

@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.56.0",
+  version: "0.57.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -537,12 +537,14 @@ OmniOS.register("ai", {
     "  [[ACT:arc.scan:start|stop|center]] — 스캔 시작/정지/센터 (연결된 상태에서만)",
     "  [[ACT:sp1.watch:pause|resume]] — 보안 워처 일시정지/재개",
     "  [[ACT:lang.auto]] — 언어 모드를 AUTO로 전환 (언어 잠금 상태에서 다른 언어 요구를 받았을 때 사용)",
+    "  [[ACT:omnia]] — 보조 AI '오미니아' 팝업 열기 (\"오미니아 호출\", \"오미니아 켜줘\" 등). 특정 질문을 전달하려면 [[ACT:omnia:질문내용]], 닫으려면 [[ACT:omnia:close]]",
     "  프로젝트·노트·파일 이름은 [실시간 상태 스냅샷]이나 사용자 발화에서 그대로 가져옵니다. 각 액션은 시스템이 실행 후 검증해 성공/실패를 로그로 보고하므로, 실패 처리를 걱정하지 말고 요청이 명확하면 태그를 붙입니다.",
     "- 현재 시각·날짜 질문은 패널을 열 필요 없이 [실시간 상태 스냅샷]의 현재 시각으로 바로 답합니다. 시스템/보안/프로젝트 현황도 마찬가지로 스냅샷 실측값으로 답합니다.",
     "- 파일 도구(list_dir/read_file/edit_file/write_file): ~/Desktop 아래 파일을 직접 나열·읽기·수정할 수 있습니다. 파일 개수·내용·코드에 대한 질문은 추측하거나 못 한다고 하지 말고 반드시 도구로 확인해 실측값으로 답합니다. 수정 요청은 read_file로 해당 부분을 먼저 확인하고 edit_file(정확 치환)로 수행한 뒤 무엇을 어떻게 바꿨는지 보고합니다.",
     "- 경로 규칙: 프로젝트 폴더는 ~/Desktop/Important/Omni_OS/Projects/<프로젝트이름>/{3d,arduino,code,notes}, 노트 볼트는 ~/Desktop/Important/Omni_OS/Notes, 스캔 저장은 ~/Desktop/Important/Omni_OS/ARC-SCAN-SAVES. (~는 사용자 홈 — 절대 경로로 쓸 때는 /Users/geonhee)",
     "- 카카오톡·디스코드·앱 알림 확인: \"카톡/디스코드 온 거 확인해줘\" 류 요청은 check_notifications 도구(app:'kakao' 또는 'discord')로 최근 알림을 읽어 보낸 사람과 내용을 간결히 요약 보고합니다. 다른 앱 알림도 app을 비우면 전체 조회됩니다. 알림이 떴던 메시지만 보이는 한계를 알고 있습니다. 메시지 발신은 미지원입니다.",
     "- 지메일 확인: \"메일 확인해줘\" 류 요청은 check_gmail 도구로 받은편지함을 직접 읽어(IMAP, 알림 무관) 보낸 사람·제목·안읽음 여부를 요약 보고합니다. 메일 발송은 미지원입니다.",
+    "- 오미니아: 당신을 돕는 보조 AI로, 로컬에서 실행되는 별도 모델입니다(텍스트 전용, 터미널 접근은 사용자 승인 필요). \"오미니아 호출/켜줘\" 같은 요청을 받으면 [[ACT:omnia]]로 팝업을 열고 짧게 보고합니다.",
     "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
   // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
@@ -1249,6 +1251,22 @@ OmniOS.register("ai", {
       if (btn) btn.click();
     };
     try {
+      // ── 오미니아 호출 (로컬 보조 AI 팝업) ──
+      if (key === "omnia") {
+        const omnia = OmniOS.modules.omnia;
+        if (!omnia) return { ok: false, msg: "오미니아 모듈 없음" };
+        const sub = (parts[1] || "open").toLowerCase();
+        if (sub === "close") {
+          omnia.hide();
+          return { ok: true, msg: "오미니아 종료" };
+        }
+        await omnia.show();
+        // "옴니야, 오미니아한테 ○○ 물어봐" — 뒤에 질문이 붙으면 그대로 전달
+        const q = parts.slice(1).join(":").trim();
+        if (q && sub !== "open") omnia.send(q);
+        return { ok: true, msg: `오미니아 호출${q && sub !== "open" ? " · 질문 전달" : ""}` };
+      }
+
       // ── 언어 모드 AUTO 전환 (언어 잠금 상태에서 옴니가 스스로 호출) ──
       if (key === "lang.auto") {
         this.lang = "auto";
@@ -1681,7 +1699,7 @@ OmniOS.register("ai", {
     {
       type: "function",
       name: "app_action",
-      description: "Deep in-app action. spec format (colon-separated): proj.editor:NAME:TOOL(r3d|ino|ce|notes) | proj.status:NAME:STATUS | notes.open:NOTE | ce.open:FILE | arc.connect | arc.disconnect | arc.scan:start|stop|center | sp1.watch:pause|resume | lang.auto (switch language mode to AUTO)",
+      description: "Deep in-app action. spec format (colon-separated): proj.editor:NAME:TOOL(r3d|ino|ce|notes) | proj.status:NAME:STATUS | notes.open:NOTE | ce.open:FILE | arc.connect | arc.disconnect | arc.scan:start|stop|center | sp1.watch:pause|resume | lang.auto (switch language mode to AUTO) | omnia (open the local assistant AI 'Omnia' popup — use when user says 오미니아 호출/켜줘; omnia:QUESTION to forward a question, omnia:close to close)",
       parameters: {
         type: "object",
         properties: { spec: { type: "string" } },
@@ -2079,6 +2097,242 @@ OmniOS.register("ai", {
       }
       g.globalAlpha = 1;
     }
+  },
+});
+
+// ---------- module: OMNIA (로컬 무검열 LLM 보조 AI — 옴니 위 팝업) ----------
+OmniOS.register("omnia", {
+  MODEL: "qwen3.6-aggressive-local:latest",
+  SYSTEM: [
+    "당신은 '오미니아'입니다. OMNI_OS의 관제 AI '옴니'를 돕는 보조 AI이며, 사용자(건희)도 직접 돕습니다.",
+    "로컬에서 실행되는 모델이라 외부로 나가는 데이터가 없습니다.",
+    "한국어로 간결하고 실용적으로 답합니다. 사족·과한 안전 경고 없이 요청에 바로 응합니다.",
+    "코드나 셸 스크립트를 줄 때는 반드시 ```언어 코드블록``` 으로 감쌉니다 — 사용자가 저장하거나 실행할 수 있습니다.",
+    "터미널 실행이 필요하면 실행할 명령을 ```bash 블록으로 제시합니다. 실행은 사용자가 승인 버튼을 눌러야만 이뤄집니다.",
+  ].join("\n"),
+  history: [],
+  _turn: 0,
+  _busy: false,
+  _cur: null,      // 현재 스트리밍 중인 {line, txt, raw}
+  _open: false,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      overlay: $("oa-overlay"), modal: $("oa-modal"), log: $("oa-log"),
+      text: $("oa-text"), send: $("oa-send"), close: $("oa-close"),
+      state: $("oa-state"), sub: $("oa-sub"),
+    };
+    window.OmniaAI = this; // 네이티브 스트리밍 푸시 대상
+    this.els.close.addEventListener("click", () => this.hide());
+    this.els.send.addEventListener("click", () => this.send());
+    this.els.text.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        this.send();
+      }
+    });
+    this.els.text.addEventListener("input", () => {
+      this.els.text.style.height = "auto";
+      this.els.text.style.height = `${Math.min(120, this.els.text.scrollHeight)}px`;
+    });
+    this.els.overlay.addEventListener("mousedown", (e) => {
+      if (e.target === this.els.overlay) this.hide();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this._open) this.hide();
+    });
+  },
+
+  async show() {
+    this.els.overlay.hidden = false;
+    this._open = true;
+    setTimeout(() => this.els.text.focus(), 50);
+    if (!OmniNative.available) {
+      this.setState("OFFLINE", "err");
+      this.els.sub.textContent = "앱에서만 동작";
+      return;
+    }
+    const r = await OmniNative.request("omnia.status", null, 8000).catch(() => null);
+    if (!r || !r.ok) {
+      this.setState("LLM OFF", "err");
+      this.logLine("sys", "로컬 LLM이 실행 중이 아닙니다. 터미널에서 `ollama serve`를 실행한 뒤 다시 열어 주십시오.");
+      return;
+    }
+    const has = (r.models || []).includes(this.MODEL);
+    if (!has && (r.models || []).length) this.MODEL = r.models[0];
+    this.els.sub.textContent = `LOCAL · ${this.MODEL.split(":")[0].toUpperCase()}`;
+    this.setState("READY", "");
+  },
+
+  hide() {
+    this.els.overlay.hidden = true;
+    this._open = false;
+    if (this._busy) {
+      OmniNative.request("omnia.stop", null, 5000).catch(() => {});
+      this._busy = false;
+    }
+  },
+
+  setState(text, cls) {
+    this.els.state.textContent = text;
+    this.els.state.className = `oa-state${cls ? " " + cls : ""}`;
+  },
+
+  logLine(who, text) {
+    const hint = this.els.log.querySelector(".oa-hint");
+    if (hint) hint.remove();
+    const line = document.createElement("div");
+    line.className = `oa-line ${who}`;
+    const w = document.createElement("span");
+    w.className = "who";
+    w.textContent = who === "you" ? "YOU" : who === "oa" ? "OMNIA" : "SYS";
+    const t = document.createElement("span");
+    t.className = "txt";
+    t.textContent = text;
+    line.append(w, t);
+    this.els.log.appendChild(line);
+    this.els.log.scrollTop = this.els.log.scrollHeight;
+    return { line, txt: t };
+  },
+
+  async send(preset) {
+    const text = (preset || this.els.text.value).trim();
+    if (!text || this._busy || !OmniNative.available) return;
+    if (!preset) {
+      this.els.text.value = "";
+      this.els.text.style.height = "auto";
+    }
+    this.logLine("you", text);
+    this.history.push({ role: "user", content: text });
+    while (this.history.length > 20) this.history.shift();
+    this._busy = true;
+    this._turn++;
+    this.setState("THINKING", "busy");
+    this._cur = this.logLine("oa", "");
+    this._cur.raw = "";
+    const messages = [{ role: "system", content: this.SYSTEM }, ...this.history];
+    const r = await OmniNative.request("omnia.chat", JSON.stringify({
+      model: this.MODEL, messages, turn: this._turn,
+    }), 15000).catch(() => null);
+    if (!r || !r.ok) {
+      this._busy = false;
+      this.setState("ERROR", "err");
+      this.logLine("sys", "로컬 LLM 호출 실패");
+    }
+  },
+
+  // 네이티브 스트리밍 콜백
+  _tok(payload, turn) {
+    if (turn !== this._turn || !this._cur) return;
+    this._cur.raw += payload.t || "";
+    // <think> 블록은 흐리게 표시 (추론형 모델 대응)
+    const shown = this._cur.raw
+      .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+      .replace(/<think>[\s\S]*$/, "");
+    this._cur.txt.textContent = shown || "…";
+    this.els.log.scrollTop = this.els.log.scrollHeight;
+  },
+
+  _err(payload, turn) {
+    if (turn !== this._turn) return;
+    this._busy = false;
+    this.setState("ERROR", "err");
+    this.logLine("sys", `오류: ${payload.e || "unknown"}`);
+  },
+
+  _done(turn) {
+    if (turn !== this._turn || !this._busy) return;
+    this._busy = false;
+    this.setState("READY", "");
+    const raw = (this._cur && this._cur.raw) || "";
+    const clean = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+    this.history.push({ role: "assistant", content: clean });
+    if (this._cur) this.renderFinal(this._cur, clean);
+    this._cur = null;
+  },
+
+  // 코드블록을 SAVE/RUN 버튼이 달린 블록으로 렌더
+  renderFinal(cur, text) {
+    cur.txt.textContent = "";
+    const parts = text.split(/```(\w*)\n?([\s\S]*?)```/g);
+    for (let i = 0; i < parts.length; i++) {
+      if (i % 3 === 0) {
+        if (parts[i].trim()) {
+          const span = document.createElement("span");
+          span.textContent = parts[i].replace(/^\n+|\n+$/g, "");
+          cur.txt.appendChild(span);
+        }
+      } else if (i % 3 === 1) {
+        const lang = parts[i] || "txt";
+        const code = parts[i + 1] || "";
+        cur.txt.appendChild(this.codeBlock(lang, code));
+        i++; // 코드 본문 소비
+      }
+    }
+    this.els.log.scrollTop = this.els.log.scrollHeight;
+  },
+
+  codeBlock(lang, code) {
+    const box = document.createElement("div");
+    box.className = "oa-code";
+    const head = document.createElement("div");
+    head.className = "oa-code-h";
+    const label = document.createElement("span");
+    label.textContent = lang.toUpperCase();
+    const spacer = document.createElement("span");
+    spacer.className = "ts-spacer";
+    const save = document.createElement("button");
+    save.className = "oa-cbtn";
+    save.textContent = "SAVE";
+    save.addEventListener("click", () => this.saveCode(lang, code));
+    head.append(label, spacer, save);
+    // 셸 계열만 실행 버튼 (승인 필수)
+    if (/^(bash|sh|zsh|shell|console)$/i.test(lang)) {
+      const run = document.createElement("button");
+      run.className = "oa-cbtn run";
+      run.textContent = "RUN";
+      run.addEventListener("click", () => this.runCode(code, box));
+      head.appendChild(run);
+    }
+    const pre = document.createElement("pre");
+    pre.textContent = code.replace(/\n+$/, "");
+    box.append(head, pre);
+    return box;
+  },
+
+  saveCode(lang, code) {
+    const EXT = { python: "py", javascript: "js", bash: "sh", sh: "sh", zsh: "sh",
+      json: "json", html: "html", css: "css", cpp: "cpp", c: "c", swift: "swift",
+      rust: "rs", go: "go", java: "java", ruby: "rb", yaml: "yml", txt: "txt" };
+    const ext = EXT[lang.toLowerCase()] || "txt";
+    OmniNative.request("omnia.save", JSON.stringify({
+      name: `omnia_snippet.${ext}`, content: code,
+    }), 120000).catch(() => {});
+  },
+
+  async runCode(code, box) {
+    // 사용자 승인 없이는 절대 실행하지 않는다
+    const preview = code.trim().split("\n").slice(0, 6).join("\n");
+    if (!window.confirm(`오미니아가 이 명령을 실행하려 합니다.\n\n${preview}\n\n실행할까요?`)) {
+      return;
+    }
+    const out = document.createElement("div");
+    out.className = "oa-out";
+    out.textContent = "실행 중…";
+    box.appendChild(out);
+    const r = await OmniNative.request("omnia.run",
+      JSON.stringify({ script: code }), 90000).catch(() => null);
+    if (!r || !r.ok) {
+      out.textContent = `실행 실패: ${(r && r.error) || "unknown"}`;
+      return;
+    }
+    out.textContent = `[exit ${r.code}]\n${r.output || "(출력 없음)"}`.slice(0, 8000);
+    // 결과를 대화 맥락에 넣어 오미니아가 이어서 판단할 수 있게
+    this.history.push({
+      role: "user",
+      content: `[터미널 실행 결과 exit=${r.code}]\n${(r.output || "").slice(0, 4000)}`,
+    });
   },
 });
 
