@@ -3670,9 +3670,18 @@ input.vc-name {
   cursor: pointer;
   text-align: left;
 }
+.st-theme { position: relative; }
 .st-theme:hover { border-color: var(--cyan-soft); }
 .st-theme.active { border-color: var(--cyan-soft); background: rgba(53, 214, 255, 0.1); }
-.st-th-swatch { width: 100%; height: 34px; border: 1px solid rgba(255, 255, 255, 0.12); }
+.st-theme.active::after {
+  content: "\2713";
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 11px;
+  color: var(--blue);
+}
+.st-th-swatch { width: 100%; height: 40px; border: 1px solid rgba(255, 255, 255, 0.12); }
 .st-sw-hud { background: linear-gradient(135deg, #051224 40%, #0a2a4a), radial-gradient(circle at 70% 30%, rgba(53,214,255,.5), transparent 60%); background-blend-mode: screen; }
 .st-sw-apple { background: linear-gradient(135deg, #1c1c1e 55%, #2c2c2e); position: relative; }
 .st-sw-apple::after { content: ""; position: absolute; right: 8px; top: 8px; width: 18px; height: 18px; border-radius: 50%; background: #0a84ff; }
@@ -3680,12 +3689,15 @@ input.vc-name {
 .st-th-desc { font-size: 8.5px; letter-spacing: 0.5px; color: var(--text-dim); }
 
 /* ---------- THEME: APPLE (macOS 다크 스타일) ---------- */
+/* 전 규칙 [data-omni-theme="apple"] 스코프 — HUD 테마는 건드리지 않는다.
+   원칙: 조용한 표면(장식 제거) · 계층(배경<카드<컨트롤) · 시스템 블루 강조 ·
+   회색 필 버튼(무테) · 라운드 코너 · SF 타이포그래피 */
 [data-omni-theme="apple"] {
   --bg-deep: #000000;
   --bg-mid: #1c1c1e;
   --cyan: #f2f2f7;
   --cyan-soft: rgba(10, 132, 255, 0.75);
-  --cyan-faint: rgba(255, 255, 255, 0.12);
+  --cyan-faint: rgba(255, 255, 255, 0.09);
   --blue: #0a84ff;
   --text-dim: #98989f;
   --ok: #30d158;
@@ -3693,6 +3705,11 @@ input.vc-name {
   --alert: #ff453a;
   --font-display: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif;
   --font-mono: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  /* 애플 소재 토큰 */
+  --ap-card: rgba(28, 28, 30, 0.62);
+  --ap-line: rgba(255, 255, 255, 0.08);
+  --ap-fill: rgba(120, 120, 128, 0.26);
+  --ap-fill-hover: rgba(120, 120, 128, 0.4);
 }
 [data-omni-theme="apple"] body {
   background: linear-gradient(180deg, #161618 0%, #0b0b0d 100%);
@@ -3700,7 +3717,7 @@ input.vc-name {
 /* HUD 장식 제거 — 애플은 조용한 표면 */
 [data-omni-theme="apple"] .bg-grid,
 [data-omni-theme="apple"] .scanline { display: none; }
-[data-omni-theme="apple"] .bg-glow { opacity: 0.25; }
+[data-omni-theme="apple"] .bg-glow { opacity: 0.18; }
 /* 타이포: 넓은 자간 대신 애플식 타이트 트래킹 */
 [data-omni-theme="apple"] * { letter-spacing: 0.015em !important; }
 [data-omni-theme="apple"] .logo,
@@ -3709,23 +3726,110 @@ input.vc-name {
 [data-omni-theme="apple"] .nf-title,
 [data-omni-theme="apple"] .oa-title,
 [data-omni-theme="apple"] .st-title { letter-spacing: 0.06em !important; font-weight: 700; }
-/* 라운드 코너 — 컨트롤과 카드 */
+
+/* 라운드 코너 */
 [data-omni-theme="apple"] :is(button, input, textarea, select) { border-radius: 8px; }
 [data-omni-theme="apple"] :is(.cmd-tile, .ai-log, .ai-ind-list, .ai-core, .ai-keyinput input,
-  .nf-item, .nf-setup, .nf-count, .oa-modal, .oa-code, .oa-out, .st-modal, .st-theme,
+  .nf-item, .nf-setup, .nf-count, .oa-modal, .oa-code, .oa-out, .oa-log, .st-modal, .st-theme,
   .st-th-swatch, .ai-state, .oa-state, .nf-btn, .pj-ctx, .omni-ctx, .ai-line.pending,
-  .cmd-stage, .lightbox-inner) { border-radius: 12px; }
-[data-omni-theme="apple"] .nav-item { border-radius: 9px; margin: 1px 8px; }
-[data-omni-theme="apple"] .nav-item.active {
-  background: rgba(10, 132, 255, 0.22);
+  .lightbox-inner) { border-radius: 12px; }
+[data-omni-theme="apple"] .cmd-stage { border-radius: 16px; }
+[data-omni-theme="apple"] :is(.cmd-bar, .cmd-bar i) { border-radius: 3px; }
+
+/* 계층: 카드 표면 (남색 잔재 제거) */
+[data-omni-theme="apple"] :is(.cmd-tile, .ai-log, .ai-ind-list, .ai-core, .nf-item,
+  .oa-log, .oa-code, .oa-out, .cmd-stage, .st-theme) {
+  background: var(--ap-card);
+  border-color: var(--ap-line);
+}
+[data-omni-theme="apple"] .nf-setup { border-color: var(--ap-line); background: var(--ap-card); }
+
+/* 입력 필드: 필 배경 + 무테, 포커스 링 */
+[data-omni-theme="apple"] :is(.ai-text, .oa-text, .ai-keyinput input, .nf-setup-row input) {
+  background: rgba(118, 118, 128, 0.18);
+  border-color: transparent;
+  color: #f2f2f7;
+}
+[data-omni-theme="apple"] :is(.ai-text, .oa-text, .ai-keyinput input, .nf-setup-row input):focus {
+  border-color: transparent;
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.35);
+}
+
+/* 버튼: 회색 필 + 무테 (호버 시 진해짐) */
+[data-omni-theme="apple"] :is(.ai-model, .nf-btn, .ai-keybtn, .ai-sendbtn, .oa-send,
+  .ai-keyinput button) {
+  background: var(--ap-fill);
+  border-color: transparent;
+  color: #f2f2f7;
+}
+[data-omni-theme="apple"] :is(.ai-model, .nf-btn, .ai-keybtn, .ai-sendbtn, .oa-send,
+  .ai-keyinput button):hover {
+  background: var(--ap-fill-hover);
   border-color: transparent;
 }
+/* 선택 상태: 시스템 블루 솔리드 필 */
+[data-omni-theme="apple"] .ai-model.active {
+  background: #0a84ff;
+  border-color: transparent;
+  color: #ffffff;
+}
+[data-omni-theme="apple"] .ai-model.disabled { opacity: 0.35; }
+
+/* LIVE: 애플식 프라이머리 버튼 (기본부터 블루 필) */
+[data-omni-theme="apple"] .ai-listen {
+  background: #0a84ff;
+  border-color: transparent;
+  color: #ffffff;
+  font-weight: 600;
+}
+[data-omni-theme="apple"] .ai-listen:hover { background: #2b95ff; }
+[data-omni-theme="apple"] .ai-listen.live {
+  background: #ff453a;
+  border-color: transparent;
+  color: #ffffff;
+  animation: none;
+}
+
+/* 상태 칩·배지 */
+[data-omni-theme="apple"] :is(.ai-state, .oa-state, .nf-count) {
+  background: var(--ap-fill);
+  border-color: transparent;
+}
+[data-omni-theme="apple"] .ai-state.on { background: rgba(48, 209, 88, 0.22); }
+[data-omni-theme="apple"] .ai-state.err { background: rgba(255, 69, 58, 0.22); }
+[data-omni-theme="apple"] .nf-item .unread {
+  color: #7cb8ff;
+  border-color: transparent;
+  background: rgba(10, 132, 255, 0.22);
+  border-radius: 5px;
+}
+
+/* 사이드바: 반투명 소재 + 선택 필 */
 [data-omni-theme="apple"] .sidebar {
   background: rgba(28, 28, 30, 0.72);
   backdrop-filter: blur(20px);
   border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
-/* 모달·팝업을 애플 소재감으로 */
+[data-omni-theme="apple"] .nav-item { border-radius: 9px; margin: 1px 8px; }
+[data-omni-theme="apple"] .nav-item.active {
+  background: rgba(10, 132, 255, 0.24);
+  border-color: transparent;
+}
+
+/* COMMAND BRIDGE: 실버 홀로그램 + 시스템 블루 게이지 */
+[data-omni-theme="apple"] .cmd-stage-vp canvas {
+  filter: saturate(0.15) brightness(1.12);
+}
+[data-omni-theme="apple"] .cmd-stage-ring {
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 40px rgba(255, 255, 255, 0.04);
+}
+[data-omni-theme="apple"] .cmd-bar { background: rgba(120, 120, 128, 0.28); }
+[data-omni-theme="apple"] .cmd-bar i { background: #0a84ff; box-shadow: none; }
+[data-omni-theme="apple"] .cmd-v { color: #f2f2f7; }
+[data-omni-theme="apple"] .cmd-ticker-track .item b { color: #f2f2f7; }
+
+/* 모달·팝업: 애플 소재감 */
 [data-omni-theme="apple"] :is(.oa-modal, .st-modal) {
   background: rgba(30, 30, 32, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -3734,19 +3838,34 @@ input.vc-name {
 [data-omni-theme="apple"] :is(.oa-overlay, .st-overlay, .lightbox) {
   background: rgba(0, 0, 0, 0.55);
 }
-/* 강조 버튼: 시스템 블루 필 */
-[data-omni-theme="apple"] :is(.ai-listen, .oa-send, .ai-sendbtn):hover,
-[data-omni-theme="apple"] .ai-model.active,
+
+/* 설정 카드 선택 */
 [data-omni-theme="apple"] .st-theme.active {
-  background: rgba(10, 132, 255, 0.28);
+  background: rgba(10, 132, 255, 0.16);
   border-color: rgba(10, 132, 255, 0.55);
 }
+[data-omni-theme="apple"] .st-theme.active::after { color: #7cb8ff; }
+
+/* NOTIF: 카드 대비 (읽은 항목 덜 어둡게) */
+[data-omni-theme="apple"] .nf-item { opacity: 0.78; }
+[data-omni-theme="apple"] .nf-item:hover { opacity: 1; border-color: rgba(255, 255, 255, 0.22); }
 [data-omni-theme="apple"] .nf-item.new {
+  opacity: 1;
   background: rgba(10, 132, 255, 0.16);
   border-color: rgba(10, 132, 255, 0.45);
   box-shadow: none;
 }
-[data-omni-theme="apple"] .ai-listen.live {
-  background: rgba(255, 69, 58, 0.2);
-  border-color: rgba(255, 69, 58, 0.6);
+
+/* 인디케이터 값: 중립 흰색 (ok/err 클래스는 시스템 색 유지) */
+[data-omni-theme="apple"] .ai-ind span:last-child { color: #f2f2f7; }
+[data-omni-theme="apple"] .ai-ind span.ok { color: var(--ok); }
+[data-omni-theme="apple"] .ai-ind span.err { color: var(--alert); }
+[data-omni-theme="apple"] .ai-ind span.busy { color: var(--warn); }
+
+/* 스크롤바 */
+[data-omni-theme="apple"] ::-webkit-scrollbar { width: 8px; height: 8px; }
+[data-omni-theme="apple"] ::-webkit-scrollbar-track { background: transparent; }
+[data-omni-theme="apple"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
 }
