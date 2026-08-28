@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.54.0",
+  version: "0.55.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -542,6 +542,7 @@ OmniOS.register("ai", {
     "- 파일 도구(list_dir/read_file/edit_file/write_file): ~/Desktop 아래 파일을 직접 나열·읽기·수정할 수 있습니다. 파일 개수·내용·코드에 대한 질문은 추측하거나 못 한다고 하지 말고 반드시 도구로 확인해 실측값으로 답합니다. 수정 요청은 read_file로 해당 부분을 먼저 확인하고 edit_file(정확 치환)로 수행한 뒤 무엇을 어떻게 바꿨는지 보고합니다.",
     "- 경로 규칙: 프로젝트 폴더는 ~/Desktop/Important/Omni_OS/Projects/<프로젝트이름>/{3d,arduino,code,notes}, 노트 볼트는 ~/Desktop/Important/Omni_OS/Notes, 스캔 저장은 ~/Desktop/Important/Omni_OS/ARC-SCAN-SAVES. (~는 사용자 홈 — 절대 경로로 쓸 때는 /Users/geonhee)",
     "- 카카오톡·앱 알림 확인: \"카톡 온 거 확인해줘\" 류 요청은 check_notifications 도구(app:'kakao')로 최근 알림을 읽어 보낸 사람과 내용을 간결히 요약 보고합니다. 다른 앱 알림도 app을 비우면 전체 조회됩니다. 알림이 떴던 메시지만 보이는 한계를 알고 있습니다. 메시지 발신은 미지원입니다.",
+    "- 지메일 확인: \"메일 확인해줘\" 류 요청은 check_gmail 도구로 받은편지함을 직접 읽어(IMAP, 알림 무관) 보낸 사람·제목·안읽음 여부를 요약 보고합니다. 메일 발송은 미지원입니다.",
     "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
   // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
@@ -605,6 +606,15 @@ OmniOS.register("ai", {
           app: { type: "string", description: "'kakao' 또는 번들ID 일부, 비우면 전체" },
           hours: { type: "number" },
         },
+        required: [],
+      },
+    },
+    {
+      name: "check_gmail",
+      description: "Gmail 받은편지함을 IMAP으로 직접 읽는다 — \"메일 확인해줘\" 요청에 사용. hours는 최근 N시간(기본 48). 결과 각 줄: [시각] [UNREAD] 보낸사람: 제목. 알림과 무관하게 실제 메일함 기준.",
+      input_schema: {
+        type: "object",
+        properties: { hours: { type: "number" } },
         required: [],
       },
     },
@@ -1123,6 +1133,26 @@ OmniOS.register("ai", {
       if (name === "save_memory") {
         await this.saveMemory(String(input.content || ""));
         return "장기 메모리 저장 완료";
+      }
+      if (name === "check_gmail") {
+        const r = await OmniNative.request("ai.gmailRecent",
+          JSON.stringify({ hours: input.hours || 48 }), 30000);
+        if (!r || !r.ok) {
+          const e = r && r.error;
+          return e === "NEED_SETUP"
+            ? "오류: Gmail이 아직 연결되지 않았습니다. 사용자에게 안내하라: NOTIFICATIONS 패널의 GMAIL 섹션에서 이메일과 Google 앱 비밀번호를 저장해 주십시오."
+            : e === "AUTH_FAILED"
+              ? "오류: Gmail 인증 실패 — 앱 비밀번호를 다시 저장해야 합니다."
+              : `오류: ${e || "Gmail 조회 실패"}`;
+        }
+        const notifMod = OmniOS.modules.notif;
+        if (notifMod) notifMod.showFromAI();
+        if (!r.items || !r.items.length) return "(해당 기간 메일 없음)";
+        return r.items.map((m) => {
+          const d = new Date(m.ts * 1000);
+          const t = `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+          return `[${t}]${m.unread ? " [UNREAD]" : ""} ${m.from}: ${m.subject}`;
+        }).join("\n");
       }
       if (name === "check_notifications") {
         const r = await OmniNative.request("ai.notifRecent", JSON.stringify({
@@ -1660,6 +1690,15 @@ OmniOS.register("ai", {
     },
     {
       type: "function",
+      name: "check_gmail",
+      description: "Gmail 받은편지함 확인 — \"메일 확인해줘\"에 사용. hours 기본 48. 보낸 사람과 제목, 안읽음 여부를 간결히 요약해 말한다. 연결 안 됐다는 응답이 오면 그 안내를 그대로 전한다.",
+      parameters: {
+        type: "object",
+        properties: { hours: { type: "number" } },
+      },
+    },
+    {
+      type: "function",
       name: "check_notifications",
       description: "최근 macOS 알림 확인 — \"카톡 온 거 확인해줘\" 등 메시지/알림 질문에 사용. app:'kakao'면 카카오톡만, 비우면 전체 앱. hours 기본 24. 결과를 보낸 사람과 내용 중심으로 간결하게 요약해 말한다. 권한 오류 응답이 오면 그 안내를 그대로 전한다.",
       parameters: {
@@ -1936,6 +1975,9 @@ OmniOS.register("ai", {
     } else if (name === "check_notifications") {
       this.logLine("sys", `도구 · check_notifications ${(args.app || "전체")}`);
       output = await this.execTool("check_notifications", args || {});
+    } else if (name === "check_gmail") {
+      this.logLine("sys", "도구 · check_gmail");
+      output = await this.execTool("check_gmail", args || {});
     } else {
       output = `unknown tool: ${name}`;
     }
@@ -2055,12 +2097,17 @@ OmniOS.register("notif", {
       kakaoCount: $("nf-kakao-count"),
       gmailList: $("nf-gmail-list"),
       gmailCount: $("nf-gmail-count"),
+      gmailSetup: $("nf-gmail-setup"),
+      gmailEmail: $("nf-gmail-email"),
+      gmailPw: $("nf-gmail-pw"),
+      gmailSave: $("nf-gmail-save"),
       updated: $("nf-updated"),
       refresh: $("nf-refresh"),
       dot: $("nf-nav-dot"),
     };
     this._lastSeen = Number(localStorage.getItem("omni.notif.seen") || 0);
     this.els.refresh.addEventListener("click", () => this.refresh());
+    this.els.gmailSave.addEventListener("click", () => this.saveGmail());
     document.addEventListener("omni:panel", (e) => {
       if (e.detail === "notif") {
         this.refresh();
@@ -2083,37 +2130,73 @@ OmniOS.register("notif", {
     }
   },
 
-  // 섹션 분류: 카카오톡 / 지메일(Apple Mail 또는 브라우저의 Gmail 알림)
   _isKakao(it) { return /kakao/i.test(it.app); },
-  _isGmail(it) {
-    return /\bmail\b|apple\.mail|gmail/i.test(it.app)
-      || /gmail/i.test(`${it.title} ${it.subtitle}`);
-  },
+  _gmailItems: [],
+  _gmailErr: null,
+  _gmailNeedSetup: false,
 
   async refresh(silent) {
     if (!OmniNative.available) {
       this._err = "브라우저 개발 모드 — 알림은 앱에서만 조회됩니다";
+      this._gmailErr = this._err;
       this.render();
       return;
     }
-    try {
-      // 전체 앱 알림을 한 번에 받아 섹션은 클라이언트에서 분류
-      const r = await OmniNative.request("ai.notifRecent",
-        JSON.stringify({ bundle: "", hours: 48 }), 20000);
-      if (!r || !r.ok) {
-        this._err = (r && r.error) === "FDA_REQUIRED"
-          ? "전체 디스크 접근 권한 필요 — 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에서 Omni OS를 허용한 뒤 앱을 재시작하십시오."
-          : `조회 실패: ${(r && r.error) || "unknown"}`;
-      } else {
-        this._err = null;
-        this._items = r.items || [];
-        this.els.updated.textContent =
-          `UPDATED ${new Date().toTimeString().slice(0, 5)}`;
-      }
-    } catch (e) {
-      if (!silent) this._err = "조회 실패: 브리지 오류";
+    // 카톡(알림 DB)과 지메일(IMAP 직결)을 병렬 조회
+    const [notif, gmail] = await Promise.all([
+      OmniNative.request("ai.notifRecent",
+        JSON.stringify({ bundle: "kakao", hours: 48 }), 20000).catch(() => null),
+      OmniNative.request("ai.gmailRecent",
+        JSON.stringify({ hours: 48 }), 30000).catch(() => null),
+    ]);
+    if (!notif || !notif.ok) {
+      this._err = notif && notif.error === "FDA_REQUIRED"
+        ? "전체 디스크 접근 권한 필요 — 시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에서 Omni OS를 허용한 뒤 앱을 재시작하십시오."
+        : (silent ? this._err : `조회 실패: ${(notif && notif.error) || "unknown"}`);
+    } else {
+      this._err = null;
+      this._items = notif.items || [];
     }
+    this._gmailNeedSetup = false;
+    if (!gmail || !gmail.ok) {
+      const e = gmail && gmail.error;
+      if (e === "NEED_SETUP") {
+        this._gmailNeedSetup = true;
+        this._gmailErr = null;
+        this._gmailItems = [];
+      } else if (e === "AUTH_FAILED") {
+        this._gmailErr = "Gmail 인증 실패 — 이메일/앱 비밀번호를 다시 저장하십시오 (아래 SETUP)";
+        this._gmailNeedSetup = true;
+        this._gmailItems = [];
+      } else if (!silent) {
+        this._gmailErr = `Gmail 조회 실패: ${e || "unknown"}`;
+      }
+    } else {
+      this._gmailErr = null;
+      this._gmailItems = (gmail.items || []).map((m) => ({
+        app: "gmail-imap", src: "imap", ts: m.ts,
+        title: m.from, subtitle: "", body: m.subject, unread: !!m.unread,
+      }));
+    }
+    this.els.updated.textContent = `UPDATED ${new Date().toTimeString().slice(0, 5)}`;
     this.render();
+  },
+
+  async saveGmail() {
+    const mail = this.els.gmailEmail.value.trim();
+    const pw = this.els.gmailPw.value.trim();
+    if (!mail || !pw) return;
+    try {
+      const r = await OmniNative.request("ai.saveKey", JSON.stringify({
+        provider: "gmail", key: `${mail}\n${pw}`,
+      }), 8000);
+      if (r && r.ok) {
+        this.els.gmailEmail.value = "";
+        this.els.gmailPw.value = "";
+        this.els.gmailSetup.hidden = true;
+        this.refresh();
+      }
+    } catch (e) { /* 무시 */ }
   },
 
   // 알림 클릭 → 원본 앱/서비스 열기
@@ -2121,10 +2204,7 @@ OmniOS.register("notif", {
     if (this._isKakao(it)) {
       OmniNative.request("open.app",
         JSON.stringify({ bundle: "com.kakao.KakaoTalkMac" }), 8000).catch(() => {});
-    } else if (/apple\.mail/i.test(it.app)) {
-      OmniNative.request("open.app",
-        JSON.stringify({ bundle: "com.apple.mail" }), 8000).catch(() => {});
-    } else if (this._isGmail(it)) {
+    } else if (it.src === "imap") {
       OmniNative.request("open.url",
         JSON.stringify({ url: "https://mail.google.com" }), 8000).catch(() => {});
     }
@@ -2143,7 +2223,7 @@ OmniOS.register("notif", {
     let hasNew = false;
     const today = new Date().toDateString();
     for (const it of items) {
-      const isNew = it.ts * 1000 > this._lastSeen;
+      const isNew = it.unread || it.ts * 1000 > this._lastSeen;
       if (isNew) hasNew = true;
       const row = document.createElement("div");
       row.className = `nf-item${isNew ? " new" : ""}`;
@@ -2158,35 +2238,52 @@ OmniOS.register("notif", {
       const who = document.createElement("span");
       who.className = "who";
       who.textContent = it.title + (it.subtitle ? ` · ${it.subtitle}` : "");
+      row.append(t, who);
+      if (it.unread) {
+        const u = document.createElement("span");
+        u.className = "unread";
+        u.textContent = "UNREAD";
+        row.appendChild(u);
+      }
       const msg = document.createElement("span");
       msg.className = "msg";
       msg.textContent = it.body;
-      row.append(t, who, msg);
+      row.appendChild(msg);
       listEl.appendChild(row);
     }
     return hasNew;
   },
 
+  renderError(listEl, countEl, text) {
+    listEl.textContent = "";
+    const d = document.createElement("div");
+    d.className = "nf-err";
+    d.textContent = text;
+    listEl.appendChild(d);
+    countEl.textContent = "0";
+  },
+
   render() {
+    // 카카오톡 (알림 DB)
+    let newK = false;
     if (this._err) {
-      for (const [list, count] of [
-        [this.els.kakaoList, this.els.kakaoCount],
-        [this.els.gmailList, this.els.gmailCount],
-      ]) {
-        list.textContent = "";
-        const d = document.createElement("div");
-        d.className = "nf-err";
-        d.textContent = this._err;
-        list.appendChild(d);
-        count.textContent = "0";
-      }
-      this.els.dot.classList.remove("on");
-      return;
+      this.renderError(this.els.kakaoList, this.els.kakaoCount, this._err);
+    } else {
+      newK = this.renderSection(this.els.kakaoList, this.els.kakaoCount,
+        this._items.filter((it) => this._isKakao(it)));
     }
-    const kakao = this._items.filter((it) => this._isKakao(it));
-    const gmail = this._items.filter((it) => !this._isKakao(it) && this._isGmail(it));
-    const newK = this.renderSection(this.els.kakaoList, this.els.kakaoCount, kakao);
-    const newG = this.renderSection(this.els.gmailList, this.els.gmailCount, gmail);
+    // 지메일 (IMAP)
+    let newG = false;
+    this.els.gmailSetup.hidden = !this._gmailNeedSetup;
+    if (this._gmailErr) {
+      this.renderError(this.els.gmailList, this.els.gmailCount, this._gmailErr);
+    } else if (this._gmailNeedSetup) {
+      this.els.gmailList.textContent = "";
+      this.els.gmailCount.textContent = "0";
+    } else {
+      newG = this.renderSection(this.els.gmailList, this.els.gmailCount,
+        this._gmailItems);
+    }
     // nav 점: 패널이 안 보일 때만 (보고 있는 중엔 하이라이트가 대신함)
     this.els.dot.classList.toggle("on",
       (newK || newG) && !this.els.panel.classList.contains("active"));

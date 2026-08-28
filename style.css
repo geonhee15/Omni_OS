@@ -3494,3 +3494,25 @@ input.vc-name {
 .nf-item.new .t { color: var(--cyan); }
 .nf-item { cursor: pointer; transition: border-color 0.15s; }
 .nf-item:hover { border-color: var(--cyan-soft); opacity: 1; }
+.nf-setup { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; border: 1px solid rgba(255, 200, 87, 0.25); padding: 10px 12px; }
+.nf-setup-hint { font-size: 9px; letter-spacing: 0.5px; line-height: 1.7; color: var(--warn); }
+.nf-setup-row { display: flex; gap: 8px; }
+.nf-setup-row input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(5, 18, 36, 0.7);
+  border: 1px solid var(--cyan-faint);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 6px 8px;
+  outline: none;
+}
+.nf-item .unread {
+  flex-shrink: 0;
+  font-size: 7.5px;
+  letter-spacing: 1.5px;
+  color: var(--warn);
+  border: 1px solid rgba(255, 200, 87, 0.35);
+  padding: 1px 6px;
+}

@@ -1762,9 +1762,13 @@ static NSString *OmniAIFsValidate(NSString *path) {
     }
 
     if ([cmd isEqualToString:@"ai.status"]) {
+        NSString *gmailKey = [NSHomeDirectory()
+            stringByAppendingPathComponent:@".omni/gmail.key"];
         [self deliverPayload:@{ @"ok" : @YES,
                                 @"key" : @(OmniAIReadKey() != nil),
                                 @"openai" : @(OmniAIOpenAIKey() != nil),
+                                @"gmail" : @([NSFileManager.defaultManager
+                                    fileExistsAtPath:gmailKey]),
                                 @"neural" : @(OmniAINeuralAvailable()),
                                 @"listening" : @(self.aiListener.running) }
                        forId:msgId];
@@ -1784,9 +1788,12 @@ static NSString *OmniAIFsValidate(NSString *path) {
             [self deliverPayload:@{ @"ok" : @NO, @"error" : @"invalid key" } forId:msgId];
             return;
         }
-        BOOL isOpenAI = [a[@"provider"] isKindOfClass:[NSString class]]
-            && [a[@"provider"] isEqualToString:@"openai"];
-        NSString *keyPath = isOpenAI ? OmniAIOpenAIKeyPath() : OmniAIKeyPath();
+        NSString *provider = [a[@"provider"] isKindOfClass:[NSString class]]
+            ? a[@"provider"] : @"";
+        NSString *keyPath = [provider isEqualToString:@"openai"] ? OmniAIOpenAIKeyPath()
+            : [provider isEqualToString:@"gmail"]
+                ? [NSHomeDirectory() stringByAppendingPathComponent:@".omni/gmail.key"]
+                : OmniAIKeyPath();
         NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@".omni"];
         [NSFileManager.defaultManager createDirectoryAtPath:dir
                                 withIntermediateDirectories:YES attributes:nil error:nil];
@@ -1869,6 +1876,44 @@ static NSString *OmniAIFsValidate(NSString *path) {
 
     } else if ([cmd isEqualToString:@"ai.notifRecent"]) {
         [self handleAINotif:a msgId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.gmailRecent"]) {
+        // Gmail IMAP 리더 (scripts/gmail_helper.py — 읽기 전용, 표준 라이브러리만)
+        double hours = [a[@"hours"] isKindOfClass:[NSNumber class]]
+            ? [a[@"hours"] doubleValue] : 48.0;
+        NSString *helper = [OmniBaseDir()
+            stringByAppendingPathComponent:@"scripts/gmail_helper.py"];
+        NSString *creds = [NSHomeDirectory()
+            stringByAppendingPathComponent:@".omni/gmail.key"];
+        if (![NSFileManager.defaultManager fileExistsAtPath:creds]) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NEED_SETUP" } forId:msgId];
+            return;
+        }
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/python3"];
+            task.arguments = @[ helper, creds,
+                                [NSString stringWithFormat:@"%.1f", hours] ];
+            NSPipe *outPipe = [NSPipe pipe];
+            task.standardOutput = outPipe;
+            task.standardError = [NSPipe pipe];
+            NSError *err = nil;
+            if (![task launchAndReturnError:&err]) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : err.localizedDescription ?: @"helper launch" } forId:msgId];
+                return;
+            }
+            NSData *outData = [outPipe.fileHandleForReading readDataToEndOfFile];
+            [task waitUntilExit];
+            id parsed = outData.length
+                ? [NSJSONSerialization JSONObjectWithData:outData options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) {
+                [self deliverPayload:parsed forId:msgId];
+            } else {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"helper output" }
+                               forId:msgId];
+            }
+        });
 
     } else if ([cmd hasPrefix:@"ai.fs"]) {
         [self handleAIFs:cmd a:a msgId:msgId];
