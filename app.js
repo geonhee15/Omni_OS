@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.55.0",
+  version: "0.55.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -2101,6 +2101,8 @@ OmniOS.register("notif", {
       gmailEmail: $("nf-gmail-email"),
       gmailPw: $("nf-gmail-pw"),
       gmailSave: $("nf-gmail-save"),
+      gmailAdd: $("nf-gmail-add"),
+      gmailReset: $("nf-gmail-reset"),
       updated: $("nf-updated"),
       refresh: $("nf-refresh"),
       dot: $("nf-nav-dot"),
@@ -2108,6 +2110,14 @@ OmniOS.register("notif", {
     this._lastSeen = Number(localStorage.getItem("omni.notif.seen") || 0);
     this.els.refresh.addEventListener("click", () => this.refresh());
     this.els.gmailSave.addEventListener("click", () => this.saveGmail());
+    this.els.gmailAdd.addEventListener("click", () => {
+      this.els.gmailSetup.hidden = !this.els.gmailSetup.hidden;
+      if (!this.els.gmailSetup.hidden) this.els.gmailEmail.focus();
+    });
+    this.els.gmailReset.addEventListener("click", () => {
+      OmniNative.request("ai.clearKey", JSON.stringify({ provider: "gmail" }), 8000)
+        .then(() => this.refresh()).catch(() => {});
+    });
     document.addEventListener("omni:panel", (e) => {
       if (e.detail === "notif") {
         this.refresh();
@@ -2175,8 +2185,10 @@ OmniOS.register("notif", {
       this._gmailErr = null;
       this._gmailItems = (gmail.items || []).map((m) => ({
         app: "gmail-imap", src: "imap", ts: m.ts,
-        title: m.from, subtitle: "", body: m.subject, unread: !!m.unread,
+        title: m.from, subtitle: m.account || "", body: m.subject, unread: !!m.unread,
       }));
+      // 일부 계정만 실패한 경우 경고 표시용
+      this._gmailWarn = (gmail.warnings || []).join(" · ") || null;
     }
     this.els.updated.textContent = `UPDATED ${new Date().toTimeString().slice(0, 5)}`;
     this.render();
@@ -2188,7 +2200,7 @@ OmniOS.register("notif", {
     if (!mail || !pw) return;
     try {
       const r = await OmniNative.request("ai.saveKey", JSON.stringify({
-        provider: "gmail", key: `${mail}\n${pw}`,
+        provider: "gmail", key: `${mail} ${pw.replace(/\s+/g, "")}`,
       }), 8000);
       if (r && r.ok) {
         this.els.gmailEmail.value = "";
@@ -2283,6 +2295,12 @@ OmniOS.register("notif", {
     } else {
       newG = this.renderSection(this.els.gmailList, this.els.gmailCount,
         this._gmailItems);
+      if (this._gmailWarn) {
+        const w = document.createElement("div");
+        w.className = "nf-err";
+        w.textContent = `일부 계정 실패: ${this._gmailWarn}`;
+        this.els.gmailList.prepend(w);
+      }
     }
     // nav 점: 패널이 안 보일 때만 (보고 있는 중엔 하이라이트가 대신함)
     this.els.dot.classList.toggle("on",

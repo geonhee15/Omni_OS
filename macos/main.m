@@ -1797,6 +1797,24 @@ static NSString *OmniAIFsValidate(NSString *path) {
         NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@".omni"];
         [NSFileManager.defaultManager createDirectoryAtPath:dir
                                 withIntermediateDirectories:YES attributes:nil error:nil];
+        if ([provider isEqualToString:@"gmail"]) {
+            // 다중 계정: 한 줄 = "이메일 앱비밀번호" — 기존 파일에 추가,
+            // 같은 이메일이 이미 있으면 그 줄을 새 값으로 교체
+            NSString *newEmail = [[key componentsSeparatedByString:@" "] firstObject] ?: @"";
+            NSString *existing = [NSString stringWithContentsOfFile:keyPath
+                encoding:NSUTF8StringEncoding error:nil] ?: @"";
+            NSMutableArray *lines = [NSMutableArray array];
+            for (NSString *line in [existing componentsSeparatedByString:@"\n"]) {
+                NSString *t = [line stringByTrimmingCharactersInSet:
+                    NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                if (t.length == 0) continue;
+                NSString *em = [[t componentsSeparatedByString:@" "] firstObject] ?: @"";
+                if ([em isEqualToString:newEmail]) continue; // 교체 대상
+                [lines addObject:t];
+            }
+            [lines addObject:key];
+            key = [lines componentsJoinedByString:@"\n"];
+        }
         NSError *err = nil;
         BOOL ok = [key writeToFile:keyPath atomically:YES
                           encoding:NSUTF8StringEncoding error:&err];
@@ -1806,6 +1824,16 @@ static NSString *OmniAIFsValidate(NSString *path) {
         }
         [self deliverPayload:@{ @"ok" : @(ok),
                                 @"error" : err.localizedDescription ?: @"" } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.clearKey"]) {
+        NSString *provider = [a[@"provider"] isKindOfClass:[NSString class]] ? a[@"provider"] : @"";
+        if ([provider isEqualToString:@"gmail"]) {
+            NSString *p = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/gmail.key"];
+            [NSFileManager.defaultManager removeItemAtPath:p error:nil];
+            [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+        } else {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"unsupported" } forId:msgId];
+        }
 
     } else if ([cmd isEqualToString:@"ai.listen"]) {
         if (self.aiListener == nil) {
