@@ -3518,29 +3518,36 @@ input.vc-name {
 }
 
 /* ---------- OMNIA (로컬 보조 AI 팝업) ---------- */
+/* 오미니아: 상시 플로팅 창 — 배경을 가리지 않고 앱을 계속 쓸 수 있다.
+   컨테이너는 클릭을 통과시키고(pointer-events:none) 창 본체만 받는다. */
 .oa-overlay {
   position: fixed;
   inset: 0;
   z-index: 200;
-  background: rgba(2, 8, 19, 0.72);
-  backdrop-filter: blur(3px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  pointer-events: none;
 }
 .oa-overlay[hidden] { display: none; }
 .oa-modal {
-  width: min(820px, 88vw);
-  height: min(640px, 82vh);
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  width: min(460px, 40vw);
+  height: min(560px, 68vh);
+  min-width: 320px;
+  min-height: 280px;
+  pointer-events: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
   background: linear-gradient(160deg, rgba(8, 22, 44, 0.98), rgba(3, 12, 26, 0.98));
   border: 1px solid rgba(53, 214, 255, 0.35);
   box-shadow: 0 0 40px rgba(53, 214, 255, 0.12), 0 20px 60px rgba(0, 0, 0, 0.5);
-  padding: 18px 20px;
+  padding: 16px 18px;
+  resize: both;
+  overflow: hidden;
 }
-.oa-head { display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--cyan-faint); padding-bottom: 10px; }
+.oa-modal.dragging { opacity: 0.92; }
+.oa-head { display: flex; align-items: baseline; gap: 12px; cursor: move; user-select: none; border-bottom: 1px solid var(--cyan-faint); padding-bottom: 10px; }
 .oa-title { font-family: var(--font-display); font-size: 15px; letter-spacing: 5px; color: #9ef0ff; }
 .oa-sub { font-size: 8.5px; letter-spacing: 2px; color: var(--text-dim); }
 .oa-state { font-size: 9px; letter-spacing: 2px; color: var(--text-dim); border: 1px solid var(--cyan-faint); padding: 3px 10px; }

@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.58.1",
+  version: "0.59.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -1290,6 +1290,25 @@ OmniOS.register("ai", {
     return null;
   },
 
+  // 텍스트에 섞여 나온 [[OPEN:...]] / [[ACT:...]] 태그를 실행 (라이브 폴백)
+  async runTagsFromText(text) {
+    const opens = [...String(text).matchAll(/\[\[OPEN:([a-z0-9]+)\]\]/gi)]
+      .map((m) => m[1].toLowerCase());
+    const acts = [...String(text).matchAll(/\[\[ACT:([^\]]+)\]\]/gi)]
+      .map((m) => m[1].trim());
+    for (const k of [...new Set(opens)]) {
+      const btn = document.querySelector(`.nav-item[data-panel="${k}"]`);
+      if (btn && this.PANEL_LABELS[k]) {
+        btn.click();
+        this.logLine("sys", `패널 전환: ${this.PANEL_LABELS[k]}`);
+      }
+    }
+    for (const a of acts) {
+      const res = await this.runAction(a);
+      this.logLine("sys", `${res.ok ? "OK" : "실패"} · ${res.msg}`);
+    }
+  },
+
   async runAction(spec) {
     const parts = spec.split(":").map((s) => s.trim()).filter(Boolean);
     const key = (parts[0] || "").toLowerCase();
@@ -1996,6 +2015,17 @@ OmniOS.register("ai", {
       this.els.log.scrollTop = this.els.log.scrollHeight;
     } else if (t === "response.output_audio_transcript.done"
       || t === "response.audio_transcript.done") {
+      // 라이브에서 도구 대신 태그를 말해버리는 경우가 있다 — 태그가 보이면
+      // 표시에서 지우고 그대로 실행해준다 (동작이 조용히 누락되지 않게)
+      if (/\[\[(OPEN|ACT):/i.test(this._rtOmniText)) {
+        this.runTagsFromText(this._rtOmniText);
+        this._rtOmniText = this._rtOmniText
+          .replace(/\[\[(?:OPEN|ACT):[^\]]+\]\]/gi, " ")
+          .replace(/\s{2,}/g, " ").trim();
+        if (this._rtOmniLine) {
+          this._rtOmniLine.querySelector(".txt").textContent = this._rtOmniText;
+        }
+      }
       if (this._rtOmniText) {
         this.history.push({ role: "assistant", content: this._rtOmniText });
         this.trimHistory();
@@ -2183,18 +2213,72 @@ OmniOS.register("omnia", {
       this.els.text.style.height = "auto";
       this.els.text.style.height = `${Math.min(120, this.els.text.scrollHeight)}px`;
     });
-    this.els.overlay.addEventListener("mousedown", (e) => {
-      if (e.target === this.els.overlay) this.hide();
-    });
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && this._open) this.hide();
-    });
+    // 상시 플로팅 창 — 배경 클릭·ESC로는 닫히지 않는다 (X 버튼만)
+    this.restorePos();
+    this.initDrag();
+    // 사용자가 직접 닫은 적이 없으면 앱 시작과 함께 띄운다
+    if (localStorage.getItem("omni.omnia.closed") !== "1") {
+      setTimeout(() => this.show(true), 900);
+    }
   },
 
-  async show() {
+  // 헤더를 잡고 창 이동 (위치는 localStorage에 영속)
+  initDrag() {
+    const head = this.els.modal.querySelector(".oa-head");
+    let sx = 0, sy = 0, ox = 0, oy = 0, on = false;
+    const down = (e) => {
+      if (e.target.closest("button")) return; // 닫기 버튼 등은 제외
+      const r = this.els.modal.getBoundingClientRect();
+      // right/bottom 기준을 left/top으로 고정해 드래그 계산을 단순화
+      this.els.modal.style.left = `${r.left}px`;
+      this.els.modal.style.top = `${r.top}px`;
+      this.els.modal.style.right = "auto";
+      this.els.modal.style.bottom = "auto";
+      sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top; on = true;
+      this.els.modal.classList.add("dragging");
+      e.preventDefault();
+    };
+    const move = (e) => {
+      if (!on) return;
+      const w = this.els.modal.offsetWidth, h = this.els.modal.offsetHeight;
+      const x = Math.max(0, Math.min(window.innerWidth - w, ox + e.clientX - sx));
+      const y = Math.max(0, Math.min(window.innerHeight - h, oy + e.clientY - sy));
+      this.els.modal.style.left = `${x}px`;
+      this.els.modal.style.top = `${y}px`;
+    };
+    const up = () => {
+      if (!on) return;
+      on = false;
+      this.els.modal.classList.remove("dragging");
+      try {
+        localStorage.setItem("omni.omnia.pos", JSON.stringify({
+          left: this.els.modal.style.left, top: this.els.modal.style.top,
+        }));
+      } catch (e) { /* 무시 */ }
+    };
+    head.addEventListener("mousedown", down);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  },
+
+  restorePos() {
+    try {
+      const p = JSON.parse(localStorage.getItem("omni.omnia.pos") || "null");
+      if (p && p.left && p.top) {
+        this.els.modal.style.left = p.left;
+        this.els.modal.style.top = p.top;
+        this.els.modal.style.right = "auto";
+        this.els.modal.style.bottom = "auto";
+      }
+    } catch (e) { /* 무시 */ }
+  },
+
+  async show(auto) {
     this.els.overlay.hidden = false;
     this._open = true;
-    setTimeout(() => this.els.text.focus(), 50);
+    localStorage.setItem("omni.omnia.closed", "0");
+    // 자동 표시일 때는 사용자의 현재 입력 포커스를 뺏지 않는다
+    if (!auto) setTimeout(() => this.els.text.focus(), 50);
     if (!OmniNative.available) {
       this.setState("OFFLINE", "err");
       this.els.sub.textContent = "앱에서만 동작";
@@ -2215,6 +2299,7 @@ OmniOS.register("omnia", {
   hide() {
     this.els.overlay.hidden = true;
     this._open = false;
+    localStorage.setItem("omni.omnia.closed", "1"); // 직접 닫으면 완전히 사라짐
     if (this._busy) {
       OmniNative.request("omnia.stop", null, 5000).catch(() => {});
       this._busy = false;
