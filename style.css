@@ -3619,3 +3619,134 @@ input.vc-name {
   cursor: pointer;
 }
 .oa-send:hover { border-color: var(--cyan-soft); }
+
+/* ---------- SETTINGS ---------- */
+.sb-settings {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.sb-settings:hover { color: var(--cyan); }
+.st-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  background: rgba(2, 8, 19, 0.7);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.st-overlay[hidden] { display: none; }
+.st-modal {
+  width: min(460px, 88vw);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: linear-gradient(160deg, rgba(8, 22, 44, 0.98), rgba(3, 12, 26, 0.98));
+  border: 1px solid rgba(53, 214, 255, 0.35);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  padding: 18px 20px 22px;
+}
+.st-head { display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--cyan-faint); padding-bottom: 10px; }
+.st-title { font-family: var(--font-display); font-size: 14px; letter-spacing: 4px; }
+.st-sec-h { font-size: 8.5px; letter-spacing: 2.5px; color: var(--text-dim); }
+.st-themes { display: flex; gap: 12px; }
+.st-theme {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  background: rgba(5, 18, 36, 0.6);
+  border: 1px solid var(--cyan-faint);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  padding: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.st-theme:hover { border-color: var(--cyan-soft); }
+.st-theme.active { border-color: var(--cyan-soft); background: rgba(53, 214, 255, 0.1); }
+.st-th-swatch { width: 100%; height: 34px; border: 1px solid rgba(255, 255, 255, 0.12); }
+.st-sw-hud { background: linear-gradient(135deg, #051224 40%, #0a2a4a), radial-gradient(circle at 70% 30%, rgba(53,214,255,.5), transparent 60%); background-blend-mode: screen; }
+.st-sw-apple { background: linear-gradient(135deg, #1c1c1e 55%, #2c2c2e); position: relative; }
+.st-sw-apple::after { content: ""; position: absolute; right: 8px; top: 8px; width: 18px; height: 18px; border-radius: 50%; background: #0a84ff; }
+.st-th-name { font-size: 10.5px; letter-spacing: 2px; }
+.st-th-desc { font-size: 8.5px; letter-spacing: 0.5px; color: var(--text-dim); }
+
+/* ---------- THEME: APPLE (macOS 다크 스타일) ---------- */
+[data-omni-theme="apple"] {
+  --bg-deep: #000000;
+  --bg-mid: #1c1c1e;
+  --cyan: #f2f2f7;
+  --cyan-soft: rgba(10, 132, 255, 0.75);
+  --cyan-faint: rgba(255, 255, 255, 0.12);
+  --blue: #0a84ff;
+  --text-dim: #98989f;
+  --ok: #30d158;
+  --warn: #ffd60a;
+  --alert: #ff453a;
+  --font-display: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif;
+  --font-mono: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+}
+[data-omni-theme="apple"] body {
+  background: linear-gradient(180deg, #161618 0%, #0b0b0d 100%);
+}
+/* HUD 장식 제거 — 애플은 조용한 표면 */
+[data-omni-theme="apple"] .bg-grid,
+[data-omni-theme="apple"] .scanline { display: none; }
+[data-omni-theme="apple"] .bg-glow { opacity: 0.25; }
+/* 타이포: 넓은 자간 대신 애플식 타이트 트래킹 */
+[data-omni-theme="apple"] * { letter-spacing: 0.015em !important; }
+[data-omni-theme="apple"] .logo,
+[data-omni-theme="apple"] .cmd-title,
+[data-omni-theme="apple"] .ai-title,
+[data-omni-theme="apple"] .nf-title,
+[data-omni-theme="apple"] .oa-title,
+[data-omni-theme="apple"] .st-title { letter-spacing: 0.06em !important; font-weight: 700; }
+/* 라운드 코너 — 컨트롤과 카드 */
+[data-omni-theme="apple"] :is(button, input, textarea, select) { border-radius: 8px; }
+[data-omni-theme="apple"] :is(.cmd-tile, .ai-log, .ai-ind-list, .ai-core, .ai-keyinput input,
+  .nf-item, .nf-setup, .nf-count, .oa-modal, .oa-code, .oa-out, .st-modal, .st-theme,
+  .st-th-swatch, .ai-state, .oa-state, .nf-btn, .pj-ctx, .omni-ctx, .ai-line.pending,
+  .cmd-stage, .lightbox-inner) { border-radius: 12px; }
+[data-omni-theme="apple"] .nav-item { border-radius: 9px; margin: 1px 8px; }
+[data-omni-theme="apple"] .nav-item.active {
+  background: rgba(10, 132, 255, 0.22);
+  border-color: transparent;
+}
+[data-omni-theme="apple"] .sidebar {
+  background: rgba(28, 28, 30, 0.72);
+  backdrop-filter: blur(20px);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+/* 모달·팝업을 애플 소재감으로 */
+[data-omni-theme="apple"] :is(.oa-modal, .st-modal) {
+  background: rgba(30, 30, 32, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+[data-omni-theme="apple"] :is(.oa-overlay, .st-overlay, .lightbox) {
+  background: rgba(0, 0, 0, 0.55);
+}
+/* 강조 버튼: 시스템 블루 필 */
+[data-omni-theme="apple"] :is(.ai-listen, .oa-send, .ai-sendbtn):hover,
+[data-omni-theme="apple"] .ai-model.active,
+[data-omni-theme="apple"] .st-theme.active {
+  background: rgba(10, 132, 255, 0.28);
+  border-color: rgba(10, 132, 255, 0.55);
+}
+[data-omni-theme="apple"] .nf-item.new {
+  background: rgba(10, 132, 255, 0.16);
+  border-color: rgba(10, 132, 255, 0.45);
+  box-shadow: none;
+}
+[data-omni-theme="apple"] .ai-listen.live {
+  background: rgba(255, 69, 58, 0.2);
+  border-color: rgba(255, 69, 58, 0.6);
+}

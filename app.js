@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.57.1",
+  version: "0.58.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -39,6 +39,53 @@ const OmniNative = {
   },
 };
 window.OmniNative = OmniNative;
+
+// ---------- theme (저장된 테마를 모듈 초기화 전에 즉시 적용 — 깜빡임 방지) ----------
+document.documentElement.dataset.omniTheme =
+  localStorage.getItem("omni.theme") || "hud";
+
+// ---------- module: SETTINGS (테마 등 앱 설정) ----------
+OmniOS.register("settings", {
+  THEMES: ["hud", "apple"],
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      btn: $("sb-settings"),
+      overlay: $("st-overlay"),
+      close: $("st-close"),
+    };
+    this.els.btn.addEventListener("click", () => this.toggle(true));
+    this.els.close.addEventListener("click", () => this.toggle(false));
+    this.els.overlay.addEventListener("mousedown", (e) => {
+      if (e.target === this.els.overlay) this.toggle(false);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !this.els.overlay.hidden) this.toggle(false);
+    });
+    document.querySelectorAll(".st-theme").forEach((b) =>
+      b.addEventListener("click", () => this.applyTheme(b.dataset.theme)));
+    this.syncButtons();
+  },
+
+  toggle(open) {
+    this.els.overlay.hidden = !open;
+    if (open) this.syncButtons();
+  },
+
+  applyTheme(name) {
+    if (!this.THEMES.includes(name)) return;
+    document.documentElement.dataset.omniTheme = name;
+    localStorage.setItem("omni.theme", name);
+    this.syncButtons();
+  },
+
+  syncButtons() {
+    const cur = document.documentElement.dataset.omniTheme || "hud";
+    document.querySelectorAll(".st-theme").forEach((b) =>
+      b.classList.toggle("active", b.dataset.theme === cur));
+  },
+});
 
 // ---------- panel navigation ----------
 OmniOS.register("nav", {

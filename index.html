@@ -92,6 +92,8 @@
     <div class="sidebar-foot">
       <span class="dot"></span>
       <span>SYSTEM ONLINE</span>
+      <span class="ts-spacer"></span>
+      <button class="sb-settings" id="sb-settings" title="Settings">&#9881;&#xFE0E;</button>
     </div>
   </aside>
 
@@ -1166,7 +1168,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.57.1</span>
+      <span>v0.58.0</span>
     </footer>
   </div>
 
@@ -1179,6 +1181,30 @@
       </div>
       <div class="lightbox-meta" id="lb-meta"></div>
       <div class="lb-analysis" id="lb-analysis"></div>
+    </div>
+  </div>
+
+  <!-- 설정 (테마 등) -->
+  <div class="st-overlay" id="st-overlay" hidden>
+    <div class="st-modal">
+      <div class="st-head">
+        <span class="st-title">SETTINGS</span>
+        <span class="ts-spacer"></span>
+        <button class="oa-x" id="st-close">&#10005;</button>
+      </div>
+      <div class="st-sec-h">THEME</div>
+      <div class="st-themes">
+        <button class="st-theme" data-theme="hud">
+          <span class="st-th-swatch st-sw-hud"></span>
+          <span class="st-th-name">JARVIS HUD</span>
+          <span class="st-th-desc">시그니처 블루 홀로그램</span>
+        </button>
+        <button class="st-theme" data-theme="apple">
+          <span class="st-th-swatch st-sw-apple"></span>
+          <span class="st-th-name">APPLE</span>
+          <span class="st-th-desc">macOS 스타일 &middot; 심플 다크</span>
+        </button>
+      </div>
     </div>
   </div>
 
