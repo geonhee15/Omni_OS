@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.57.0",
+  version: "0.57.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -2156,7 +2156,7 @@ OmniOS.register("omnia", {
     const r = await OmniNative.request("omnia.status", null, 8000).catch(() => null);
     if (!r || !r.ok) {
       this.setState("LLM OFF", "err");
-      this.logLine("sys", "로컬 LLM이 실행 중이 아닙니다. 터미널에서 `ollama serve`를 실행한 뒤 다시 열어 주십시오.");
+      this.logLine("sys", "로컬 LLM이 응답하지 않습니다. 자동 시작이 등록돼 있으면 잠시 후 복구됩니다 — 계속 실패하면 터미널에서 `bash scripts/setup_ollama_agent.sh`를 실행해 주십시오.");
       return;
     }
     const has = (r.models || []).includes(this.MODEL);
