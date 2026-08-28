@@ -2556,6 +2556,7 @@ OmniOS.register("notif", {
     } else {
       this._err = null;
       this._items = notif.items || [];
+      this._apps = notif.apps || [];
     }
     this._gmailNeedSetup = false;
     if (!gmail || !gmail.ok) {
@@ -2619,7 +2620,7 @@ OmniOS.register("notif", {
     }
   },
 
-  renderSection(listEl, countEl, items) {
+  renderSection(listEl, countEl, items, hint) {
     listEl.textContent = "";
     countEl.textContent = String(items.length);
     if (!items.length) {
@@ -2627,6 +2628,14 @@ OmniOS.register("notif", {
       d.className = "nf-empty";
       d.textContent = "NO NOTIFICATIONS (최근 48시간)";
       listEl.appendChild(d);
+      // 진단: 알림은 잡히는데 이 섹션만 비면 어떤 앱이 감지됐는지 보여준다
+      if (hint && (this._apps || []).length) {
+        const h = document.createElement("div");
+        h.className = "nf-empty";
+        h.style.opacity = "0.55";
+        h.textContent = `감지된 앱: ${this._apps.slice(0, 8).join(", ")}`;
+        listEl.appendChild(h);
+      }
       return false;
     }
     let hasNew = false;
@@ -2683,7 +2692,7 @@ OmniOS.register("notif", {
       newK = this.renderSection(this.els.kakaoList, this.els.kakaoCount,
         this._items.filter((it) => this._isKakao(it)));
       newD = this.renderSection(this.els.discordList, this.els.discordCount,
-        this._items.filter((it) => this._isDiscord(it)));
+        this._items.filter((it) => this._isDiscord(it)), true);
     }
     // 지메일 (IMAP)
     let newG = false;

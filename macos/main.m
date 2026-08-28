@@ -1642,58 +1642,119 @@ didCompleteWithError:(NSError *)error {
                            forId:msgId];
             return;
         }
+        // 원본을 읽기 전용으로 열면 WAL(-wal)이 반영되지 않아 최신 알림이 보이지
+        // 않는다. db/-wal/-shm 을 임시 폴더로 복사한 뒤 그 사본을 열어 WAL을
+        // 재생시킨다 (원본은 절대 건드리지 않음).
+        NSFileManager *fmc = NSFileManager.defaultManager;
+        NSString *tmpDir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"omni_notif_%@", NSUUID.UUID.UUIDString]];
+        [fmc createDirectoryAtPath:tmpDir withIntermediateDirectories:YES
+                        attributes:nil error:nil];
+        NSString *copyPath = [tmpDir stringByAppendingPathComponent:@"db"];
+        for (NSString *suffix in @[ @"", @"-wal", @"-shm" ]) {
+            NSString *src = [dbPath stringByAppendingString:suffix];
+            NSString *dst = [copyPath stringByAppendingString:suffix];
+            [fmc copyItemAtPath:src toPath:dst error:nil]; // -wal/-shm은 없을 수도 있음
+        }
         sqlite3 *db = NULL;
-        if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READONLY, NULL)
-            != SQLITE_OK) {
+        if (sqlite3_open_v2(copyPath.UTF8String, &db,
+                SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
             NSString *msg = db != NULL
                 ? [NSString stringWithFormat:@"SQLITE: %s", sqlite3_errmsg(db)]
                 : @"SQLITE: open failed";
             if (db != NULL) sqlite3_close(db);
+            [fmc removeItemAtPath:tmpDir error:nil];
             [self deliverPayload:@{ @"ok" : @NO, @"error" : msg } forId:msgId];
             return;
         }
         // Core Data 타임스탬프(2001-01-01 기준 초) 컷오프
         double cutoff = [NSDate.date timeIntervalSinceReferenceDate] - hours * 3600.0;
-        const char *sql =
-            "SELECT app.identifier, record.delivered_date, record.data "
-            "FROM record JOIN app ON record.app_id = app.app_id "
-            "WHERE record.delivered_date > ? ORDER BY record.delivered_date DESC LIMIT 200";
-        sqlite3_stmt *stmt = NULL;
         NSMutableArray *out = [NSMutableArray array];
-        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-            sqlite3_bind_double(stmt, 1, cutoff);
-            while (sqlite3_step(stmt) == SQLITE_ROW && out.count < 100) {
-                const char *ident = (const char *)sqlite3_column_text(stmt, 0);
-                NSString *app = ident ? [NSString stringWithUTF8String:ident] : @"";
-                if (bundle.length > 0
-                    && ![app.lowercaseString containsString:bundle.lowercaseString]) {
-                    continue;
+        NSMutableSet *seen = [NSMutableSet set];       // 테이블 간 중복 제거
+        NSMutableSet *appsSeen = [NSMutableSet set];   // 진단용 — 감지된 앱 목록
+
+        // 알림은 상태에 따라 여러 테이블에 나뉘어 있다 (읽지 않은 것은 record에
+        // 없고 delivered/displayed에만 있는 경우가 있음) — 존재하는 테이블을
+        // 모두 훑는다. 날짜 컬럼명도 버전마다 달라 후보를 순회한다.
+        NSArray *tables = @[ @"record", @"delivered", @"displayed", @"requests" ];
+        NSArray *dateCols = @[ @"delivered_date", @"presented_date", @"date", @"request_date" ];
+        for (NSString *table in tables) {
+            for (NSString *dateCol in dateCols) {
+                NSString *sql = [NSString stringWithFormat:
+                    @"SELECT app.identifier, t.%@, t.data FROM %@ t "
+                    @"JOIN app ON t.app_id = app.app_id "
+                    @"WHERE t.%@ > ? ORDER BY t.%@ DESC LIMIT 300",
+                    dateCol, table, dateCol, dateCol];
+                sqlite3_stmt *stmt = NULL;
+                if (sqlite3_prepare_v2(db, sql.UTF8String, -1, &stmt, NULL) != SQLITE_OK) {
+                    if (stmt != NULL) sqlite3_finalize(stmt);
+                    continue; // 이 테이블/컬럼 조합은 없음 — 다음 후보
                 }
-                double ts = sqlite3_column_double(stmt, 1);
-                const void *blob = sqlite3_column_blob(stmt, 2);
-                int blobLen = sqlite3_column_bytes(stmt, 2);
-                NSString *title = @"", *subtitle = @"", *body = @"";
-                if (blob != NULL && blobLen > 0) {
-                    NSData *data = [NSData dataWithBytes:blob length:blobLen];
-                    NSDictionary *plist = [NSPropertyListSerialization
-                        propertyListWithData:data options:NSPropertyListImmutable
-                                      format:NULL error:NULL];
-                    NSDictionary *req = [plist[@"req"] isKindOfClass:[NSDictionary class]]
-                        ? plist[@"req"] : @{};
-                    title = [req[@"titl"] isKindOfClass:[NSString class]] ? req[@"titl"] : @"";
-                    subtitle = [req[@"subt"] isKindOfClass:[NSString class]] ? req[@"subt"] : @"";
-                    body = [req[@"body"] isKindOfClass:[NSString class]] ? req[@"body"] : @"";
+                sqlite3_bind_double(stmt, 1, cutoff);
+                while (sqlite3_step(stmt) == SQLITE_ROW && out.count < 150) {
+                    const char *ident = (const char *)sqlite3_column_text(stmt, 0);
+                    NSString *app = ident ? [NSString stringWithUTF8String:ident] : @"";
+                    [appsSeen addObject:app];
+                    if (bundle.length > 0
+                        && ![app.lowercaseString containsString:bundle.lowercaseString]) {
+                        continue;
+                    }
+                    double ts = sqlite3_column_double(stmt, 1);
+                    const void *blob = sqlite3_column_blob(stmt, 2);
+                    int blobLen = sqlite3_column_bytes(stmt, 2);
+                    NSString *title = @"", *subtitle = @"", *body = @"";
+                    if (blob != NULL && blobLen > 0) {
+                        NSData *data = [NSData dataWithBytes:blob length:blobLen];
+                        NSDictionary *plist = [NSPropertyListSerialization
+                            propertyListWithData:data options:NSPropertyListImmutable
+                                          format:NULL error:NULL];
+                        // 표준 위치(req) 우선, 없으면 최상위 — 앱마다 구조가 다름
+                        NSDictionary *req = [plist[@"req"] isKindOfClass:[NSDictionary class]]
+                            ? plist[@"req"]
+                            : ([plist isKindOfClass:[NSDictionary class]] ? plist : @{});
+                        NSArray *titleKeys = @[ @"titl", @"title", @"tite" ];
+                        NSArray *subKeys = @[ @"subt", @"subtitle" ];
+                        NSArray *bodyKeys = @[ @"body", @"mesg", @"message", @"text" ];
+                        for (NSString *k in titleKeys) {
+                            if ([req[k] isKindOfClass:[NSString class]]
+                                && [req[k] length] > 0) { title = req[k]; break; }
+                        }
+                        for (NSString *k in subKeys) {
+                            if ([req[k] isKindOfClass:[NSString class]]
+                                && [req[k] length] > 0) { subtitle = req[k]; break; }
+                        }
+                        for (NSString *k in bodyKeys) {
+                            if ([req[k] isKindOfClass:[NSString class]]
+                                && [req[k] length] > 0) { body = req[k]; break; }
+                        }
+                    }
+                    // 제목·본문이 모두 비어도 앱 필터가 지정된 조회에서는 남긴다
+                    // (내용 없는 알림도 "왔다"는 사실 자체가 정보)
+                    if (title.length == 0 && body.length == 0) {
+                        if (bundle.length == 0) continue;
+                        body = @"(내용 없음)";
+                    }
+                    NSString *key = [NSString stringWithFormat:@"%@|%.0f|%@|%@",
+                                     app, ts, title, body];
+                    if ([seen containsObject:key]) continue;
+                    [seen addObject:key];
+                    [out addObject:@{ @"app" : app,
+                                      @"ts" : @(ts + NSTimeIntervalSince1970),
+                                      @"title" : title, @"subtitle" : subtitle,
+                                      @"body" : body }];
                 }
-                if (title.length == 0 && body.length == 0) continue;
-                [out addObject:@{ @"app" : app,
-                                  @"ts" : @(ts + NSTimeIntervalSince1970),
-                                  @"title" : title, @"subtitle" : subtitle,
-                                  @"body" : body }];
+                sqlite3_finalize(stmt);
+                break; // 이 테이블은 처리 완료 — 다음 테이블로
             }
-            sqlite3_finalize(stmt);
         }
+        // 여러 테이블을 합쳤으므로 최신순으로 재정렬
+        [out sortUsingComparator:^NSComparisonResult(NSDictionary *x, NSDictionary *y) {
+            return [(NSNumber *)y[@"ts"] compare:(NSNumber *)x[@"ts"]];
+        }];
         sqlite3_close(db);
-        [self deliverPayload:@{ @"ok" : @YES, @"items" : out } forId:msgId];
+        [fmc removeItemAtPath:tmpDir error:nil];
+        [self deliverPayload:@{ @"ok" : @YES, @"items" : out,
+                                @"apps" : appsSeen.allObjects } forId:msgId];
     });
 }
 
