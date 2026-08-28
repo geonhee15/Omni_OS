@@ -14,6 +14,7 @@ import email.header
 import email.utils
 import imaplib
 import json
+import re
 import sys
 import time
 
@@ -59,8 +60,10 @@ def fetch_account(addr, app_pw, hours):
     items = []
     label = addr.split("@")[0]
     for mid in ids[-50:][::-1]:  # 최신 50개, 최신 먼저
+        # X-GM-MSGID: Gmail 웹 딥링크용 (#all/<hex>)
         ok, msg_data = imap.fetch(
-            mid, "(FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+            mid, "(FLAGS X-GM-MSGID INTERNALDATE "
+                 "BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
         if ok != "OK" or not msg_data or msg_data[0] is None:
             continue
         meta = b""
@@ -79,12 +82,15 @@ def fetch_account(addr, app_pw, hours):
             ts = email.utils.mktime_tz(email.utils.parsedate_tz(msg.get("Date")))
         except Exception:
             ts = time.time()
+        gm = re.search(rb"X-GM-MSGID (\d+)", meta)
         items.append({
             "ts": ts,
             "from": name or mail_addr or frm,
             "subject": subject,
             "unread": b"\\Seen" not in meta,
             "account": label,
+            "email": addr,
+            "gmid": format(int(gm.group(1)), "x") if gm else "",
         })
     imap.logout()
     return items

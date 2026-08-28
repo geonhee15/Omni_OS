@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.55.1",
+  version: "0.55.2",
   bootTime: Date.now(),
   modules: {},
 
@@ -2186,6 +2186,7 @@ OmniOS.register("notif", {
       this._gmailItems = (gmail.items || []).map((m) => ({
         app: "gmail-imap", src: "imap", ts: m.ts,
         title: m.from, subtitle: m.account || "", body: m.subject, unread: !!m.unread,
+        email: m.email || "", gmid: m.gmid || "",
       }));
       // 일부 계정만 실패한 경우 경고 표시용
       this._gmailWarn = (gmail.warnings || []).join(" · ") || null;
@@ -2217,8 +2218,11 @@ OmniOS.register("notif", {
       OmniNative.request("open.app",
         JSON.stringify({ bundle: "com.kakao.KakaoTalkMac" }), 8000).catch(() => {});
     } else if (it.src === "imap") {
-      OmniNative.request("open.url",
-        JSON.stringify({ url: "https://mail.google.com" }), 8000).catch(() => {});
+      // authuser로 해당 계정을 지정 + 메시지 ID 딥링크로 그 메일 바로 열기
+      let url = "https://mail.google.com/mail/";
+      if (it.email) url += `?authuser=${encodeURIComponent(it.email)}`;
+      if (it.gmid) url += `#all/${it.gmid}`;
+      OmniNative.request("open.url", JSON.stringify({ url }), 8000).catch(() => {});
     }
   },
 
