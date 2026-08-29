@@ -203,7 +203,7 @@ def main():
                 emu.inject_imu_tap("single")
         img = emu.get_framebuffer().convert("RGB")
         surf = pygame.image.frombytes(img.tobytes(), img.size, "RGB")
-        screen.blit(pygame.transform.scale(surf, (512, 512)), (0, 0))
+        screen.blit(pygame.transform.smoothscale(surf, (512, 512)), (0, 0))
         pygame.display.flip()
         clock.tick(20)
     pygame.quit()
