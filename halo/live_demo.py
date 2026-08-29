@@ -80,7 +80,10 @@ def run_tool(name: str, args: dict) -> str:
     if name == "ask_brain":
         return link.ask_brain(str(args.get("question", "")))
     if name == "check_notifications":
-        items = link.check_kakao(float(args.get("hours", 12)))
+        items = link.check_kakao_fresh(float(args.get("hours", 12)))
+        if items is None:
+            return ("카톡 알림 정보를 받지 못했습니다. 맥의 옴니 앱이 실행 "
+                    "중이어야 확인할 수 있습니다.")
         if not items:
             return "새 카카오톡 알림이 없습니다."
         lines = [f"{i['title']}: {i['body']}" for i in items[:8]]
@@ -220,7 +223,7 @@ async def bridge():
             while running:
                 try:
                     items = await asyncio.to_thread(link.check_kakao, 1.0)
-                    for i in items:
+                    for i in (items or []):
                         k = f"{i['ts']:.0f}|{i['title']}|{i['body']}"
                         if k in seen_kakao:
                             continue

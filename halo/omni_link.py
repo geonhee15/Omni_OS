@@ -87,17 +87,71 @@ def ask_brain(question: str, extra_context: str = "") -> str:
 
 
 # ---------------------------------------------------------------- 카톡 알림
+#
+# 알림 DB는 TCC 보호라 이 파이썬(별도 TCC 신원)은 직접 못 읽는다.
+# 대신 FDA를 가진 옴니 앱이 폴링 때마다 스냅샷을 파일로 밀어주고
+# (~/.omni/store/halo_notif.json), 여기서는 그 파일을 읽는다.
 
-def check_kakao(hours: float = 12.0) -> list[dict]:
-    """usernoted DB(WAL 사본)에서 카카오톡 알림 조회 — 앱 로직의 파이썬 판."""
+NOTIF_SNAPSHOT = os.path.join(HOME, ".omni/store/halo_notif.json")
+SNAPSHOT_MAX_AGE = 150.0  # 초 — 이보다 오래되면 앱 미가동으로 간주
+
+
+def _read_snapshot(hours: float) -> "list[dict] | None":
+    """앱 스냅샷에서 카톡 항목. None = 스냅샷 없음/부패(앱 미가동)."""
+    try:
+        with open(NOTIF_SNAPSHOT) as f:
+            snap = json.load(f)
+        if time.time() - float(snap.get("ts", 0)) / 1000 > SNAPSHOT_MAX_AGE:
+            return None
+        cutoff = time.time() - hours * 3600
+        return [i for i in snap.get("items", [])
+                if "kakao" in str(i.get("app", "")).lower()
+                and float(i.get("ts", 0)) > cutoff]
+    except (OSError, ValueError):
+        return None
+
+
+def check_kakao(hours: float = 12.0) -> "list[dict] | None":
+    """카톡 알림 조회 — 앱 스냅샷 우선, 안 되면 DB 직접(FDA 있을 때만).
+    None = 어느 경로로도 확인 불가 (옴니 앱 확인 필요)."""
+    snap = _read_snapshot(hours)
+    if snap is not None:
+        return snap
+    direct = _check_kakao_db(hours)
+    return direct
+
+
+def check_kakao_fresh(hours: float = 12.0, wait: float = 6.0) -> "list[dict] | None":
+    """앱에 즉시 재조회를 요청하고 새 스냅샷을 기다린 뒤 읽는다."""
+    try:
+        old_m = os.path.getmtime(NOTIF_SNAPSHOT)
+    except OSError:
+        old_m = 0
+    mailbox_push({"type": "notif_refresh"})
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        try:
+            if os.path.getmtime(NOTIF_SNAPSHOT) > old_m:
+                break
+        except OSError:
+            pass
+        time.sleep(0.5)
+    return check_kakao(hours)
+
+
+def _check_kakao_db(hours: float) -> "list[dict] | None":
+    """usernoted DB(WAL 사본) 직접 조회 — 이 프로세스에 FDA가 있을 때만."""
     if not os.access(NOTIF_DB, os.R_OK):
-        return []
+        return None
     tmp = tempfile.mkdtemp(prefix="halo_notif_")
     try:
-        for sfx in ("", "-wal", "-shm"):
-            src = NOTIF_DB + sfx
-            if os.path.exists(src):
-                shutil.copy2(src, os.path.join(tmp, "db" + sfx))
+        try:
+            for sfx in ("", "-wal", "-shm"):
+                src = NOTIF_DB + sfx
+                if os.path.exists(src):
+                    shutil.copy2(src, os.path.join(tmp, "db" + sfx))
+        except OSError:
+            return None  # TCC 차단 — 앱 스냅샷만이 유일한 경로
         db = sqlite3.connect(os.path.join(tmp, "db"))
         cutoff = time.time() - 978307200.0 - hours * 3600  # Core Data epoch
         out, seen = [], set()

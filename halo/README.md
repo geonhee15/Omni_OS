@@ -24,10 +24,14 @@
   brilliant_ble 전송으로 교체하면 됨 (배경 32KB는 BLE MTU 분할 필요)
 - `omni_link.py` — **맥 옴니 앱과의 공유 링크**. 안경의 옴니가 앱과 같은
   자원을 쓴다: 장기 기억(`~/.omni/store/ai_memory.json` 읽기), 두뇌
-  (Claude AUTO 라우팅 — 간단→Haiku / 깊은→Opus 5), 카톡 알림 DB 리더
-  (WAL 사본 방식, 앱 네이티브 로직의 파이썬 판), 지메일
+  (Claude AUTO 라우팅 — 간단→Haiku / 깊은→Opus 5), 지메일
   (`scripts/gmail_helper.py` 재사용), 앱 제어 메일박스
   (`~/.omni/halo_mailbox.jsonl`에 append → 앱이 2.5초마다 폴링해 소비)
+- **카톡 알림은 앱 스냅샷 경유** — 알림 DB는 TCC 보호라 브리지의
+  파이썬(별도 TCC 신원)이 직접 못 읽는다. FDA를 가진 옴니 앱이 20초
+  폴링마다 `~/.omni/store/halo_notif.json`으로 밀어주고 브리지는 그
+  파일만 읽는다. 음성으로 "카톡 확인" 시엔 메일박스로 `notif_refresh`를
+  보내 즉시 재조회를 트리거
 
 ## 안경에서 되는 것 (live_demo)
 

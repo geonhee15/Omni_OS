@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.60.0",
+  version: "0.60.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -822,6 +822,10 @@ OmniOS.register("ai", {
         if (ev.type === "transcript" && ev.text) {
           this.logLine(ev.who === "you" ? "you" : "omni",
             `[HALO] ${ev.text}`);
+        } else if (ev.type === "notif_refresh") {
+          // 안경에서 "카톡 확인" — 즉시 재조회해 스냅샷 갱신
+          const notif = OmniOS.modules.notif;
+          if (notif) notif.refresh(true);
         } else if (ev.type === "action") {
           if (ev.open) {
             const btn = document.querySelector(
@@ -2558,8 +2562,8 @@ OmniOS.register("notif", {
       }
     });
     if (OmniNative.available) {
-      // 배경 폴링: 패널이 닫혀 있어도 새 알림을 nav 점으로 표시
-      setInterval(() => this.refresh(true), 60000);
+      // 배경 폴링: 패널이 닫혀 있어도 새 알림 감지 (nav 점 + Halo 스냅샷)
+      setInterval(() => this.refresh(true), 20000);
       // 패널이 보이는 동안엔 더 자주
       setInterval(() => {
         if (this.els.panel.classList.contains("active")) this.refresh(true);
@@ -2596,6 +2600,17 @@ OmniOS.register("notif", {
       this._err = null;
       this._items = notif.items || [];
       this._apps = notif.apps || [];
+      // Halo 안경 브리지용 스냅샷 — 브리지의 파이썬은 TCC 때문에 알림 DB를
+      // 직접 못 읽으므로, FDA를 가진 앱이 조회 결과를 파일로 밀어준다
+      OmniNative.request("store.write", JSON.stringify({
+        name: "halo_notif",
+        data: JSON.stringify({
+          ts: Date.now(),
+          items: this._items.slice(0, 40).map((i) => ({
+            app: i.app, ts: i.ts, title: i.title, body: i.body,
+          })),
+        }),
+      }), 8000).catch(() => {});
     }
     this._gmailNeedSetup = false;
     if (!gmail || !gmail.ok) {
