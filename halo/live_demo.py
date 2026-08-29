@@ -130,10 +130,8 @@ async def bridge():
                 elif t == "input_audio_buffer.speech_stopped":
                     to_glasses(0x03, b"THINKING...")
                 elif t == "conversation.item.input_audio_transcription.completed":
-                    ut = ev.get("transcript", "").strip()
-                    print("YOU :", ut)
-                    if ut:
-                        emu.inject_bluetooth_data(caption_packet(f"나: {ut}"))
+                    # 사용자 발화는 화면에 띄우지 않음 (터미널 로그만)
+                    print("YOU :", ev.get("transcript", "").strip())
                 elif t in ("response.output_audio.delta", "response.audio.delta"):
                     to_glasses(0x03, b"SPEAKING")
                     chunk = base64.b64decode(ev.get("delta", ""))
@@ -150,12 +148,12 @@ async def bridge():
                     if time.time() - last_cap > 0.35:
                         last_cap = time.time()
                         emu.inject_bluetooth_data(
-                            caption_packet(f"옴니: {omni_txt}"))
+                            caption_packet(omni_txt))
                 elif t in ("response.output_audio_transcript.done",
                            "response.audio_transcript.done"):
                     ft = ev.get("transcript", "") or omni_txt
                     print("OMNI:", ft)
-                    emu.inject_bluetooth_data(caption_packet(f"옴니: {ft}"))
+                    emu.inject_bluetooth_data(caption_packet(ft))
                     omni_txt = ""
                 elif t == "response.done":
                     speaking_until += 0.5
