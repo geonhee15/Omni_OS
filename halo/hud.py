@@ -9,6 +9,7 @@
   0x12 | palette(48B RGB) | 4bpp 256x256      배경 아트 (부팅 시 1회)
   0x13 | x | y | w_px | 4bpp rows             상태 스프라이트 슬롯
   0x14 | x | y | w_px | 4bpp rows             자막 스프라이트 슬롯
+  0x15 | x | y | w_px | 4bpp rows             알림 배너 슬롯
 """
 import math
 
@@ -222,6 +223,43 @@ def _wrap(text: str, font: ImageFont.FreeTypeFont,
     if cur.strip():
         lines.append(cur)
     return lines
+
+
+BAN_W = 200            # 알림 배너 (상태 아래 ~ 자막 구획선 위)
+BAN_Y = 96
+
+
+def banner_packet(text: str, size: int = 14) -> bytes:
+    """알림 배너 -> 다이아 불릿 + 한글 2줄 스프라이트 (0x15). 빈 텍스트=클리어."""
+    font = _font(size * S)
+    lines = _wrap(text, font, [180 * S])[:2]
+    if not lines:
+        return sprite_packet(np.zeros((1, BAN_W), np.uint8),
+                             (W - BAN_W) // 2, BAN_Y, 0x15)
+    lh = 19
+    h = len(lines) * lh + 4
+    img = Image.new("L", (BAN_W * S, h * S), 0)
+    d = ImageDraw.Draw(img)
+    for i, line in enumerate(lines):
+        lw = font.getlength(line)
+        d.text(((BAN_W * S - lw) / 2, (2 + i * lh) * S), line, fill=245,
+               font=font)
+    # 첫 줄 왼쪽 다이아 불릿
+    lw0 = font.getlength(lines[0])
+    bx = (BAN_W * S - lw0) / 2 - 9 * S
+    by = (2 + lh / 2) * S
+    r = 2.4 * S
+    d.polygon([(bx, by - r), (bx + r, by), (bx, by + r), (bx - r, by)],
+              fill=200)
+    img = _glow(img, 2.0, 0.5)
+    idx = _quantize(img.resize((BAN_W, h), Image.LANCZOS))
+    # 불릿은 액센트 컬러(브라이트 시안)로
+    mask = np.zeros_like(idx, bool)
+    x0, x1 = int(bx / S - 4), int(bx / S + 5)
+    y0, y1 = int(by / S - 4), int(by / S + 5)
+    mask[max(0, y0):y1, max(0, x0):x1] = True
+    idx[mask & (idx > 4)] = 14
+    return sprite_packet(idx, (W - BAN_W) // 2, BAN_Y, 0x15)
 
 
 def caption_packet(text: str, size: int = 16) -> bytes:

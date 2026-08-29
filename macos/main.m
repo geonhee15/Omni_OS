@@ -1900,6 +1900,22 @@ static NSString *OmniAIFsValidate(NSString *path) {
                                 @"listening" : @(self.aiListener.running) }
                        forId:msgId];
 
+    } else if ([cmd isEqualToString:@"ai.haloPoll"]) {
+        // Halo 안경 브리지 메일박스 소비 — 브리지가 append, 앱이 폴링해
+        // 통째로 읽고 삭제한다 (전사 표시 + 액션 실행용)
+        NSString *box = [NSHomeDirectory()
+            stringByAppendingPathComponent:@".omni/halo_mailbox.jsonl"];
+        NSString *content = [NSString stringWithContentsOfFile:box
+            encoding:NSUTF8StringEncoding error:NULL];
+        NSMutableArray *lines = [NSMutableArray array];
+        if (content.length > 0) {
+            [NSFileManager.defaultManager removeItemAtPath:box error:nil];
+            for (NSString *ln in [content componentsSeparatedByString:@"\n"]) {
+                if (ln.length > 0) [lines addObject:ln];
+            }
+        }
+        [self deliverPayload:@{ @"ok" : @YES, @"lines" : lines } forId:msgId];
+
     } else if ([cmd isEqualToString:@"ai.warm"]) {
         // 클린 보이스 모드: 변조 데몬을 쓰지 않으므로 예열 없음 (상태만 보고).
         // 변조 데몬 코드는 유지 — 로봇 보이스로 되돌릴 때 재활성화

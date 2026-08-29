@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.59.0",
+  version: "0.60.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -803,6 +803,45 @@ OmniOS.register("ai", {
       this.loadMemory();
       setTimeout(() => this.batteryWatch(), 15000);
       setInterval(() => this.batteryWatch(), 60000);
+      setInterval(() => this.haloPoll(), 2500); // Halo 안경 브리지 메일박스
+    }
+  },
+
+  // ---- Halo 안경 브리지 연동 ----
+  // 안경 브리지(halo/live_demo.py)가 ~/.omni/halo_mailbox.jsonl에 남긴
+  // 전사(대화 표시)와 액션(패널 열기·runAction)을 소비한다.
+  _haloBusy: false,
+  async haloPoll() {
+    if (this._haloBusy || !OmniNative.available) return;
+    this._haloBusy = true;
+    try {
+      const r = await OmniNative.request("ai.haloPoll", null, 5000);
+      for (const raw of (r && r.lines) || []) {
+        let ev;
+        try { ev = JSON.parse(raw); } catch (e) { continue; }
+        if (ev.type === "transcript" && ev.text) {
+          this.logLine(ev.who === "you" ? "you" : "omni",
+            `[HALO] ${ev.text}`);
+        } else if (ev.type === "action") {
+          if (ev.open) {
+            const btn = document.querySelector(
+              `.nav-item[data-panel="${ev.open}"]`);
+            if (btn) {
+              btn.click();
+              this.logLine("sys",
+                `[HALO] 패널 전환: ${this.PANEL_LABELS[ev.open] || ev.open}`);
+            }
+          }
+          if (ev.spec) {
+            const res = await this.runAction(ev.spec);
+            this.logLine("sys",
+              `[HALO] ${res.ok ? "OK" : "실패"} · ${res.msg}`);
+          }
+        }
+      }
+    } catch (e) { /* 브리지 미가동 — 조용히 */ }
+    finally {
+      this._haloBusy = false;
     }
   },
 

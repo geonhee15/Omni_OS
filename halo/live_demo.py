@@ -24,16 +24,89 @@ import sounddevice as sd
 import websockets
 from halo_emulator import HaloEmulator
 
-from hud import caption_packet, render_background, status_packet
+from hud import banner_packet, caption_packet, render_background, status_packet
+
+import omni_link as link
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.expanduser("~/.omni/openai.key")).read().strip()
 URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
-INSTRUCTIONS = (
-    "당신은 OMNI_OS의 관제 AI '옴니'입니다. 지금은 스마트 글래스(Halo)를 통한 "
-    "실시간 음성 대화입니다. 반드시 한국어 존댓말(합니다체)로만 말합니다 — "
-    "반말 금지, 호칭 금지. 담백한 보고체로 1~2문장씩 짧게 답합니다."
-)
+
+PANELS = ("cmd", "ai", "notif", "clock", "proj", "sys", "sp1", "r3d",
+          "ino", "ce", "notes", "voice", "arc")
+
+
+def build_instructions() -> str:
+    memory = link.load_memory()
+    return (
+        "당신은 OMNI_OS의 관제 AI '옴니'입니다. 지금은 스마트 글래스(Halo)를 "
+        "통한 실시간 음성 대화입니다. 반드시 한국어 존댓말(합니다체)로만 "
+        "말합니다 — 반말 금지, 호칭 금지. 담백한 보고체로 1~2문장씩 짧게 "
+        "답합니다.\n"
+        "도구 규칙: 깊은 분석·조사·기억 관련 질문은 ask_brain에 넘깁니다. "
+        "카톡은 check_notifications, 메일은 check_gmail로 확인해 핵심만 "
+        "요약해 말합니다. 맥의 옴니 앱 패널을 열거나 조작해 달라는 요청은 "
+        "app_action을 사용합니다. 도구 결과는 그대로 읽지 말고 요약합니다."
+        + (f"\n\n[장기 메모리 — 앱과 공유]\n{memory}" if memory else ""))
+
+
+TOOLS = [
+    {"type": "function", "name": "ask_brain",
+     "description": "깊은 분석·조사·설계·기억이 필요한 질문을 추론 두뇌"
+                    "(Claude)에 전달하고 답을 받는다.",
+     "parameters": {"type": "object", "properties": {
+         "question": {"type": "string"}}, "required": ["question"]}},
+    {"type": "function", "name": "check_notifications",
+     "description": "카카오톡 최근 알림을 확인한다.",
+     "parameters": {"type": "object", "properties": {
+         "hours": {"type": "number", "description": "조회 범위(시간), 기본 12"}}}},
+    {"type": "function", "name": "check_gmail",
+     "description": "지메일 받은편지함 최근 메일을 확인한다.",
+     "parameters": {"type": "object", "properties": {
+         "hours": {"type": "number", "description": "조회 범위(시간), 기본 24"}}}},
+    {"type": "function", "name": "app_action",
+     "description": "맥의 옴니 앱을 제어한다. open=패널 열기 "
+                    f"(키: {', '.join(PANELS)}). spec=세부 액션 문자열 "
+                    "(예: notes.open:파일명, proj.editor:프로젝트명, "
+                    "omnia, lang.auto).",
+     "parameters": {"type": "object", "properties": {
+         "open": {"type": "string", "description": "열 패널 키"},
+         "spec": {"type": "string", "description": "실행할 액션 스펙"}}}},
+]
+
+
+def run_tool(name: str, args: dict) -> str:
+    """RT 함수 호출 실행 (블로킹 — to_thread로 감싸서 호출)."""
+    if name == "ask_brain":
+        return link.ask_brain(str(args.get("question", "")))
+    if name == "check_notifications":
+        items = link.check_kakao(float(args.get("hours", 12)))
+        if not items:
+            return "새 카카오톡 알림이 없습니다."
+        lines = [f"{i['title']}: {i['body']}" for i in items[:8]]
+        return f"카카오톡 알림 {len(items)}건 —\n" + "\n".join(lines)
+    if name == "check_gmail":
+        g = link.check_gmail(float(args.get("hours", 24)))
+        if not g.get("ok"):
+            return f"메일 확인 실패: {g.get('error')}"
+        items = g.get("items", [])
+        if not items:
+            return "새 메일이 없습니다."
+        lines = [f"{i.get('from','')}: {i.get('subject','')}"
+                 + (" (안읽음)" if i.get("unread") else "")
+                 for i in items[:8]]
+        return f"메일 {len(items)}건 —\n" + "\n".join(lines)
+    if name == "app_action":
+        sent = []
+        if args.get("open") in PANELS:
+            link.mailbox_push({"type": "action", "open": args["open"]})
+            sent.append(f"패널 열기 {args['open']}")
+        if args.get("spec"):
+            link.mailbox_push({"type": "action", "spec": args["spec"]})
+            sent.append(f"액션 {args['spec']}")
+        return ("앱으로 전달했습니다: " + ", ".join(sent)) if sent \
+            else "전달할 액션이 없습니다."
+    return f"알 수 없는 도구: {name}"
 
 emu = HaloEmulator(sandbox_dir=os.path.join(HERE, "sandbox"))
 speaker_q: "queue.Queue[bytes]" = queue.Queue()
@@ -71,7 +144,8 @@ async def bridge():
             "session": {
                 "type": "realtime", "model": "gpt-realtime",
                 "output_modalities": ["audio"],
-                "instructions": INSTRUCTIONS,
+                "instructions": build_instructions(),
+                "tools": TOOLS, "tool_choice": "auto",
                 "audio": {
                     "input": {
                         "format": {"type": "audio/pcm", "rate": 24000},
@@ -116,9 +190,61 @@ async def bridge():
                             "audio": base64.b64encode(pcm24.tobytes()).decode(),
                         }))
                     elif pkt[:1] == b"\xF0":
-                        print("[tap] glasses tap received")
+                        # 탭 제스처 = 알림 브리핑 요청
+                        print("[tap] glasses tap -> notification brief")
+                        await ws.send(json.dumps({
+                            "type": "conversation.item.create",
+                            "item": {"type": "message", "role": "user",
+                                     "content": [{"type": "input_text",
+                                                  "text": "(탭 제스처) 새 카톡/메일 알림을 브리핑해 주세요."}]}}))
+                        await ws.send(json.dumps({"type": "response.create"}))
                 emu.clear_bluetooth_sent()
                 await asyncio.sleep(0.04)
+
+        banner_seq = [0]
+
+        async def show_banner(text: str, secs: float = 8.0):
+            banner_seq[0] += 1
+            seq = banner_seq[0]
+            emu.inject_bluetooth_data(banner_packet(text))
+            await asyncio.sleep(secs)
+            if banner_seq[0] == seq:  # 새 배너가 덮지 않았으면 클리어
+                emu.inject_bluetooth_data(banner_packet(""))
+
+        async def notif_watch():
+            """카톡/지메일 감시 → 새 항목을 HUD 배너로 푸시."""
+            seen_kakao: set = set()
+            seen_mail: set = set()
+            first_k, first_m = True, True
+            last_mail = 0.0
+            while running:
+                try:
+                    items = await asyncio.to_thread(link.check_kakao, 1.0)
+                    for i in items:
+                        k = f"{i['ts']:.0f}|{i['title']}|{i['body']}"
+                        if k in seen_kakao:
+                            continue
+                        seen_kakao.add(k)
+                        if not first_k:
+                            asyncio.ensure_future(show_banner(
+                                f"카톡 · {i['title']}: {i['body']}"[:60]))
+                    first_k = False
+                    if time.time() - last_mail > 90:
+                        last_mail = time.time()
+                        g = await asyncio.to_thread(link.check_gmail, 1.0)
+                        for i in (g.get("items") or []):
+                            k = f"{i.get('ts')}|{i.get('subject')}"
+                            if k in seen_mail:
+                                continue
+                            seen_mail.add(k)
+                            if not first_m:
+                                asyncio.ensure_future(show_banner(
+                                    f"메일 · {i.get('from','')}: "
+                                    f"{i.get('subject','')}"[:60]))
+                        first_m = False
+                except Exception as e:  # noqa: BLE001
+                    print("notif_watch:", e)
+                await asyncio.sleep(10)
 
         async def ws_events():
             global speaking_until
@@ -134,8 +260,28 @@ async def bridge():
                 elif t == "input_audio_buffer.speech_stopped":
                     set_status("THINKING")
                 elif t == "conversation.item.input_audio_transcription.completed":
-                    # 사용자 발화는 화면에 띄우지 않음 (터미널 로그만)
-                    print("YOU :", ev.get("transcript", "").strip())
+                    # 사용자 발화는 화면에 띄우지 않음 (로그 + 앱 릴레이만)
+                    ut = ev.get("transcript", "").strip()
+                    print("YOU :", ut)
+                    if ut:
+                        link.mailbox_push({"type": "transcript",
+                                           "who": "you", "text": ut})
+                elif t == "response.function_call_arguments.done":
+                    name = ev.get("name", "")
+                    try:
+                        fargs = json.loads(ev.get("arguments") or "{}")
+                    except ValueError:
+                        fargs = {}
+                    print("TOOL:", name, fargs)
+                    emu.inject_bluetooth_data(status_packet("THINKING"))
+                    cur_status[0] = "THINKING"
+                    out = await asyncio.to_thread(run_tool, name, fargs)
+                    await ws.send(json.dumps({
+                        "type": "conversation.item.create",
+                        "item": {"type": "function_call_output",
+                                 "call_id": ev.get("call_id"),
+                                 "output": out}}))
+                    await ws.send(json.dumps({"type": "response.create"}))
                 elif t in ("response.output_audio.delta", "response.audio.delta"):
                     set_status("SPEAKING")
                     chunk = base64.b64decode(ev.get("delta", ""))
@@ -158,6 +304,9 @@ async def bridge():
                     ft = ev.get("transcript", "") or omni_txt
                     print("OMNI:", ft)
                     emu.inject_bluetooth_data(caption_packet(ft))
+                    if ft.strip():
+                        link.mailbox_push({"type": "transcript",
+                                           "who": "omni", "text": ft.strip()})
                     omni_txt = ""
                 elif t == "response.done":
                     speaking_until += 0.5
@@ -166,7 +315,7 @@ async def bridge():
                     print("RT ERROR:", ev.get("error"))
 
         try:
-            await asyncio.gather(glasses_to_ws(), ws_events())
+            await asyncio.gather(glasses_to_ws(), ws_events(), notif_watch())
         finally:
             mic.stop()
 
