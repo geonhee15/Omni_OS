@@ -14,6 +14,7 @@ import base64
 import json
 import os
 import sys
+import time
 import wave
 
 import ssl
@@ -22,6 +23,8 @@ import certifi
 import numpy as np
 import websockets
 from halo_emulator import HaloEmulator
+
+from hud import caption_packet, render_background, status_packet
 
 KEY = open(os.path.expanduser("~/.omni/openai.key")).read().strip()
 URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
@@ -55,6 +58,8 @@ async def main():
     emu.load_directory("./lua")
     emu.start_recording(fps=15)
     emu.start("main.lua")
+    time.sleep(0.3)
+    emu.inject_bluetooth_data(render_background())  # HUD 배경 아트
     await asyncio.sleep(0.5)
     if emu.get_error():
         print("LUA ERROR:", emu.get_error())
@@ -69,7 +74,7 @@ async def main():
         emu.inject_bluetooth_data(bytes([tag]) + payload)
 
     def status(s: str):
-        to_glasses(0x03, s.encode())
+        emu.inject_bluetooth_data(status_packet(s.split('.')[0]))
 
     ssl_ctx = ssl.create_default_context(cafile=certifi.where())
     async with websockets.connect(
@@ -150,7 +155,7 @@ async def main():
                     transcript.append(ev.get("transcript", ""))
                 elif t == "response.done":
                     status("DONE")
-                    to_glasses(0x02, b"REPLY RECEIVED\nAUDIO 16K OK")
+                    emu.inject_bluetooth_data(caption_packet("응답 수신 완료. 오디오 정상."))
                     await asyncio.sleep(1.0)
                     done.set()
                     return

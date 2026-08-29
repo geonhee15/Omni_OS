@@ -24,7 +24,7 @@ import sounddevice as sd
 import websockets
 from halo_emulator import HaloEmulator
 
-from hangul import caption_packet
+from hud import caption_packet, render_background, status_packet
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.expanduser("~/.omni/openai.key")).read().strip()
@@ -88,8 +88,12 @@ async def bridge():
             },
         }))
 
-        def to_glasses(tag: int, payload: bytes):
-            emu.inject_bluetooth_data(bytes([tag]) + payload)
+        cur_status = [""]
+
+        def set_status(st: str):
+            if st != cur_status[0]:
+                cur_status[0] = st
+                emu.inject_bluetooth_data(status_packet(st))
 
         # 맥 마이크 → 에뮬 안경 마이크 (16k, 옴니 발화 중엔 게이트)
         def mic_cb(indata, frames, t, status_):
@@ -126,19 +130,19 @@ async def bridge():
                 ev = json.loads(raw)
                 t = ev.get("type")
                 if t == "input_audio_buffer.speech_started":
-                    to_glasses(0x03, b"HEARING...")
+                    set_status("HEARING")
                 elif t == "input_audio_buffer.speech_stopped":
-                    to_glasses(0x03, b"THINKING...")
+                    set_status("THINKING")
                 elif t == "conversation.item.input_audio_transcription.completed":
                     # 사용자 발화는 화면에 띄우지 않음 (터미널 로그만)
                     print("YOU :", ev.get("transcript", "").strip())
                 elif t in ("response.output_audio.delta", "response.audio.delta"):
-                    to_glasses(0x03, b"SPEAKING")
+                    set_status("SPEAKING")
                     chunk = base64.b64decode(ev.get("delta", ""))
                     speaker_q.put(chunk)
                     pcm16 = resample(
                         np.frombuffer(chunk, dtype=np.int16), 24000, 16000)
-                    to_glasses(0x10, pcm16.tobytes())
+                    emu.inject_bluetooth_data(b"\x10" + pcm16.tobytes())
                     # 재생 큐 길이만큼 마이크 게이트 연장
                     speaking_until = max(speaking_until, time.time()) \
                         + len(chunk) / 2 / 24000
@@ -157,7 +161,7 @@ async def bridge():
                     omni_txt = ""
                 elif t == "response.done":
                     speaking_until += 0.5
-                    to_glasses(0x03, b"LISTENING")
+                    set_status("LISTENING")
                 elif t == "error":
                     print("RT ERROR:", ev.get("error"))
 
@@ -177,6 +181,8 @@ def main():
     if emu.get_error():
         print("LUA ERROR:", emu.get_error())
         return
+    emu.inject_bluetooth_data(render_background())  # HUD 배경 아트 (1회)
+    emu.inject_bluetooth_data(status_packet("LISTENING"))
 
     threading.Thread(target=speaker_thread, daemon=True).start()
     loop = asyncio.new_event_loop()
