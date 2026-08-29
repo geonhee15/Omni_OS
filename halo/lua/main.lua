@@ -4,6 +4,7 @@
 
 local status = "BOOT"
 local caption = ""
+local cap_bmp = nil
 local spk_on = false
 
 local function render()
@@ -17,6 +18,11 @@ local function render()
     y = y + 24
     if y > 220 then break end
   end
+  if cap_bmp then
+    pcall(function()
+      frame.display.bitmap(16, cap_bmp.y, cap_bmp.w, 2, 0, cap_bmp.data)
+    end)
+  end
 end
 
 frame.bluetooth.receive_callback(function(data)
@@ -27,6 +33,15 @@ frame.bluetooth.receive_callback(function(data)
     render()
   elseif tag == 0x03 then
     status = payload
+    render()
+  elseif tag == 0x11 then
+    -- host-rendered caption bitmap (1bpp): [y][wBytes][rows...]
+    cap_bmp = {
+      y = string.byte(data, 2),
+      w = string.byte(data, 3) * 8,
+      data = string.sub(data, 4),
+    }
+    caption = ""
     render()
   elseif tag == 0x10 then
     if not spk_on then

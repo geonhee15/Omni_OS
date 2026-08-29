@@ -24,6 +24,8 @@ import sounddevice as sd
 import websockets
 from halo_emulator import HaloEmulator
 
+from hangul import caption_packet
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.expanduser("~/.omni/openai.key")).read().strip()
 URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
@@ -116,6 +118,8 @@ async def bridge():
 
         async def ws_events():
             global speaking_until
+            omni_txt = ""
+            last_cap = 0.0
             async for raw in ws:
                 if not running:
                     return
@@ -126,7 +130,10 @@ async def bridge():
                 elif t == "input_audio_buffer.speech_stopped":
                     to_glasses(0x03, b"THINKING...")
                 elif t == "conversation.item.input_audio_transcription.completed":
-                    print("YOU :", ev.get("transcript", "").strip())
+                    ut = ev.get("transcript", "").strip()
+                    print("YOU :", ut)
+                    if ut:
+                        emu.inject_bluetooth_data(caption_packet(f"나: {ut}"))
                 elif t in ("response.output_audio.delta", "response.audio.delta"):
                     to_glasses(0x03, b"SPEAKING")
                     chunk = base64.b64decode(ev.get("delta", ""))
@@ -137,9 +144,19 @@ async def bridge():
                     # 재생 큐 길이만큼 마이크 게이트 연장
                     speaking_until = max(speaking_until, time.time()) \
                         + len(chunk) / 2 / 24000
+                elif t in ("response.output_audio_transcript.delta",
+                           "response.audio_transcript.delta"):
+                    omni_txt += ev.get("delta", "")
+                    if time.time() - last_cap > 0.35:
+                        last_cap = time.time()
+                        emu.inject_bluetooth_data(
+                            caption_packet(f"옴니: {omni_txt}"))
                 elif t in ("response.output_audio_transcript.done",
                            "response.audio_transcript.done"):
-                    print("OMNI:", ev.get("transcript", ""))
+                    ft = ev.get("transcript", "") or omni_txt
+                    print("OMNI:", ft)
+                    emu.inject_bluetooth_data(caption_packet(f"옴니: {ft}"))
+                    omni_txt = ""
                 elif t == "response.done":
                     speaking_until += 0.5
                     to_glasses(0x03, b"LISTENING")
