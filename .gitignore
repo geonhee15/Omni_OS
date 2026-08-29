@@ -12,3 +12,9 @@ examples/Demo-Voice-Changer/
 voice_engine/__pycache__/
 __pycache__/
 voice_engine/seedvc/
+halo/venv/
+halo/sandbox/
+halo/question.wav
+halo/halo_demo.gif
+halo/halo_reply.wav
+halo/halo_final.png
