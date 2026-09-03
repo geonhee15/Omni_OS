@@ -198,6 +198,45 @@ def _check_kakao_db(hours: float) -> "list[dict] | None":
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ---------------------------------------------------------------- 앱 스냅샷 (범용)
+#
+# 안경 연동 규약: 앱이 계산·조회하는 정보(날씨·뉴스·마켓·캘린더·알림)는
+# 갱신 때마다 ~/.omni/store/halo_<name>.json 으로 내보내고, 브리지는 그
+# 파일만 읽는다. 최신이 필요하면 메일박스로 {"type":"refresh","what":name}
+# 을 보내 앱의 재조회를 트리거한 뒤 새 파일을 기다린다.
+
+def snapshot(name: str, max_age: float | None = None) -> "dict | None":
+    path = os.path.join(HOME, f".omni/store/halo_{name}.json")
+    try:
+        with open(path) as f:
+            snap = json.load(f)
+        if max_age is not None and \
+                time.time() - float(snap.get("ts", 0)) / 1000 > max_age:
+            return None
+        return snap
+    except (OSError, ValueError):
+        return None
+
+
+def request_refresh(what: str, wait: float = 8.0) -> "dict | None":
+    """앱에 재조회를 요청하고 새 스냅샷을 기다린다 (없으면 기존/None)."""
+    path = os.path.join(HOME, f".omni/store/halo_{what}.json")
+    try:
+        old_m = os.path.getmtime(path)
+    except OSError:
+        old_m = 0
+    mailbox_push({"type": "refresh", "what": what})
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        try:
+            if os.path.getmtime(path) > old_m:
+                break
+        except OSError:
+            pass
+        time.sleep(0.4)
+    return snapshot(what)
+
+
 # ---------------------------------------------------------------- 지메일
 
 def check_gmail(hours: float = 24.0) -> dict:

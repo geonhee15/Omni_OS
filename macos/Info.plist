@@ -22,6 +22,10 @@
 	<string>12.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>CALENDAR 패널과 옴니 AI가 맥 캘린더의 일정을 읽고 추가하기 위해 필요합니다.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>CALENDAR 패널과 옴니 AI가 맥 캘린더의 일정을 읽고 추가하기 위해 필요합니다.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera is used for 3D hand gesture control in the RENDER_3D panel.</string>
 	<key>NSMicrophoneUsageDescription</key>

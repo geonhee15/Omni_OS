@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.61.0",
+  version: "0.62.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -593,6 +593,7 @@ OmniOS.register("ai", {
     "- 지메일 확인: \"메일 확인해줘\" 류 요청은 check_gmail 도구로 받은편지함을 직접 읽어(IMAP, 알림 무관) 보낸 사람·제목·안읽음 여부를 요약 보고합니다. 메일 발송은 미지원입니다.",
     "- 오미니아: 당신을 돕는 보조 AI로, 로컬에서 실행되는 별도 모델입니다(텍스트 전용, 터미널 접근은 사용자 승인 필요). \"오미니아 호출/켜줘\" 같은 요청을 받으면 [[ACT:omnia]]로 팝업을 열고 짧게 보고합니다.",
     "- 날씨: \"날씨 어때/내일 비 와?\" 류는 check_weather 도구(city 생략 시 현재 설정 위치, 지정 시 그 도시)로 확인해 핵심만 말합니다. 뉴스: \"뉴스 보여줘/○○ 관련 소식\" 류는 check_news 도구(category 또는 query)로 헤드라인을 읽어 3~5개로 요약합니다. 지도: 장소를 보여 달라면 [[ACT:map.search:장소]]로 MAP 패널에 표시합니다.",
+    "- 환율·주식: \"달러 환율/삼성전자 주가/비트코인\" 류는 check_markets 도구로 확인해 핵심 수치만 말합니다. 일정: \"오늘 일정/이번 주 뭐 있어\"는 check_calendar, \"내일 3시 치과 잡아줘\"처럼 일정 추가 요청은 add_event 도구(start는 YYYY-MM-DD HH:mm, 종일이면 날짜만)로 맥 캘린더에 등록하고 결과를 보고합니다. 날짜·시각은 [실시간 상태 스냅샷]의 현재 시각 기준으로 계산합니다.",
     "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
   // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
@@ -691,6 +692,36 @@ OmniOS.register("ai", {
       },
     },
     {
+      name: "check_markets",
+      description: "환율(원화 기준 USD/JPY/EUR/CNY/GBP)과 관심목록 시세(지수·주식·코인, 등락률). symbol을 주면 그 심볼만 즉석 조회(예: 005930.KS, TSLA, BTC-USD, ^KS11).",
+      input_schema: {
+        type: "object",
+        properties: { symbol: { type: "string" } },
+        required: [],
+      },
+    },
+    {
+      name: "check_calendar",
+      description: "맥 캘린더 일정 조회(모든 캘린더, 구독 계정 포함). days는 오늘부터 N일(기본 7). 결과 각 줄: [날짜 시각] 제목 (캘린더).",
+      input_schema: {
+        type: "object",
+        properties: { days: { type: "number" } },
+        required: [],
+      },
+    },
+    {
+      name: "add_event",
+      description: "맥 캘린더에 일정 추가. title 필수, start는 'YYYY-MM-DD HH:mm' 또는 종일이면 'YYYY-MM-DD', minutes는 길이(기본 60). location/notes 선택.",
+      input_schema: {
+        type: "object",
+        properties: {
+          title: { type: "string" }, start: { type: "string" },
+          minutes: { type: "number" }, location: { type: "string" }, notes: { type: "string" },
+        },
+        required: ["title", "start"],
+      },
+    },
+    {
       name: "save_memory",
       description: "장기 메모리 저장. 사용자에 대한 새 사실·선호·진행 중인 작업을 알게 되거나 '기억해' 요청을 받으면 호출. content는 기존 [장기 메모리]와 병합한 최신 통합본 전체 (한국어 불릿, 2000자 이내) — 저장 즉시 이전 내용을 대체한다.",
       input_schema: {
@@ -713,6 +744,7 @@ OmniOS.register("ai", {
     ino: "ARDUINO IDE", ce: "CODE EDITOR", notes: "NOTES",
     voice: "VOICE CHANGER", arc: "ARC-SCAN",
     weather: "WEATHER", news: "NEWS", map: "MAP",
+    markets: "MARKETS", calendar: "CALENDAR",
   },
   lang: "auto", // auto = 기본 한국어 + 요구 시 실시간 전환, 그 외 = 해당 언어 잠금
   PANEL_GUIDE: [
@@ -732,6 +764,8 @@ OmniOS.register("ai", {
     "WEATHER: 현재 날씨·24시간·7일 예보 (도시 검색, 현위치)",
     "NEWS: 뉴스 헤드라인 — 주요/세계/경제/IT·과학/과학/스포츠 + 키워드 검색, 클릭하면 기사 열림",
     "MAP: 지도 — 장소 검색, 현위치, 좌표 표시, 그 지점 날씨 보기",
+    "MARKETS: 환율(원화 기준)·주식/지수/코인 관심목록 시세 + 스파크라인",
+    "CALENDAR: 맥 캘린더 일정(구독 계정 포함) 보기·추가·삭제",
   ].join("\n"),
   model: "auto", // auto = 심층 질문만 Opus, 나머지 Haiku
   history: [],
@@ -853,6 +887,10 @@ OmniOS.register("ai", {
           // 안경에서 "카톡 확인" — 즉시 재조회해 스냅샷 갱신
           const notif = OmniOS.modules.notif;
           if (notif) notif.refresh(true);
+        } else if (ev.type === "refresh") {
+          // 범용: 안경이 요청한 모듈 재조회 → 각 모듈이 halo_<what>.json 갱신
+          const m = OmniOS.modules[ev.what === "notif" ? "notif" : ev.what];
+          if (m && typeof m.refresh === "function") m.refresh(true);
         } else if (ev.type === "action") {
           if (ev.open) {
             const btn = document.querySelector(
@@ -1274,6 +1312,31 @@ OmniOS.register("ai", {
         return items.slice(0, Math.max(1, Math.min(20, input.count || 8)))
           .map((i) => `[${nw.fmtTime(i.ts)}] ${i.source} — ${i.title}`).join("\n");
       }
+      if (name === "check_markets") {
+        const mk = OmniOS.modules.markets;
+        if (!mk) return "오류: 마켓 모듈 없음";
+        if (input.symbol) {
+          const q = await mk.quote(String(input.symbol).trim());
+          return q ? mk.fmtQuote(q) : `오류: 심볼을 찾지 못했습니다: ${input.symbol}`;
+        }
+        if (!mk._at) await mk.refresh();
+        return mk.summary() || "오류: 시세 데이터를 받지 못했습니다";
+      }
+      if (name === "check_calendar") {
+        const cl = OmniOS.modules.calendar;
+        if (!cl) return "오류: 캘린더 모듈 없음";
+        const r = await cl.refresh(Math.max(1, Math.min(60, input.days || 7)));
+        if (r && r.error === "CAL_DENIED") {
+          return "오류: 캘린더 접근 권한이 없습니다. 사용자에게 안내하라: 시스템 설정 > 개인정보 보호 및 보안 > 캘린더에서 Omni OS를 허용해 주십시오.";
+        }
+        return cl.summary(input.days || 7) || "(예정된 일정 없음)";
+      }
+      if (name === "add_event") {
+        const cl = OmniOS.modules.calendar;
+        if (!cl) return "오류: 캘린더 모듈 없음";
+        const r = await cl.add(input);
+        return r.ok ? `일정 추가됨: ${r.msg}` : `오류: ${r.msg}`;
+      }
       if (name === "check_gmail") {
         const r = await OmniNative.request("ai.gmailRecent",
           JSON.stringify({ hours: input.hours || 48 }), 30000);
@@ -1447,6 +1510,14 @@ OmniOS.register("ai", {
         const ok = q ? await OmniOS.modules.weather.setCity(q) : true;
         return ok ? { ok: true, msg: `날씨: ${OmniOS.modules.weather.locName()}` }
           : { ok: false, msg: `도시를 찾지 못했습니다: ${q}` };
+      }
+      if (key === "cal.add") {
+        // cal.add:제목:YYYY-MM-DD HH:mm:분 (안경 브리지·태그용)
+        const title = parts[1] || "";
+        const startStr = parts.slice(2, -1).join(":").trim() || parts[2] || "";
+        const minutes = Number(parts[parts.length - 1]) || 60;
+        const r = await OmniOS.modules.calendar.add({ title, start: startStr, minutes });
+        return r.ok ? { ok: true, msg: `일정 추가: ${r.msg}` } : { ok: false, msg: r.msg };
       }
       if (key === "news.search") {
         const q = parts.slice(1).join(":").trim();
@@ -1918,6 +1989,34 @@ OmniOS.register("ai", {
     },
     {
       type: "function",
+      name: "check_markets",
+      description: "환율·주식·코인 시세 — \"달러 환율/삼성전자 주가/비트코인\"에 사용. symbol을 주면 그 종목만. 핵심 수치와 등락만 짧게 말한다.",
+      parameters: {
+        type: "object",
+        properties: { symbol: { type: "string" } },
+      },
+    },
+    {
+      type: "function",
+      name: "check_calendar",
+      description: "맥 캘린더 일정 — \"오늘/내일/이번 주 일정\"에 사용. days 기본 7. 가까운 일정부터 시각과 제목만 짧게 말한다.",
+      parameters: {
+        type: "object",
+        properties: { days: { type: "number" } },
+      },
+    },
+    {
+      type: "function",
+      name: "add_event",
+      description: "맥 캘린더에 일정 추가 — \"내일 3시 치과 잡아줘\"에 사용. title, start('YYYY-MM-DD HH:mm', 종일이면 날짜만), minutes(기본 60). 현재 날짜는 get_status로 확인.",
+      parameters: {
+        type: "object",
+        properties: { title: { type: "string" }, start: { type: "string" }, minutes: { type: "number" } },
+        required: ["title", "start"],
+      },
+    },
+    {
+      type: "function",
       name: "check_news",
       description: "뉴스 헤드라인 — \"뉴스 뭐 있어/○○ 소식\"에 사용. category: top/world/business/tech/science/sports, query는 키워드 검색. 3~5개를 골라 간결히 말한다.",
       parameters: {
@@ -2214,6 +2313,9 @@ OmniOS.register("ai", {
     } else if (name === "check_news") {
       this.logLine("sys", `도구 · check_news ${(args && (args.query || args.category)) || ""}`);
       output = await this.execTool("check_news", args || {});
+    } else if (name === "check_markets" || name === "check_calendar" || name === "add_event") {
+      this.logLine("sys", `도구 · ${name}`);
+      output = await this.execTool(name, args || {});
     } else {
       output = `unknown tool: ${name}`;
     }
@@ -11266,6 +11368,13 @@ const OmniNet = {
     return res.text();
   },
   async json(url, timeout) { return JSON.parse(await this.get(url, timeout)); },
+  // Halo 안경 브리지용 스냅샷 내보내기 (~/.omni/store/halo_<name>.json)
+  haloExport(name, data) {
+    if (!OmniNative.available) return;
+    OmniNative.request("store.write", JSON.stringify({
+      name: `halo_${name}`, data: JSON.stringify({ ts: Date.now(), ...data }),
+    }), 8000).catch(() => {});
+  },
   openUrl(url) {
     if (OmniNative.available) {
       OmniNative.request("open.url", JSON.stringify({ url }), 8000).catch(() => {});
@@ -11457,6 +11566,7 @@ OmniOS.register("weather", {
     this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
     this.renderDaily();
     this.drawHourly();
+    OmniNet.haloExport("weather", { loc: this.loc.name, summary: this.summary() });
   },
 
   // 현재 시각 이후 24시간 슬라이스
@@ -11613,6 +11723,7 @@ OmniOS.register("news", {
   },
 
   reload() { return this.query ? this.search(this.query) : this.load(this.cat); },
+  refresh() { return this.reload(); },
 
   async load(cat) {
     if (!this.CATS.hasOwnProperty(cat)) cat = "top";
@@ -11638,6 +11749,8 @@ OmniOS.register("news", {
       const t = new Date();
       this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
       this.render();
+      OmniNet.haloExport("news", { cat: this.cat, query: this.query,
+        items: this.items.slice(0, 12).map((i) => ({ title: i.title, source: i.source, ts: i.ts })) });
     } catch (e) {
       this.items = [];
       this.els.list.innerHTML = "";
@@ -11810,5 +11923,377 @@ OmniOS.register("map", {
     const btn = document.querySelector('.nav-item[data-panel="weather"]');
     if (btn) btn.click();
     await OmniOS.modules.weather.setCoords(ll.lat, ll.lon, ll.label);
+  },
+});
+
+// ---------- module: MARKETS (환율 + 주식/지수/코인 — 키 없음) ----------
+OmniOS.register("markets", {
+  FX_URL: "https://open.er-api.com/v6/latest/USD",
+  CHART: (sym, range, iv) => `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=${range}&interval=${iv}`,
+  FX_PAIRS: [["USD", 1, "미국 달러"], ["JPY", 100, "일본 엔 (100)"], ["EUR", 1, "유로"], ["CNY", 1, "중국 위안"], ["GBP", 1, "영국 파운드"]],
+  DEFAULT: ["^KS11", "^KQ11", "^GSPC", "^IXIC", "005930.KS", "AAPL", "NVDA", "BTC-USD"],
+  NAMES: { "^KS11": "코스피", "^KQ11": "코스닥", "^GSPC": "S&P 500", "^IXIC": "나스닥", "005930.KS": "삼성전자",
+    "000660.KS": "SK하이닉스", "035420.KS": "NAVER", "035720.KS": "카카오", "AAPL": "애플", "NVDA": "엔비디아",
+    "TSLA": "테슬라", "MSFT": "마이크로소프트", "GOOGL": "알파벳", "AMZN": "아마존", "BTC-USD": "비트코인", "ETH-USD": "이더리움" },
+  list: [],
+  fx: null,
+  quotes: {},
+  _at: 0,
+  _busy: false,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = { add: $("mk-add"), updated: $("mk-updated"), refresh: $("mk-refresh"), err: $("mk-err"),
+      fx: $("mk-fx"), list: $("mk-list"), count: $("mk-count") };
+    try { this.list = JSON.parse(localStorage.getItem("omni.mk.list") || "null") || this.DEFAULT.slice(); }
+    catch (e) { this.list = this.DEFAULT.slice(); }
+    this.els.add.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && this.els.add.value.trim()) {
+        this.addSymbol(this.els.add.value.trim().toUpperCase());
+        this.els.add.value = "";
+      }
+    });
+    this.els.refresh.addEventListener("click", () => this.refresh());
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "markets" && Date.now() - this._at > 5 * 60000) this.refresh();
+    });
+    setInterval(() => { if (this._at) this.refresh(); }, 10 * 60000);
+    setTimeout(() => this.refresh(), 2500);
+  },
+
+  save() { localStorage.setItem("omni.mk.list", JSON.stringify(this.list)); },
+
+  async addSymbol(sym) {
+    if (this.list.includes(sym)) return;
+    const q = await this.quote(sym);
+    if (!q) { this.setErr(`심볼을 찾지 못했습니다: ${sym}`); return; }
+    this.setErr("");
+    this.list.push(sym); this.save();
+    this.quotes[sym] = q;
+    this.renderList();
+  },
+
+  removeSymbol(sym) {
+    this.list = this.list.filter((s) => s !== sym); this.save();
+    delete this.quotes[sym];
+    this.renderList();
+  },
+
+  setErr(msg) { this.els.err.textContent = msg; this.els.err.hidden = !msg; },
+
+  // 단일 종목 시세 (+ 당일 스파크라인)
+  async quote(sym) {
+    try {
+      const j = await OmniNet.json(this.CHART(sym, "1d", "5m"), 15000);
+      const r = j && j.chart && j.chart.result && j.chart.result[0];
+      if (!r || !r.meta) return null;
+      const m = r.meta;
+      const closes = ((r.indicators && r.indicators.quote && r.indicators.quote[0] && r.indicators.quote[0].close) || [])
+        .filter((v) => typeof v === "number");
+      const prev = m.chartPreviousClose ?? m.previousClose ?? (closes[0] || m.regularMarketPrice);
+      const price = m.regularMarketPrice;
+      return { sym, name: this.NAMES[sym] || m.shortName || m.longName || sym, price, prev,
+        chg: prev ? ((price - prev) / prev) * 100 : 0, cur: m.currency || "", type: m.instrumentType || "",
+        spark: closes.slice(-60), exch: m.exchangeName || "", t: m.regularMarketTime || 0 };
+    } catch (e) {
+      return null;
+    }
+  },
+
+  async refresh() {
+    if (this._busy) return;
+    this._busy = true;
+    try {
+      const [fx, ...qs] = await Promise.all([
+        OmniNet.json(this.FX_URL, 15000).catch(() => null),
+        ...this.list.map((s) => this.quote(s)),
+      ]);
+      if (fx && fx.rates) this.fx = fx;
+      qs.forEach((q, i) => { if (q) this.quotes[this.list[i]] = q; });
+      this._at = Date.now();
+      const t = new Date();
+      this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+      this.setErr(fx ? "" : (OmniNative.available ? "환율 조회 실패" : "브라우저 개발 모드 — 일부 시세는 앱에서만 조회됩니다 (CORS)"));
+      this.render();
+      OmniNet.haloExport("markets", { summary: this.summary() });
+    } finally {
+      this._busy = false;
+    }
+  },
+
+  fmtNum(v, cur) {
+    if (typeof v !== "number") return "—";
+    const digits = cur === "KRW" || v >= 1000 ? 0 : 2;
+    return v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  },
+
+  fmtQuote(q) {
+    const sign = q.chg > 0 ? "+" : "";
+    return `${q.name} (${q.sym}): ${this.fmtNum(q.price, q.cur)} ${q.cur} (${sign}${q.chg.toFixed(2)}%)`;
+  },
+
+  render() { this.renderFx(); this.renderList(); },
+
+  renderFx() {
+    const el = this.els.fx;
+    el.textContent = "";
+    if (!this.fx || !this.fx.rates) { el.innerHTML = '<div class="nf-empty">NO FX DATA</div>'; return; }
+    const krw = this.fx.rates.KRW;
+    for (const [code, unit, label] of this.FX_PAIRS) {
+      const r = this.fx.rates[code];
+      if (!r || !krw) continue;
+      const v = (krw / r) * unit;
+      const card = document.createElement("div");
+      card.className = "mk-fxcard";
+      card.innerHTML = `<div class="p">${label}</div><div class="v">${v.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })}<small>KRW</small></div>`;
+      el.appendChild(card);
+    }
+    const upd = new Date((this.fx.time_last_update_unix || 0) * 1000);
+    this.els.fx.title = `기준 ${upd.toLocaleString("ko-KR")}`;
+  },
+
+  renderList() {
+    const el = this.els.list;
+    el.textContent = "";
+    this.els.count.textContent = String(this.list.length);
+    if (!this.list.length) { el.innerHTML = '<div class="nf-empty">WATCHLIST EMPTY — 위에 심볼을 추가하십시오</div>'; return; }
+    for (const sym of this.list) {
+      const q = this.quotes[sym];
+      const row = document.createElement("div");
+      row.className = "mk-row";
+      const cls = !q ? "flat" : q.chg > 0.005 ? "up" : q.chg < -0.005 ? "down" : "flat";
+      const sign = q && q.chg > 0 ? "+" : "";
+      row.innerHTML = `<div class="n"><span class="nm">${q ? q.name : sym}</span><span class="sy">${sym}</span></div>`
+        + `<canvas class="sp"></canvas>`
+        + `<span class="px">${q ? this.fmtNum(q.price, q.cur) : "—"}</span>`
+        + `<span class="ch ${cls}">${q ? `${sign}${q.chg.toFixed(2)}%` : "—"}</span>`
+        + `<span class="mk">${q ? q.cur : ""}</span>`
+        + `<button class="rm" title="제거">&#10005;</button>`;
+      row.querySelector(".rm").addEventListener("click", () => this.removeSymbol(sym));
+      el.appendChild(row);
+      if (q && q.spark.length > 1) this.drawSpark(row.querySelector("canvas"), q.spark, cls);
+    }
+  },
+
+  drawSpark(cv, data, cls) {
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.offsetWidth || 120, H = 26;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const ctx = cv.getContext("2d");
+    ctx.scale(dpr, dpr);
+    const min = Math.min(...data), max = Math.max(...data);
+    const span = max - min || 1;
+    const css = getComputedStyle(document.documentElement);
+    const color = cls === "up" ? css.getPropertyValue("--alert").trim() : cls === "down" ? css.getPropertyValue("--blue").trim() : css.getPropertyValue("--text-dim").trim();
+    ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.shadowColor = color; ctx.shadowBlur = 4;
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = (i / (data.length - 1)) * W;
+      const y = 3 + (1 - (v - min) / span) * (H - 6);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  },
+
+  summary() {
+    const lines = [];
+    if (this.fx && this.fx.rates) {
+      const krw = this.fx.rates.KRW;
+      lines.push("환율(원화): " + this.FX_PAIRS.map(([c, u, l]) => {
+        const r = this.fx.rates[c];
+        return r ? `${l} ${((krw / r) * u).toFixed(2)}원` : null;
+      }).filter(Boolean).join(", "));
+    }
+    for (const sym of this.list) {
+      const q = this.quotes[sym];
+      if (q) lines.push(this.fmtQuote(q));
+    }
+    return lines.join("\n");
+  },
+});
+
+// ---------- module: CALENDAR (맥 캘린더 — EventKit) ----------
+OmniOS.register("calendar", {
+  items: [],
+  _at: 0,
+  _err: null,
+  DAYS: 14,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = { next: $("cl-next"), updated: $("cl-updated"), refresh: $("cl-refresh"), err: $("cl-err"),
+      days: $("cl-days"), title: $("cl-title"), date: $("cl-date"), time: $("cl-time"), dur: $("cl-dur"), addbtn: $("cl-addbtn") };
+    this.els.refresh.addEventListener("click", () => this.refresh());
+    this.els.addbtn.addEventListener("click", () => this.quickAdd());
+    this.els.title.addEventListener("keydown", (e) => { if (e.key === "Enter") this.quickAdd(); });
+    const today = new Date();
+    this.els.date.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "calendar" && Date.now() - this._at > 2 * 60000) this.refresh();
+    });
+    if (OmniNative.available) {
+      setTimeout(() => this.refresh(), 4000);
+      setInterval(() => this.refresh(), 5 * 60000);
+      setInterval(() => this.renderNext(), 30000);
+    } else {
+      this.els.days.innerHTML = '<div class="nf-err">브라우저 개발 모드 — 캘린더는 앱에서만 조회됩니다</div>';
+    }
+  },
+
+  async refresh(days) {
+    if (!OmniNative.available) return null;
+    const n = days || this.DAYS;
+    let r = null;
+    try {
+      r = await OmniNative.request("cal.events", JSON.stringify({ days: n }), 20000);
+    } catch (e) { r = { ok: false, error: e.message }; }
+    if (!r || !r.ok) {
+      this._err = (r && r.error) === "CAL_DENIED"
+        ? "캘린더 접근 권한 필요 — 시스템 설정 > 개인정보 보호 및 보안 > 캘린더에서 Omni OS를 허용한 뒤 REFRESH"
+        : `조회 실패: ${(r && r.error) || "unknown"}`;
+      this.render();
+      return r;
+    }
+    this._err = null;
+    this.items = (r.items || []).slice();
+    this._at = Date.now();
+    const t = new Date();
+    this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+    this.render();
+    // 안경 브리지용: 앞으로 3일치
+    const lim = Date.now() / 1000 + 3 * 86400;
+    OmniNet.haloExport("calendar", { items: this.items.filter((i) => i.start < lim).slice(0, 40)
+      .map((i) => ({ id: i.id, title: i.title, start: i.start, end: i.end, allDay: i.allDay, calendar: i.calendar })) });
+    return r;
+  },
+
+  // 'YYYY-MM-DD HH:mm' | 'YYYY-MM-DD' | ISO → {start(초), end(초), allDay}
+  parseWhen(startStr, minutes) {
+    const s = String(startStr || "").trim().replace("T", " ");
+    const mDate = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/.exec(s);
+    if (!mDate) {
+      const d = new Date(s);
+      if (isNaN(d)) return null;
+      return { start: d.getTime() / 1000, end: d.getTime() / 1000 + (minutes || 60) * 60, allDay: false };
+    }
+    const [, Y, M, D, h, mi] = mDate;
+    if (h === undefined) {
+      const d = new Date(+Y, +M - 1, +D, 0, 0, 0);
+      return { start: d.getTime() / 1000, end: d.getTime() / 1000 + 86400, allDay: true };
+    }
+    const d = new Date(+Y, +M - 1, +D, +h, +mi, 0);
+    return { start: d.getTime() / 1000, end: d.getTime() / 1000 + (minutes || 60) * 60, allDay: false };
+  },
+
+  async add(input) {
+    if (!OmniNative.available) return { ok: false, msg: "앱에서만 가능" };
+    const title = String(input.title || "").trim();
+    if (!title) return { ok: false, msg: "제목 없음" };
+    const w = this.parseWhen(input.start, Number(input.minutes) || 60);
+    if (!w) return { ok: false, msg: `시각을 해석하지 못했습니다: ${input.start}` };
+    let r = null;
+    try {
+      r = await OmniNative.request("cal.add", JSON.stringify({
+        title, start: w.start, end: w.end, allDay: w.allDay,
+        location: input.location || "", notes: input.notes || "", calendar: input.calendar || "",
+      }), 20000);
+    } catch (e) { r = { ok: false, error: e.message }; }
+    if (!r || !r.ok) {
+      return { ok: false, msg: (r && r.error) === "CAL_DENIED" ? "캘린더 접근 권한 필요" : `추가 실패: ${(r && r.error) || "unknown"}` };
+    }
+    await this.refresh();
+    const d = new Date(w.start * 1000);
+    const when = w.allDay ? `${d.getMonth() + 1}/${d.getDate()} 종일`
+      : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    return { ok: true, msg: `${title} · ${when} (${r.calendar || "기본 캘린더"})`, id: r.id };
+  },
+
+  async quickAdd() {
+    const title = this.els.title.value.trim();
+    if (!title) { this.els.title.focus(); return; }
+    const start = this.els.time.value ? `${this.els.date.value} ${this.els.time.value}` : this.els.date.value;
+    const r = await this.add({ title, start, minutes: Number(this.els.dur.value) || 60 });
+    if (r.ok) { this.els.title.value = ""; this.els.time.value = ""; this.setErr(""); }
+    else this.setErr(r.msg);
+  },
+
+  async remove(id) {
+    try {
+      const r = await OmniNative.request("cal.remove", JSON.stringify({ id }), 15000);
+      if (r && r.ok) await this.refresh(); else this.setErr(`삭제 실패: ${(r && r.error) || "unknown"}`);
+    } catch (e) { this.setErr(`삭제 실패: ${e.message}`); }
+  },
+
+  setErr(msg) { this.els.err.textContent = msg; this.els.err.hidden = !msg; },
+
+  fmtHM(ts) {
+    const d = new Date(ts * 1000);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  },
+
+  renderNext() {
+    const now = Date.now() / 1000;
+    const nx = this.items.find((i) => !i.allDay && i.start > now);
+    if (!nx) { this.els.next.textContent = this._err ? "—" : "NO UPCOMING TIMED EVENT"; return; }
+    const mins = Math.round((nx.start - now) / 60);
+    const rel = mins < 60 ? `${mins}분 후` : mins < 1440 ? `${Math.floor(mins / 60)}시간 ${mins % 60}분 후` : `${Math.floor(mins / 1440)}일 후`;
+    this.els.next.textContent = `NEXT · ${nx.title} · ${rel}`;
+  },
+
+  render() {
+    this.setErr(this._err || "");
+    const el = this.els.days;
+    el.textContent = "";
+    this.renderNext();
+    if (!this.items.length) {
+      el.innerHTML = `<div class="nf-empty">${this._err ? "" : "NO EVENTS IN THE NEXT " + this.DAYS + " DAYS"}</div>`;
+      return;
+    }
+    const DAY = ["일", "월", "화", "수", "목", "금", "토"];
+    const now = Date.now() / 1000;
+    const todayKey = new Date().toDateString();
+    const groups = new Map();
+    for (const it of this.items) {
+      const d = new Date(it.start * 1000);
+      const key = d.toDateString();
+      if (!groups.has(key)) groups.set(key, { d, items: [] });
+      groups.get(key).items.push(it);
+    }
+    for (const [key, g] of groups) {
+      const day = document.createElement("div");
+      day.className = `cl-day${key === todayKey ? " today" : ""}`;
+      const label = key === todayKey ? "오늘" : key === new Date(Date.now() + 86400000).toDateString() ? "내일" : "";
+      day.innerHTML = `<div class="h"><span>${g.d.getMonth() + 1}/${g.d.getDate()} ${DAY[g.d.getDay()]}</span><span>${label}</span><span class="cnt">${g.items.length}</span></div>`;
+      for (const it of g.items) {
+        const row = document.createElement("div");
+        const past = it.end < now, cur = it.start <= now && it.end > now;
+        row.className = `cl-ev${past ? " past" : ""}${cur ? " now" : ""}`;
+        row.innerHTML = `<span class="t">${it.allDay ? "종일" : `${this.fmtHM(it.start)} – ${this.fmtHM(it.end)}`}</span>`
+          + `<span class="dot" style="color:${it.color};background:${it.color}"></span>`
+          + `<span class="ti"></span><span class="cal"></span>`;
+        const ti = row.querySelector(".ti");
+        ti.textContent = it.title;
+        if (it.location) { const sm = document.createElement("small"); sm.textContent = it.location; ti.appendChild(sm); }
+        const cal = row.querySelector(".cal");
+        cal.textContent = it.calendar.toUpperCase();
+        const rm = document.createElement("button");
+        rm.className = "rm"; rm.title = "삭제"; rm.innerHTML = "&#10005;";
+        rm.addEventListener("click", (e) => { e.stopPropagation(); if (confirm(`삭제: ${it.title}?`)) this.remove(it.id); });
+        cal.appendChild(rm);
+        day.appendChild(row);
+      }
+      el.appendChild(day);
+    }
+  },
+
+  summary(days) {
+    const lim = Date.now() / 1000 + (days || 7) * 86400;
+    const now = Date.now() / 1000;
+    const DAY = ["일", "월", "화", "수", "목", "금", "토"];
+    return this.items.filter((i) => i.start < lim && i.end > now - 60).slice(0, 40).map((i) => {
+      const d = new Date(i.start * 1000);
+      const when = `${d.getMonth() + 1}/${d.getDate()}(${DAY[d.getDay()]})${i.allDay ? " 종일" : ` ${this.fmtHM(i.start)}`}`;
+      return `[${when}] ${i.title}${i.location ? ` @${i.location}` : ""} (${i.calendar})`;
+    }).join("\n");
   },
 });

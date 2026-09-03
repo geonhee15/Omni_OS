@@ -63,6 +63,14 @@
         <span class="nav-icon">&#9672;</span>
         <span class="nav-label">MAP</span>
       </button>
+      <button class="nav-item" data-panel="markets">
+        <span class="nav-icon">&#9652;</span>
+        <span class="nav-label">MARKETS</span>
+      </button>
+      <button class="nav-item" data-panel="calendar">
+        <span class="nav-icon">&#9633;</span>
+        <span class="nav-label">CALENDAR</span>
+      </button>
       <button class="nav-item" data-panel="proj">
         <span class="nav-icon">&#10697;</span>
         <span class="nav-label">PROJECTS</span>
@@ -394,6 +402,57 @@
           <div class="mp-hud" id="mp-hud">&mdash;</div>
         </div>
         <div class="mp-attrib">MAP DATA &copy; OpenStreetMap contributors (ODbL) &middot; SEARCH: Nominatim</div>
+      </div>
+    </section>
+
+    <!-- panel: MARKETS (환율 + 주식/지수/코인 — 키 없음) -->
+    <section class="panel panel-markets" id="panel-markets">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">MARKETS</span>
+          <span class="nf-sub" id="mk-sub">FX &middot; EQUITIES &middot; CRYPTO</span>
+          <span class="ts-spacer"></span>
+          <input class="wx-search" id="mk-add" placeholder="심볼 추가 (예: 035420.KS, TSLA)" autocomplete="off" spellcheck="false">
+          <span class="nf-updated" id="mk-updated"></span>
+          <button class="nf-btn" id="mk-refresh">REFRESH</button>
+        </div>
+        <div class="nf-body">
+          <div class="wx-err" id="mk-err" hidden></div>
+          <div class="nf-section">
+            <div class="nf-sec-h"><span>EXCHANGE RATES</span><span class="nf-count" id="mk-fx-note">KRW BASIS &middot; DAILY</span></div>
+            <div class="mk-fx" id="mk-fx"></div>
+          </div>
+          <div class="nf-section">
+            <div class="nf-sec-h"><span>WATCHLIST</span><span class="nf-count" id="mk-count">0</span></div>
+            <div class="mk-list" id="mk-list"><div class="nf-empty">LOADING&hellip;</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- panel: CALENDAR (맥 캘린더 — EventKit) -->
+    <section class="panel panel-calendar" id="panel-calendar">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">CALENDAR</span>
+          <span class="nf-sub" id="cl-next">&mdash;</span>
+          <span class="ts-spacer"></span>
+          <span class="nf-updated" id="cl-updated"></span>
+          <button class="nf-btn" id="cl-refresh">REFRESH</button>
+        </div>
+        <div class="cl-add">
+          <input class="wx-search cl-title" id="cl-title" placeholder="새 일정 제목" autocomplete="off" spellcheck="false">
+          <input class="wx-search cl-date" id="cl-date" type="date">
+          <input class="wx-search cl-time" id="cl-time" type="time">
+          <input class="wx-search cl-dur" id="cl-dur" type="number" min="5" step="5" value="60" title="분">
+          <span class="cl-unit">MIN</span>
+          <button class="nf-btn" id="cl-addbtn">+ ADD</button>
+          <span class="cl-hint">시간 비우면 종일 일정</span>
+        </div>
+        <div class="nf-body">
+          <div class="wx-err" id="cl-err" hidden></div>
+          <div class="cl-days" id="cl-days"><div class="nf-empty">LOADING&hellip;</div></div>
+        </div>
       </div>
     </section>
 
@@ -1264,7 +1323,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.61.0</span>
+      <span>v0.62.0</span>
     </footer>
   </div>
 

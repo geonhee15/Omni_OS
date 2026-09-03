@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <EventKit/EventKit.h>
 #import <signal.h>
 #import "sp1_status.h"
 #import "sysmon.h"
@@ -207,6 +208,7 @@ static NSString *ArcSavesDir(void) {
 @property (strong) NSURLSessionWebSocketTask *aiRtTask;
 // 오미니아 — 로컬 LLM(Ollama) 스트리밍 세션
 @property (strong) NSURLSession *omniaSession;
+@property (strong) EKEventStore *eventStore;
 @property (strong) NSNumber *omniaTurn;
 @property (strong) NSMutableString *omniaBuf;
 // OMNI_AI 외국어 음색 데몬 (seed_serve.py — Seed-VC 상주)
@@ -1003,7 +1005,8 @@ static NSString *ArcSavesDir(void) {
         if (allow == nil) {
             allow = @[ @"api.open-meteo.com", @"geocoding-api.open-meteo.com",
                        @"news.google.com", @"nominatim.openstreetmap.org",
-                       @"ipwho.is", @"get.geojs.io" ];
+                       @"ipwho.is", @"get.geojs.io",
+                       @"open.er-api.com", @"query1.finance.yahoo.com" ];
         }
         NSURL *url = urlStr ? [NSURL URLWithString:urlStr] : nil;
         if (url == nil || ![url.scheme isEqualToString:@"https"]
@@ -1234,6 +1237,8 @@ static NSString *ArcSavesDir(void) {
         [self.arcTask cancel];
         self.arcTask = nil;
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd hasPrefix:@"cal."]) {
+        [self handleCal:cmd arg:arg msgId:msgId];
     } else if ([cmd hasPrefix:@"ai."] || [cmd hasPrefix:@"omnia."]) {
         // 오미니아(omnia.*) 명령도 같은 핸들러에서 처리한다 — 접두사가 달라
         // 분기에 도달하지 못하던 문제 수정
@@ -1923,6 +1928,129 @@ static NSString *OmniAIFsValidate(NSString *path) {
             @"error" : err.localizedDescription ?: @"" } forId:msgId];
     }
 }
+
+#pragma mark - CALENDAR (EventKit — 맥 캘린더 직접 읽기/쓰기)
+
+// 맥 캘린더 앱에 들어온 모든 캘린더(iCloud·구글 등 인터넷 계정 구독 포함)를
+// EventKit으로 읽고 쓴다. 학교 구글 계정처럼 개발자 API를 못 쓰는 계정도
+// 시스템 설정 > 인터넷 계정에 추가만 하면 여기 잡힌다. 권한: 캘린더 전체 접근.
+- (void)handleCal:(NSString *)cmd arg:(NSString *)arg msgId:(NSString *)msgId {
+    NSDictionary *a = @{};
+    if (arg != nil) {
+        NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+        id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+        if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+    }
+    if (self.eventStore == nil) self.eventStore = [[EKEventStore alloc] init];
+    EKEventStore *store = self.eventStore;
+
+    NSString *(^hexColor)(EKCalendar *) = ^NSString *(EKCalendar *c) {
+        // macOS EventKit: EKCalendar.color 는 NSColor*
+        NSColor *nc = [c.color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+        if (nc == nil) return @"#35d6ff";
+        return [NSString stringWithFormat:@"#%02X%02X%02X",
+                (int)(nc.redComponent * 255), (int)(nc.greenComponent * 255),
+                (int)(nc.blueComponent * 255)];
+    };
+
+    void (^run)(BOOL) = ^(BOOL granted) {
+        if (!granted) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"CAL_DENIED" } forId:msgId];
+            return;
+        }
+        if ([cmd isEqualToString:@"cal.events"]) {
+            double days = [a[@"days"] isKindOfClass:[NSNumber class]] ? [a[@"days"] doubleValue] : 7;
+            NSDate *start = [NSCalendar.currentCalendar startOfDayForDate:NSDate.date];
+            NSDate *end = [start dateByAddingTimeInterval:days * 86400.0];
+            NSPredicate *pred = [store predicateForEventsWithStartDate:start endDate:end calendars:nil];
+            NSArray<EKEvent *> *events = [[store eventsMatchingPredicate:pred]
+                sortedArrayUsingSelector:@selector(compareStartDateWithEvent:)];
+            NSMutableArray *out = [NSMutableArray array];
+            for (EKEvent *e in events) {
+                NSString *notes = e.notes ?: @"";
+                if (notes.length > 200) notes = [notes substringToIndex:200];
+                [out addObject:@{ @"id" : e.eventIdentifier ?: @"",
+                                  @"title" : e.title ?: @"(제목 없음)",
+                                  @"start" : @(e.startDate.timeIntervalSince1970),
+                                  @"end" : @(e.endDate.timeIntervalSince1970),
+                                  @"allDay" : @(e.isAllDay),
+                                  @"calendar" : e.calendar.title ?: @"",
+                                  @"color" : hexColor(e.calendar),
+                                  @"location" : e.location ?: @"",
+                                  @"notes" : notes }];
+                if (out.count >= 300) break;
+            }
+            [self deliverPayload:@{ @"ok" : @YES, @"items" : out } forId:msgId];
+
+        } else if ([cmd isEqualToString:@"cal.calendars"]) {
+            NSMutableArray *out = [NSMutableArray array];
+            for (EKCalendar *c in [store calendarsForEntityType:EKEntityTypeEvent]) {
+                [out addObject:@{ @"title" : c.title ?: @"", @"source" : c.source.title ?: @"",
+                                  @"color" : hexColor(c), @"writable" : @(c.allowsContentModifications) }];
+            }
+            [self deliverPayload:@{ @"ok" : @YES, @"items" : out } forId:msgId];
+
+        } else if ([cmd isEqualToString:@"cal.add"]) {
+            NSString *title = [a[@"title"] isKindOfClass:[NSString class]] ? a[@"title"] : @"";
+            if (title.length == 0 || ![a[@"start"] isKindOfClass:[NSNumber class]]) {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"BAD_ARGS" } forId:msgId];
+                return;
+            }
+            EKEvent *ev = [EKEvent eventWithEventStore:store];
+            ev.title = title;
+            ev.startDate = [NSDate dateWithTimeIntervalSince1970:[a[@"start"] doubleValue]];
+            ev.endDate = [a[@"end"] isKindOfClass:[NSNumber class]]
+                ? [NSDate dateWithTimeIntervalSince1970:[a[@"end"] doubleValue]]
+                : [ev.startDate dateByAddingTimeInterval:3600];
+            ev.allDay = [a[@"allDay"] boolValue];
+            if ([a[@"location"] isKindOfClass:[NSString class]]) ev.location = a[@"location"];
+            if ([a[@"notes"] isKindOfClass:[NSString class]]) ev.notes = a[@"notes"];
+            EKCalendar *target = nil;
+            if ([a[@"calendar"] isKindOfClass:[NSString class]]) {
+                for (EKCalendar *c in [store calendarsForEntityType:EKEntityTypeEvent]) {
+                    if (c.allowsContentModifications
+                        && [c.title caseInsensitiveCompare:a[@"calendar"]] == NSOrderedSame) { target = c; break; }
+                }
+            }
+            if (target == nil) target = store.defaultCalendarForNewEvents;
+            if (target == nil || !target.allowsContentModifications) {
+                for (EKCalendar *c in [store calendarsForEntityType:EKEntityTypeEvent]) {
+                    if (c.allowsContentModifications) { target = c; break; }
+                }
+            }
+            ev.calendar = target;
+            NSError *err = nil;
+            BOOL ok = [store saveEvent:ev span:EKSpanThisEvent commit:YES error:&err];
+            [self deliverPayload:@{ @"ok" : @(ok), @"id" : ev.eventIdentifier ?: @"",
+                                    @"calendar" : target.title ?: @"",
+                                    @"error" : err.localizedDescription ?: @"" } forId:msgId];
+
+        } else if ([cmd isEqualToString:@"cal.remove"]) {
+            NSString *eid = [a[@"id"] isKindOfClass:[NSString class]] ? a[@"id"] : @"";
+            EKEvent *ev = eid.length ? [store eventWithIdentifier:eid] : nil;
+            if (ev == nil) {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NOT_FOUND" } forId:msgId];
+                return;
+            }
+            NSError *err = nil;
+            BOOL ok = [store removeEvent:ev span:EKSpanThisEvent commit:YES error:&err];
+            [self deliverPayload:@{ @"ok" : @(ok), @"error" : err.localizedDescription ?: @"" } forId:msgId];
+        } else {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"UNKNOWN_CMD" } forId:msgId];
+        }
+    };
+
+    if (@available(macOS 14.0, *)) {
+        [store requestFullAccessToEventsWithCompletion:^(BOOL granted, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{ run(granted); });
+        }];
+    } else {
+        [store requestAccessToEntityType:EKEntityTypeEvent completion:^(BOOL granted, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{ run(granted); });
+        }];
+    }
+}
+
 
 - (void)handleAI:(NSString *)cmd arg:(NSString *)arg msgId:(NSNumber *)msgId {
     NSDictionary *a = nil;
