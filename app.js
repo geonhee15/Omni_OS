@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.60.1",
+  version: "0.61.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -592,6 +592,7 @@ OmniOS.register("ai", {
     "- 카카오톡·디스코드·앱 알림 확인: \"카톡/디스코드 온 거 확인해줘\" 류 요청은 check_notifications 도구(app:'kakao' 또는 'discord')로 최근 알림을 읽어 보낸 사람과 내용을 간결히 요약 보고합니다. 다른 앱 알림도 app을 비우면 전체 조회됩니다. 알림이 떴던 메시지만 보이는 한계를 알고 있습니다. 메시지 발신은 미지원입니다.",
     "- 지메일 확인: \"메일 확인해줘\" 류 요청은 check_gmail 도구로 받은편지함을 직접 읽어(IMAP, 알림 무관) 보낸 사람·제목·안읽음 여부를 요약 보고합니다. 메일 발송은 미지원입니다.",
     "- 오미니아: 당신을 돕는 보조 AI로, 로컬에서 실행되는 별도 모델입니다(텍스트 전용, 터미널 접근은 사용자 승인 필요). \"오미니아 호출/켜줘\" 같은 요청을 받으면 [[ACT:omnia]]로 팝업을 열고 짧게 보고합니다.",
+    "- 날씨: \"날씨 어때/내일 비 와?\" 류는 check_weather 도구(city 생략 시 현재 설정 위치, 지정 시 그 도시)로 확인해 핵심만 말합니다. 뉴스: \"뉴스 보여줘/○○ 관련 소식\" 류는 check_news 도구(category 또는 query)로 헤드라인을 읽어 3~5개로 요약합니다. 지도: 장소를 보여 달라면 [[ACT:map.search:장소]]로 MAP 패널에 표시합니다.",
     "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
   // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
@@ -668,6 +669,28 @@ OmniOS.register("ai", {
       },
     },
     {
+      name: "check_weather",
+      description: "날씨 확인 — 현재 상태·체감·습도·바람·강수, 오늘/내일 최고·최저와 강수확률, 7일 요약. city를 주면 그 도시(검색 후 WEATHER 패널 위치도 그 도시로 바뀜), 비우면 현재 설정 위치.",
+      input_schema: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: [],
+      },
+    },
+    {
+      name: "check_news",
+      description: "뉴스 헤드라인 조회. category: top(주요)/world/business/tech/science/sports, query를 주면 키워드 검색(카테고리 무시). count 기본 8. 결과 각 줄: [시각] 출처 — 제목.",
+      input_schema: {
+        type: "object",
+        properties: {
+          category: { type: "string" },
+          query: { type: "string" },
+          count: { type: "number" },
+        },
+        required: [],
+      },
+    },
+    {
       name: "save_memory",
       description: "장기 메모리 저장. 사용자에 대한 새 사실·선호·진행 중인 작업을 알게 되거나 '기억해' 요청을 받으면 호출. content는 기존 [장기 메모리]와 병합한 최신 통합본 전체 (한국어 불릿, 2000자 이내) — 저장 즉시 이전 내용을 대체한다.",
       input_schema: {
@@ -689,6 +712,7 @@ OmniOS.register("ai", {
     sys: "SYSTEM MONITOR", sp1: "SECURITY-PROTOCOL-1", r3d: "RENDER_3D",
     ino: "ARDUINO IDE", ce: "CODE EDITOR", notes: "NOTES",
     voice: "VOICE CHANGER", arc: "ARC-SCAN",
+    weather: "WEATHER", news: "NEWS", map: "MAP",
   },
   lang: "auto", // auto = 기본 한국어 + 요구 시 실시간 전환, 그 외 = 해당 언어 잠금
   PANEL_GUIDE: [
@@ -705,6 +729,9 @@ OmniOS.register("ai", {
     "NOTES: 마크다운 노트 볼트 — 위키링크, 미리보기",
     "VOICE CHANGER: 음성 학습 + 음색 전이 (DSP/신경망/ULTRA, 라이브 변조)",
     "ARC-SCAN: 자작 회전 라이다(ESP32+ToF 7ch) 실시간 3D 스캔 뷰어 — 평면도, 방 크기 추정, PLY 저장",
+    "WEATHER: 현재 날씨·24시간·7일 예보 (도시 검색, 현위치)",
+    "NEWS: 뉴스 헤드라인 — 주요/세계/경제/IT·과학/과학/스포츠 + 키워드 검색, 클릭하면 기사 열림",
+    "MAP: 지도 — 장소 검색, 현위치, 좌표 표시, 그 지점 날씨 보기",
   ].join("\n"),
   model: "auto", // auto = 심층 질문만 Opus, 나머지 Haiku
   history: [],
@@ -1226,6 +1253,27 @@ OmniOS.register("ai", {
         await this.saveMemory(String(input.content || ""));
         return "장기 메모리 저장 완료";
       }
+      if (name === "check_weather") {
+        const wx = OmniOS.modules.weather;
+        if (!wx) return "오류: 날씨 모듈 없음";
+        if (input.city) {
+          const ok = await wx.setCity(String(input.city));
+          if (!ok) return `오류: 도시를 찾지 못했습니다: ${input.city}`;
+        } else if (!wx.data) {
+          await wx.refresh();
+        }
+        return wx.summary() || "오류: 날씨 데이터를 받지 못했습니다";
+      }
+      if (name === "check_news") {
+        const nw = OmniOS.modules.news;
+        if (!nw) return "오류: 뉴스 모듈 없음";
+        const items = input.query
+          ? await nw.search(String(input.query))
+          : await nw.load(String(input.category || "top"));
+        if (!items || !items.length) return "(헤드라인 없음)";
+        return items.slice(0, Math.max(1, Math.min(20, input.count || 8)))
+          .map((i) => `[${nw.fmtTime(i.ts)}] ${i.source} — ${i.title}`).join("\n");
+      }
       if (name === "check_gmail") {
         const r = await OmniNative.request("ai.gmailRecent",
           JSON.stringify({ hours: input.hours || 48 }), 30000);
@@ -1383,6 +1431,29 @@ OmniOS.register("ai", {
           b.classList.toggle("active", b.dataset.lang === "auto"));
         if (this.live) this.rtSessionUpdate();
         return { ok: true, msg: "언어 모드: AUTO" };
+      }
+
+      // ── 지도 검색 / 날씨 도시 / 뉴스 검색 ──
+      if (key === "map.search") {
+        const q = parts.slice(1).join(":").trim();
+        if (!q) return { ok: false, msg: "장소 이름 없음" };
+        openPanel("map");
+        const hit = await OmniOS.modules.map.search(q);
+        return hit ? { ok: true, msg: `지도: ${hit}` } : { ok: false, msg: `장소를 찾지 못했습니다: ${q}` };
+      }
+      if (key === "weather.city") {
+        const q = parts.slice(1).join(":").trim();
+        openPanel("weather");
+        const ok = q ? await OmniOS.modules.weather.setCity(q) : true;
+        return ok ? { ok: true, msg: `날씨: ${OmniOS.modules.weather.locName()}` }
+          : { ok: false, msg: `도시를 찾지 못했습니다: ${q}` };
+      }
+      if (key === "news.search") {
+        const q = parts.slice(1).join(":").trim();
+        openPanel("news");
+        const items = q ? await OmniOS.modules.news.search(q)
+          : await OmniOS.modules.news.load("top");
+        return { ok: true, msg: `뉴스 ${items.length}건${q ? ` · ${q}` : ""}` };
       }
 
       // ── 프로젝트 에디터 ──
@@ -1836,6 +1907,27 @@ OmniOS.register("ai", {
         },
       },
     },
+    {
+      type: "function",
+      name: "check_weather",
+      description: "날씨 확인 — \"날씨 어때/비 와?/내일 추워?\"에 사용. city를 주면 그 도시, 비우면 현재 설정 위치. 결과를 현재 상태와 오늘·내일 핵심만 짧게 말한다.",
+      parameters: {
+        type: "object",
+        properties: { city: { type: "string" } },
+      },
+    },
+    {
+      type: "function",
+      name: "check_news",
+      description: "뉴스 헤드라인 — \"뉴스 뭐 있어/○○ 소식\"에 사용. category: top/world/business/tech/science/sports, query는 키워드 검색. 3~5개를 골라 간결히 말한다.",
+      parameters: {
+        type: "object",
+        properties: {
+          category: { type: "string" },
+          query: { type: "string" },
+        },
+      },
+    },
   ],
 
   rtSend(obj) {
@@ -2116,6 +2208,12 @@ OmniOS.register("ai", {
     } else if (name === "check_gmail") {
       this.logLine("sys", "도구 · check_gmail");
       output = await this.execTool("check_gmail", args || {});
+    } else if (name === "check_weather") {
+      this.logLine("sys", `도구 · check_weather ${(args && args.city) || ""}`);
+      output = await this.execTool("check_weather", args || {});
+    } else if (name === "check_news") {
+      this.logLine("sys", `도구 · check_news ${(args && (args.query || args.category)) || ""}`);
+      output = await this.execTool("check_news", args || {});
     } else {
       output = `unknown tool: ${name}`;
     }
@@ -11150,5 +11248,567 @@ OmniOS.register("ide", {
       const last = this._series[n].data[this._series[n].data.length - 1];
       return `<span style="color:${this._series[n].color}">\u25a0 ${n} ${last !== undefined ? last.toFixed(2) : ""}</span>`;
     }).join("");
+  },
+});
+
+// ---------- shared: OmniNet (허용 호스트 HTTP GET) ----------
+// 앱에서는 네이티브 프록시(net.get, 허용 호스트만)로 CORS를 우회하고,
+// 브라우저 개발 모드에서는 직접 fetch (CORS 열린 API만 동작).
+const OmniNet = {
+  async get(url, timeout = 20000) {
+    if (OmniNative.available) {
+      const r = await OmniNative.request("net.get", JSON.stringify({ url }), timeout);
+      if (!r || !r.ok) throw new Error((r && r.error) || `HTTP ${r && r.status}`);
+      return r.body;
+    }
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  },
+  async json(url, timeout) { return JSON.parse(await this.get(url, timeout)); },
+  openUrl(url) {
+    if (OmniNative.available) {
+      OmniNative.request("open.url", JSON.stringify({ url }), 8000).catch(() => {});
+    } else {
+      window.open(url, "_blank");
+    }
+  },
+  // IP 기반 대략적 현위치 (정확도 도시 단위) — 두 서비스 순차 시도
+  async ipLocate() {
+    try {
+      const j = await OmniNet.json("https://ipwho.is/", 8000);
+      if (j && j.success !== false && j.latitude) {
+        return { lat: +j.latitude, lon: +j.longitude, name: [j.city, j.region].filter(Boolean).join(", ") };
+      }
+    } catch (e) { /* 다음 서비스 */ }
+    try {
+      const j = await OmniNet.json("https://get.geojs.io/v1/ip/geo.json", 8000);
+      if (j && j.latitude) {
+        return { lat: +j.latitude, lon: +j.longitude, name: [j.city, j.region].filter(Boolean).join(", ") };
+      }
+    } catch (e) { /* 실패 */ }
+    return null;
+  },
+};
+
+// ---------- module: WEATHER (Open-Meteo — 키 없음) ----------
+OmniOS.register("weather", {
+  // WMO 코드 → [한글 설명, 글리프 종류]
+  WMO: {
+    0: ["맑음", "clear"], 1: ["대체로 맑음", "clear"], 2: ["구름 조금", "partly"], 3: ["흐림", "cloudy"],
+    45: ["안개", "fog"], 48: ["짙은 안개", "fog"],
+    51: ["약한 이슬비", "rain"], 53: ["이슬비", "rain"], 55: ["강한 이슬비", "rain"],
+    56: ["어는 이슬비", "rain"], 57: ["강한 어는 이슬비", "rain"],
+    61: ["약한 비", "rain"], 63: ["비", "rain"], 65: ["강한 비", "rain"],
+    66: ["어는 비", "rain"], 67: ["강한 어는 비", "rain"],
+    71: ["약한 눈", "snow"], 73: ["눈", "snow"], 75: ["폭설", "snow"], 77: ["싸락눈", "snow"],
+    80: ["소나기", "rain"], 81: ["소나기", "rain"], 82: ["강한 소나기", "rain"],
+    85: ["소낙눈", "snow"], 86: ["강한 소낙눈", "snow"],
+    95: ["뇌우", "storm"], 96: ["뇌우·우박", "storm"], 99: ["강한 뇌우·우박", "storm"],
+  },
+  // 단색 기하 글리프 (stroke = currentColor)
+  GLYPH: {
+    clear: '<circle cx="32" cy="32" r="11"/><g stroke-linecap="round">' +
+      '<line x1="32" y1="6" x2="32" y2="13"/><line x1="32" y1="51" x2="32" y2="58"/>' +
+      '<line x1="6" y1="32" x2="13" y2="32"/><line x1="51" y1="32" x2="58" y2="32"/>' +
+      '<line x1="13.6" y1="13.6" x2="18.6" y2="18.6"/><line x1="45.4" y1="45.4" x2="50.4" y2="50.4"/>' +
+      '<line x1="13.6" y1="50.4" x2="18.6" y2="45.4"/><line x1="45.4" y1="18.6" x2="50.4" y2="13.6"/></g>',
+    partly: '<circle cx="24" cy="24" r="9"/><g stroke-linecap="round"><line x1="24" y1="8" x2="24" y2="12"/>' +
+      '<line x1="8" y1="24" x2="12" y2="24"/><line x1="12.7" y1="12.7" x2="15.5" y2="15.5"/><line x1="35.3" y1="12.7" x2="32.5" y2="15.5"/></g>' +
+      '<path d="M22 50h24a8 8 0 0 0 1-15.9A11 11 0 0 0 26 32a8 8 0 0 0-4 18z"/>',
+    cloudy: '<path d="M18 48h28a9 9 0 0 0 1.5-17.9A13 13 0 0 0 22.5 26 9.5 9.5 0 0 0 18 48z"/>',
+    fog: '<path d="M18 38h28a9 9 0 0 0 1.5-17.9A13 13 0 0 0 22.5 16 9.5 9.5 0 0 0 18 38z"/>' +
+      '<g stroke-linecap="round"><line x1="14" y1="46" x2="50" y2="46"/><line x1="20" y1="54" x2="44" y2="54"/></g>',
+    rain: '<path d="M18 40h28a9 9 0 0 0 1.5-17.9A13 13 0 0 0 22.5 18 9.5 9.5 0 0 0 18 40z"/>' +
+      '<g stroke-linecap="round"><line x1="24" y1="46" x2="21" y2="54"/><line x1="33" y1="46" x2="30" y2="54"/><line x1="42" y1="46" x2="39" y2="54"/></g>',
+    snow: '<path d="M18 40h28a9 9 0 0 0 1.5-17.9A13 13 0 0 0 22.5 18 9.5 9.5 0 0 0 18 40z"/>' +
+      '<g stroke-linecap="round"><line x1="24" y1="46" x2="24" y2="54"/><line x1="20.5" y1="48" x2="27.5" y2="52"/><line x1="27.5" y1="48" x2="20.5" y2="52"/>' +
+      '<line x1="40" y1="46" x2="40" y2="54"/><line x1="36.5" y1="48" x2="43.5" y2="52"/><line x1="43.5" y1="48" x2="36.5" y2="52"/></g>',
+    storm: '<path d="M18 38h28a9 9 0 0 0 1.5-17.9A13 13 0 0 0 22.5 16 9.5 9.5 0 0 0 18 38z"/>' +
+      '<polyline points="34,40 28,50 34,50 29,60" stroke-linejoin="round"/>',
+  },
+  loc: null,     // {name, lat, lon}
+  data: null,
+  _at: 0,
+  _busy: false,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = {
+      loc: $("wx-loc"), search: $("wx-search"), here: $("wx-here"), updated: $("wx-updated"),
+      refresh: $("wx-refresh"), err: $("wx-err"), glyph: $("wx-glyph"), temp: $("wx-temp"),
+      cond: $("wx-cond"), feels: $("wx-feels"), hum: $("wx-hum"), wind: $("wx-wind"),
+      rain: $("wx-rain"), hourly: $("wx-hourly"), daily: $("wx-daily"),
+    };
+    try { this.loc = JSON.parse(localStorage.getItem("omni.wx.loc") || "null"); } catch (e) { this.loc = null; }
+    this.els.search.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && this.els.search.value.trim()) {
+        this.setCity(this.els.search.value.trim());
+        this.els.search.value = "";
+      }
+    });
+    this.els.here.addEventListener("click", () => this.locateHere());
+    this.els.refresh.addEventListener("click", () => this.refresh());
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "weather") {
+        if (Date.now() - this._at > 10 * 60000) this.refresh();
+        else this.drawHourly();
+      }
+    });
+    window.addEventListener("resize", () => this.drawHourly());
+    setInterval(() => { if (this.data) this.refresh(); }, 15 * 60000);
+    // 첫 로드: 저장된 위치 → 없으면 IP 위치 → 서울
+    setTimeout(() => this.refresh(), 1500);
+  },
+
+  locName() { return this.loc ? this.loc.name : "—"; },
+
+  glyphSvg(kind, size) {
+    return `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.4"${size ? ` width="${size}" height="${size}"` : ""}>${this.GLYPH[kind] || this.GLYPH.cloudy}</svg>`;
+  },
+
+  describe(code) { return this.WMO[code] || ["알 수 없음", "cloudy"]; },
+
+  async locateHere() {
+    this.setErr("");
+    const p = await OmniNet.ipLocate();
+    if (!p) { this.setErr("현위치를 알 수 없습니다 — 도시를 검색하십시오"); return false; }
+    this.loc = { name: p.name || "현위치", lat: p.lat, lon: p.lon };
+    localStorage.setItem("omni.wx.loc", JSON.stringify(this.loc));
+    await this.refresh();
+    return true;
+  },
+
+  setCoords(lat, lon, name) {
+    this.loc = { name: name || `${lat.toFixed(3)}, ${lon.toFixed(3)}`, lat, lon };
+    localStorage.setItem("omni.wx.loc", JSON.stringify(this.loc));
+    return this.refresh();
+  },
+
+  async setCity(q) {
+    this.setErr("");
+    try {
+      const j = await OmniNet.json(
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=ko&format=json`);
+      const rs = (j && j.results) || [];
+      if (!rs.length) { this.setErr(`도시를 찾지 못했습니다: ${q}`); return false; }
+      // 동명 지명은 인구가 가장 많은 곳 우선
+      rs.sort((a, b) => (b.population || 0) - (a.population || 0));
+      const r = rs[0];
+      this.loc = { name: [r.name, r.admin1, r.country_code !== "KR" ? r.country : ""].filter(Boolean).join(", "),
+        lat: r.latitude, lon: r.longitude };
+      localStorage.setItem("omni.wx.loc", JSON.stringify(this.loc));
+      await this.refresh();
+      return true;
+    } catch (e) {
+      this.setErr(`검색 실패: ${e.message}`);
+      return false;
+    }
+  },
+
+  setErr(msg) {
+    this.els.err.textContent = msg;
+    this.els.err.hidden = !msg;
+  },
+
+  async refresh() {
+    if (this._busy) return this.data;
+    this._busy = true;
+    try {
+      if (!this.loc) {
+        const p = await OmniNet.ipLocate();
+        this.loc = p ? { name: p.name || "현위치", lat: p.lat, lon: p.lon }
+          : { name: "Seoul", lat: 37.5665, lon: 126.978 };
+        localStorage.setItem("omni.wx.loc", JSON.stringify(this.loc));
+      }
+      this.els.loc.textContent = this.loc.name.toUpperCase();
+      const url = "https://api.open-meteo.com/v1/forecast"
+        + `?latitude=${this.loc.lat}&longitude=${this.loc.lon}`
+        + "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation"
+        + "&hourly=temperature_2m,precipitation_probability,weather_code"
+        + "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+        + "&timezone=auto&forecast_days=7";
+      this.data = await OmniNet.json(url);
+      this._at = Date.now();
+      this.setErr("");
+      this.render();
+    } catch (e) {
+      this.setErr(`날씨 조회 실패: ${e.message}`);
+    } finally {
+      this._busy = false;
+    }
+    return this.data;
+  },
+
+  render() {
+    const d = this.data;
+    if (!d || !d.current) return;
+    const c = d.current;
+    const [txt, kind] = this.describe(c.weather_code);
+    this.els.glyph.innerHTML = this.glyphSvg(kind);
+    this.els.glyph.style.color = "var(--cyan)";
+    this.els.temp.textContent = `${Math.round(c.temperature_2m)}°`;
+    this.els.cond.textContent = txt.toUpperCase();
+    this.els.feels.textContent = `${Math.round(c.apparent_temperature)}°`;
+    this.els.hum.textContent = `${c.relative_humidity_2m}%`;
+    this.els.wind.textContent = `${Math.round(c.wind_speed_10m)} km/h`;
+    this.els.rain.textContent = `${(c.precipitation || 0).toFixed(1)} mm`;
+    const t = new Date();
+    this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+    this.renderDaily();
+    this.drawHourly();
+  },
+
+  // 현재 시각 이후 24시간 슬라이스
+  hourlySlice() {
+    const d = this.data;
+    if (!d || !d.hourly) return null;
+    const now = d.current.time.slice(0, 13);
+    let i = d.hourly.time.findIndex((x) => x.slice(0, 13) >= now);
+    if (i < 0) i = 0;
+    return {
+      time: d.hourly.time.slice(i, i + 24),
+      temp: d.hourly.temperature_2m.slice(i, i + 24),
+      pop: d.hourly.precipitation_probability.slice(i, i + 24),
+    };
+  },
+
+  drawHourly() {
+    const h = this.hourlySlice();
+    const cv = this.els.hourly;
+    if (!h || !cv || !cv.offsetWidth) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.offsetWidth, H = 120;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const ctx = cv.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+    const padL = 30, padR = 12, padT = 16, padB = 22;
+    const n = h.temp.length;
+    const x = (i) => padL + (i / (n - 1)) * (W - padL - padR);
+    let min = Math.min(...h.temp), max = Math.max(...h.temp);
+    if (max - min < 4) { max += 2; min -= 2; }
+    const y = (v) => padT + (1 - (v - min) / (max - min)) * (H - padT - padB);
+    const css = getComputedStyle(document.documentElement);
+    const cyan = css.getPropertyValue("--cyan").trim() || "#35d6ff";
+    const blue = css.getPropertyValue("--blue").trim() || "#2f7bff";
+    const dim = css.getPropertyValue("--text-dim").trim() || "#6fa8c9";
+    // 강수확률 막대
+    const bw = Math.max(2, (W - padL - padR) / n * 0.5);
+    for (let i = 0; i < n; i++) {
+      const p = h.pop[i] || 0;
+      if (!p) continue;
+      const bh = (p / 100) * (H - padT - padB);
+      ctx.fillStyle = `rgba(47, 123, 255, ${0.15 + p / 250})`;
+      ctx.fillRect(x(i) - bw / 2, H - padB - bh, bw, bh);
+    }
+    // 격자 + 온도 라벨
+    ctx.strokeStyle = "rgba(53, 214, 255, 0.12)"; ctx.lineWidth = 1;
+    ctx.fillStyle = dim; ctx.font = "9px 'Share Tech Mono', monospace"; ctx.textAlign = "right";
+    for (let k = 0; k <= 2; k++) {
+      const v = min + (max - min) * (k / 2);
+      const yy = y(v);
+      ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(W - padR, yy); ctx.stroke();
+      ctx.fillText(`${Math.round(v)}°`, padL - 6, yy + 3);
+    }
+    // 온도 라인 (글로우)
+    ctx.strokeStyle = cyan; ctx.lineWidth = 2; ctx.shadowColor = cyan; ctx.shadowBlur = 8;
+    ctx.beginPath();
+    h.temp.forEach((v, i) => { if (i === 0) ctx.moveTo(x(i), y(v)); else ctx.lineTo(x(i), y(v)); });
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // 시각 라벨 (3시간 간격)
+    ctx.fillStyle = dim; ctx.textAlign = "center";
+    for (let i = 0; i < n; i += 3) {
+      ctx.fillText(`${h.time[i].slice(11, 13)}h`, x(i), H - 6);
+    }
+    // 현재 온도 포인트
+    ctx.fillStyle = cyan;
+    ctx.beginPath(); ctx.arc(x(0), y(h.temp[0]), 3, 0, Math.PI * 2); ctx.fill();
+    void blue;
+  },
+
+  renderDaily() {
+    const d = this.data;
+    const el = this.els.daily;
+    el.textContent = "";
+    if (!d || !d.daily) return;
+    const DAY = ["일", "월", "화", "수", "목", "금", "토"];
+    d.daily.time.forEach((t, i) => {
+      const date = new Date(`${t}T00:00:00`);
+      const label = i === 0 ? "오늘" : i === 1 ? "내일" : `${DAY[date.getDay()]}요일`;
+      const [txt, kind] = this.describe(d.daily.weather_code[i]);
+      const row = document.createElement("div");
+      row.className = "wx-day";
+      row.innerHTML = `<span class="d">${label} <span style="color:var(--text-dim)">${t.slice(5).replace("-", "/")}</span></span>`
+        + `<span class="g" style="color:var(--cyan)">${this.glyphSvg(kind)}</span>`
+        + `<span class="c">${txt}</span>`
+        + `<span class="r">${d.daily.precipitation_probability_max[i] ?? 0}% RAIN</span>`
+        + `<span class="t">${Math.round(d.daily.temperature_2m_max[i])}° <span class="lo">/ ${Math.round(d.daily.temperature_2m_min[i])}°</span></span>`;
+      el.appendChild(row);
+    });
+  },
+
+  // AI 도구용 요약 텍스트
+  summary() {
+    const d = this.data;
+    if (!d || !d.current) return "";
+    const c = d.current;
+    const lines = [
+      `위치: ${this.loc.name} (${c.time.replace("T", " ")} 기준)`,
+      `현재: ${Math.round(c.temperature_2m)}°C ${this.describe(c.weather_code)[0]}, 체감 ${Math.round(c.apparent_temperature)}°C, 습도 ${c.relative_humidity_2m}%, 바람 ${Math.round(c.wind_speed_10m)}km/h, 강수 ${(c.precipitation || 0).toFixed(1)}mm`,
+    ];
+    const h = this.hourlySlice();
+    if (h) {
+      const maxPop = Math.max(...h.pop.map((p) => p || 0));
+      const peak = h.pop.indexOf(maxPop);
+      lines.push(`24시간: 최고 ${Math.round(Math.max(...h.temp))}° / 최저 ${Math.round(Math.min(...h.temp))}°, 최대 강수확률 ${maxPop}%${maxPop ? ` (${h.time[peak].slice(11, 16)}경)` : ""}`);
+    }
+    const D = ["일", "월", "화", "수", "목", "금", "토"];
+    d.daily.time.forEach((t, i) => {
+      const name = i === 0 ? "오늘" : i === 1 ? "내일" : `${t.slice(5)}(${D[new Date(`${t}T00:00:00`).getDay()]})`;
+      lines.push(`${name}: ${this.describe(d.daily.weather_code[i])[0]}, ${Math.round(d.daily.temperature_2m_max[i])}°/${Math.round(d.daily.temperature_2m_min[i])}°, 강수확률 ${d.daily.precipitation_probability_max[i] ?? 0}%`);
+    });
+    return lines.join("\n");
+  },
+});
+
+// ---------- module: NEWS (RSS 헤드라인 — 키 없음) ----------
+OmniOS.register("news", {
+  BASE: "https://news.google.com/rss",
+  SUFFIX: "hl=ko&gl=KR&ceid=KR:ko",
+  CATS: {
+    top: "", world: "headlines/section/topic/WORLD", business: "headlines/section/topic/BUSINESS",
+    tech: "headlines/section/topic/TECHNOLOGY", science: "headlines/section/topic/SCIENCE",
+    sports: "headlines/section/topic/SPORTS",
+  },
+  LABELS: { top: "주요", world: "세계", business: "경제", tech: "IT/과학", science: "과학", sports: "스포츠" },
+  cat: "top",
+  query: "",
+  items: [],
+  _at: 0,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = { sub: $("nw-sub"), search: $("nw-search"), updated: $("nw-updated"),
+      refresh: $("nw-refresh"), tabs: $("nw-tabs"), list: $("nw-list") };
+    this.els.tabs.querySelectorAll(".ig-tab").forEach((b) =>
+      b.addEventListener("click", () => this.load(b.dataset.cat)));
+    this.els.search.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && this.els.search.value.trim()) {
+        this.search(this.els.search.value.trim());
+        this.els.search.value = "";
+      }
+    });
+    this.els.refresh.addEventListener("click", () => this.reload());
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "news" && Date.now() - this._at > 10 * 60000) this.reload();
+    });
+    setInterval(() => { if (this._at) this.reload(); }, 15 * 60000);
+  },
+
+  url(cat) {
+    const p = this.CATS[cat] || "";
+    return p ? `${this.BASE}/${p}?${this.SUFFIX}` : `${this.BASE}?${this.SUFFIX}`;
+  },
+
+  reload() { return this.query ? this.search(this.query) : this.load(this.cat); },
+
+  async load(cat) {
+    if (!this.CATS.hasOwnProperty(cat)) cat = "top";
+    this.cat = cat; this.query = "";
+    this.els.tabs.querySelectorAll(".ig-tab").forEach((b) => b.classList.toggle("active", b.dataset.cat === cat));
+    this.els.sub.textContent = `${this.LABELS[cat].toUpperCase()} · KR`;
+    return this.fetch(this.url(cat));
+  },
+
+  async search(q) {
+    this.query = q;
+    this.els.tabs.querySelectorAll(".ig-tab").forEach((b) => b.classList.remove("active"));
+    this.els.sub.textContent = `SEARCH · ${q}`;
+    return this.fetch(`${this.BASE}/search?q=${encodeURIComponent(q)}&${this.SUFFIX}`);
+  },
+
+  async fetch(url) {
+    this.els.list.innerHTML = '<div class="nf-empty">LOADING&hellip;</div>';
+    try {
+      const xml = await OmniNet.get(url, 20000);
+      this.items = this.parse(xml);
+      this._at = Date.now();
+      const t = new Date();
+      this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+      this.render();
+    } catch (e) {
+      this.items = [];
+      this.els.list.innerHTML = "";
+      const err = document.createElement("div");
+      err.className = "nf-err";
+      err.textContent = OmniNative.available ? `뉴스 조회 실패: ${e.message}` : "브라우저 개발 모드 — 뉴스는 앱에서만 조회됩니다 (CORS)";
+      this.els.list.appendChild(err);
+    }
+    return this.items;
+  },
+
+  decode(s) {
+    return String(s || "")
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+      .replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n))
+      .replace(/&#x([0-9a-f]+);/gi, (m, n) => String.fromCharCode(parseInt(n, 16)))
+      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&apos;/g, "'").trim();
+  },
+
+  // RSS 2.0 <item> 파서 (정규식 — DOMParser 없이 노드에서도 검증 가능)
+  parse(xml) {
+    const out = [];
+    const re = /<item>([\s\S]*?)<\/item>/g;
+    let m;
+    const pick = (s, tag) => {
+      const r = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i").exec(s);
+      return r ? r[1] : "";
+    };
+    while ((m = re.exec(xml)) && out.length < 60) {
+      const it = m[1];
+      let title = this.decode(pick(it, "title"));
+      const link = this.decode(pick(it, "link"));
+      const source = this.decode(pick(it, "source"));
+      const pub = pick(it, "pubDate");
+      if (source && title.endsWith(` - ${source}`)) title = title.slice(0, -(source.length + 3));
+      const ts = pub ? Date.parse(pub) / 1000 : 0;
+      if (title && link) out.push({ title, link, source, ts });
+    }
+    return out;
+  },
+
+  fmtTime(ts) {
+    if (!ts) return "--:--";
+    const d = new Date(ts * 1000);
+    const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    return d.toDateString() === new Date().toDateString()
+      ? hm : `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hm}`;
+  },
+
+  render() {
+    const el = this.els.list;
+    el.textContent = "";
+    if (!this.items.length) {
+      el.innerHTML = '<div class="nf-empty">NO HEADLINES</div>';
+      return;
+    }
+    const fresh = Date.now() / 1000 - 2 * 3600;
+    for (const it of this.items) {
+      const row = document.createElement("div");
+      row.className = `nw-item${it.ts > fresh ? " fresh" : ""}`;
+      row.title = "클릭하면 기사 열기";
+      row.addEventListener("click", () => OmniNet.openUrl(it.link));
+      const t = document.createElement("span"); t.className = "t"; t.textContent = this.fmtTime(it.ts);
+      const s = document.createElement("span"); s.className = "s"; s.textContent = it.source || "—";
+      const h = document.createElement("span"); h.className = "h"; h.textContent = it.title;
+      row.append(t, s, h);
+      el.appendChild(row);
+    }
+  },
+});
+
+// ---------- module: MAP (지도 타일 + 장소 검색) ----------
+OmniOS.register("map", {
+  // 키 없는 OSM 표준 타일 — CSS 반전 필터(.leaflet-tile-pane)로 다크 블루 톤을 만든다
+  TILES: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  _map: null,
+  _pin: null,
+  _here: null,
+  _pinLL: null,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = { coords: $("mp-coords"), search: $("mp-search"), locate: $("mp-locate"),
+      weather: $("mp-weather"), canvas: $("mp-canvas"), hud: $("mp-hud") };
+    this.els.search.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && this.els.search.value.trim()) {
+        this.search(this.els.search.value.trim());
+        this.els.search.value = "";
+      }
+    });
+    this.els.locate.addEventListener("click", () => this.locate());
+    this.els.weather.addEventListener("click", () => this.weatherHere());
+    document.addEventListener("omni:panel", (e) => {
+      if (e.detail === "map") {
+        this.ensure();
+        if (this._map) setTimeout(() => this._map.invalidateSize(), 50);
+      }
+    });
+  },
+
+  ensure() {
+    if (this._map) return true;
+    if (typeof window.L === "undefined") {
+      this.els.hud.textContent = "지도 라이브러리 로드 실패";
+      return false;
+    }
+    let view = { lat: 37.5665, lon: 126.978, z: 12 };
+    try { view = { ...view, ...JSON.parse(localStorage.getItem("omni.map.view") || "{}") }; } catch (e) { /* 기본값 */ }
+    this._map = L.map(this.els.canvas, { zoomControl: true, attributionControl: false })
+      .setView([view.lat, view.lon], view.z);
+    L.tileLayer(this.TILES, { maxZoom: 19 }).addTo(this._map);
+    this._map.on("moveend", () => {
+      const c = this._map.getCenter();
+      localStorage.setItem("omni.map.view", JSON.stringify({ lat: c.lat, lon: c.lng, z: this._map.getZoom() }));
+      this.els.coords.textContent = `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)} · Z${this._map.getZoom()}`;
+    });
+    this._map.on("click", (e) => this.setPin(e.latlng.lat, e.latlng.lng, `${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`));
+    this._map.fire("moveend");
+    this.els.hud.textContent = "클릭: 핀 · 검색: 장소 이동 · LOCATE: IP 기반 현위치";
+    return true;
+  },
+
+  setPin(lat, lon, label, cls) {
+    if (!this.ensure()) return;
+    const icon = L.divIcon({ className: "", html: `<div class="mp-pin${cls ? " " + cls : ""}"></div>`, iconSize: [14, 14], iconAnchor: [7, 7] });
+    if (cls === "here") {
+      if (this._here) this._here.remove();
+      this._here = L.marker([lat, lon], { icon }).addTo(this._map).bindPopup(label);
+    } else {
+      if (this._pin) this._pin.remove();
+      this._pin = L.marker([lat, lon], { icon }).addTo(this._map).bindPopup(label);
+      this._pinLL = { lat, lon, label };
+    }
+    this.els.hud.textContent = label;
+  },
+
+  async search(q) {
+    if (!this.ensure()) return null;
+    this.els.hud.textContent = `SEARCHING · ${q}`;
+    try {
+      const j = await OmniNet.json(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&accept-language=ko`, 15000);
+      const r = j && j[0];
+      if (!r) { this.els.hud.textContent = `장소를 찾지 못했습니다: ${q}`; return null; }
+      const lat = +r.lat, lon = +r.lon;
+      const short = r.display_name.split(",").slice(0, 3).map((s) => s.trim()).join(", ");
+      this._map.setView([lat, lon], 15);
+      this.setPin(lat, lon, short);
+      this._pin.openPopup();
+      return short;
+    } catch (e) {
+      this.els.hud.textContent = `검색 실패: ${e.message}`;
+      return null;
+    }
+  },
+
+  async locate() {
+    if (!this.ensure()) return;
+    this.els.hud.textContent = "LOCATING…";
+    const p = await OmniNet.ipLocate();
+    if (!p) { this.els.hud.textContent = "현위치를 알 수 없습니다"; return; }
+    this._map.setView([p.lat, p.lon], 12);
+    this.setPin(p.lat, p.lon, `현위치(IP 추정) · ${p.name}`, "here");
+  },
+
+  async weatherHere() {
+    const ll = this._pinLL || (this._map ? { lat: this._map.getCenter().lat, lon: this._map.getCenter().lng } : null);
+    if (!ll) return;
+    const btn = document.querySelector('.nav-item[data-panel="weather"]');
+    if (btn) btn.click();
+    await OmniOS.modules.weather.setCoords(ll.lat, ll.lon, ll.label);
   },
 });

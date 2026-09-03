@@ -3876,3 +3876,72 @@ input.vc-name {
   background: rgba(255, 255, 255, 0.18);
   border-radius: 4px;
 }
+
+/* ---------- WEATHER / NEWS / MAP (정보 패널 3종 — nf-* 크롬 재사용) ---------- */
+.panel-weather .nf-wrap, .panel-news .nf-wrap, .panel-map .nf-wrap { height: 100%; }
+.wx-search {
+  width: 170px; padding: 5px 9px; font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--cyan); background: rgba(3, 14, 28, 0.7); border: 1px solid var(--cyan-faint);
+  border-radius: 3px; outline: none; letter-spacing: 0.5px;
+}
+.wx-search:focus { border-color: var(--cyan-soft); }
+.wx-search::placeholder { color: rgba(111, 168, 201, 0.5); }
+.wx-err { font-size: 10px; letter-spacing: 1px; color: var(--warn); padding: 6px 2px; }
+
+.wx-now {
+  display: flex; align-items: center; gap: 26px; padding: 14px 18px;
+  border: 1px solid var(--cyan-faint); border-radius: 6px;
+  background: linear-gradient(135deg, rgba(53, 214, 255, 0.06), rgba(3, 14, 28, 0.2));
+}
+.wx-glyph { width: 84px; height: 84px; flex-shrink: 0; }
+.wx-glyph svg { width: 100%; height: 100%; }
+.wx-temp-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 150px; }
+.wx-temp { font-family: var(--font-display); font-size: 54px; line-height: 1; color: var(--cyan); text-shadow: 0 0 18px var(--cyan-soft); }
+.wx-cond { font-size: 12px; letter-spacing: 3px; color: #bfe6f5; }
+.wx-stats { display: grid; grid-template-columns: repeat(2, minmax(110px, 1fr)); gap: 8px 22px; margin-left: auto; }
+.wx-stat { display: flex; flex-direction: column; gap: 2px; }
+.wx-stat .k { font-size: 8.5px; letter-spacing: 2px; color: var(--text-dim); }
+.wx-stat .v { font-family: var(--font-display); font-size: 15px; color: var(--cyan); }
+.wx-hourly { width: 100%; height: 120px; display: block; }
+.wx-daily { display: flex; flex-direction: column; gap: 4px; }
+.wx-day {
+  display: grid; grid-template-columns: 90px 34px 1fr 80px 70px; align-items: center; gap: 12px;
+  padding: 6px 10px; border: 1px solid transparent; border-radius: 4px; font-size: 10.5px;
+}
+.wx-day:hover { border-color: var(--cyan-faint); background: rgba(53, 214, 255, 0.04); }
+.wx-day .d { letter-spacing: 1.5px; color: #bfe6f5; }
+.wx-day .g svg { width: 26px; height: 26px; }
+.wx-day .c { color: var(--text-dim); letter-spacing: 1px; }
+.wx-day .r { font-family: var(--font-mono); color: var(--blue); text-align: right; }
+.wx-day .t { font-family: var(--font-display); color: var(--cyan); text-align: right; white-space: nowrap; }
+.wx-day .t .lo { color: var(--text-dim); }
+
+.nw-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.nw-item {
+  display: grid; grid-template-columns: 62px 120px 1fr; gap: 12px; align-items: baseline;
+  padding: 7px 10px; border: 1px solid transparent; border-radius: 4px; cursor: pointer;
+}
+.nw-item:hover { border-color: var(--cyan-faint); background: rgba(53, 214, 255, 0.05); }
+.nw-item .t { font-size: 8.5px; letter-spacing: 1px; color: var(--text-dim); }
+.nw-item .s { font-size: 9px; letter-spacing: 1px; color: var(--cyan); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nw-item .h { font-size: 11px; color: #d6eef8; line-height: 1.4; }
+.nw-item.fresh .h { color: #fff; }
+
+.mp-canvas-wrap { position: relative; flex: 1; min-height: 0; border: 1px solid var(--cyan-faint); border-radius: 6px; overflow: hidden; }
+.mp-canvas { position: absolute; inset: 0; background: #06101c; }
+.mp-hud {
+  position: absolute; left: 10px; bottom: 10px; z-index: 500; pointer-events: none;
+  font-size: 9.5px; letter-spacing: 1px; color: var(--cyan); padding: 5px 9px;
+  background: rgba(2, 8, 19, 0.75); border: 1px solid var(--cyan-faint); border-radius: 3px;
+}
+.mp-attrib { font-size: 8px; letter-spacing: 1px; color: rgba(111, 168, 201, 0.5); }
+.mp-pin { width: 14px; height: 14px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 4px rgba(53, 214, 255, 0.25), 0 0 16px var(--cyan); }
+.mp-pin.here { background: var(--ok); box-shadow: 0 0 0 4px rgba(61, 255, 168, 0.25), 0 0 16px var(--ok); }
+.leaflet-container { font-family: var(--font-mono); }
+.leaflet-control-zoom a { background: rgba(2, 8, 19, 0.85) !important; color: var(--cyan) !important; border-color: var(--cyan-faint) !important; }
+.leaflet-control-attribution { display: none; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: rgba(2, 8, 19, 0.92); color: var(--cyan); border: 1px solid var(--cyan-faint); }
+.leaflet-popup-content { font-size: 10.5px; margin: 8px 12px; }
+/* OSM 타일 → 다크 블루 HUD 톤 (반전 + 색상 회전) */
+.mp-canvas .leaflet-tile-pane { filter: invert(1) hue-rotate(190deg) brightness(0.72) contrast(1.15) saturate(0.5); }
+[data-omni-theme="apple"] .mp-canvas .leaflet-tile-pane { filter: saturate(0.85); }

@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="vendor/codemirror/codemirror.css" />
   <link rel="stylesheet" href="vendor/codemirror/show-hint.css" />
   <link rel="stylesheet" href="vendor/xterm/xterm.css" />
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="style.css" />
   <script type="importmap">
     {
@@ -49,6 +50,18 @@
       <button class="nav-item" data-panel="clock">
         <span class="nav-icon">&#9711;</span>
         <span class="nav-label">CLOCK</span>
+      </button>
+      <button class="nav-item" data-panel="weather">
+        <span class="nav-icon">&#9684;</span>
+        <span class="nav-label">WEATHER</span>
+      </button>
+      <button class="nav-item" data-panel="news">
+        <span class="nav-icon">&#9636;</span>
+        <span class="nav-label">NEWS</span>
+      </button>
+      <button class="nav-item" data-panel="map">
+        <span class="nav-icon">&#9672;</span>
+        <span class="nav-label">MAP</span>
       </button>
       <button class="nav-item" data-panel="proj">
         <span class="nav-icon">&#10697;</span>
@@ -298,6 +311,89 @@
           <div class="clock-time" id="clock-time">--:--:--</div>
           <div class="clock-date" id="clock-date"></div>
         </div>
+      </div>
+    </section>
+
+    <!-- panel: WEATHER (Open-Meteo, 키 없음) -->
+    <section class="panel panel-weather" id="panel-weather">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">WEATHER</span>
+          <span class="nf-sub" id="wx-loc">LOCATING&hellip;</span>
+          <span class="ts-spacer"></span>
+          <input class="wx-search" id="wx-search" placeholder="도시 검색 (Enter)" autocomplete="off" spellcheck="false">
+          <button class="nf-btn" id="wx-here">HERE</button>
+          <span class="nf-updated" id="wx-updated"></span>
+          <button class="nf-btn" id="wx-refresh">REFRESH</button>
+        </div>
+        <div class="nf-body">
+          <div class="wx-err" id="wx-err" hidden></div>
+          <div class="wx-now" id="wx-now">
+            <div class="wx-glyph" id="wx-glyph"></div>
+            <div class="wx-temp-wrap">
+              <div class="wx-temp" id="wx-temp">--&deg;</div>
+              <div class="wx-cond" id="wx-cond">&mdash;</div>
+            </div>
+            <div class="wx-stats">
+              <div class="wx-stat"><span class="k">FEELS</span><span class="v" id="wx-feels">--&deg;</span></div>
+              <div class="wx-stat"><span class="k">HUMIDITY</span><span class="v" id="wx-hum">--%</span></div>
+              <div class="wx-stat"><span class="k">WIND</span><span class="v" id="wx-wind">-- km/h</span></div>
+              <div class="wx-stat"><span class="k">RAIN</span><span class="v" id="wx-rain">-- mm</span></div>
+            </div>
+          </div>
+          <div class="nf-section">
+            <div class="nf-sec-h"><span>NEXT 24H</span><span class="nf-count" id="wx-hourly-note">TEMP &middot; PRECIP %</span></div>
+            <canvas class="wx-hourly" id="wx-hourly" height="120"></canvas>
+          </div>
+          <div class="nf-section">
+            <div class="nf-sec-h"><span>7-DAY FORECAST</span></div>
+            <div class="wx-daily" id="wx-daily"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- panel: NEWS (RSS 헤드라인) -->
+    <section class="panel panel-news" id="panel-news">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">NEWS</span>
+          <span class="nf-sub" id="nw-sub">HEADLINES &middot; KR</span>
+          <span class="ts-spacer"></span>
+          <input class="wx-search" id="nw-search" placeholder="키워드 검색 (Enter)" autocomplete="off" spellcheck="false">
+          <span class="nf-updated" id="nw-updated"></span>
+          <button class="nf-btn" id="nw-refresh">REFRESH</button>
+        </div>
+        <div class="nw-tabs" id="nw-tabs">
+          <button class="ig-tab active" data-cat="top">주요</button>
+          <button class="ig-tab" data-cat="world">세계</button>
+          <button class="ig-tab" data-cat="business">경제</button>
+          <button class="ig-tab" data-cat="tech">IT/과학</button>
+          <button class="ig-tab" data-cat="science">과학</button>
+          <button class="ig-tab" data-cat="sports">스포츠</button>
+        </div>
+        <div class="nf-body">
+          <div class="nf-list" id="nw-list"><div class="nf-empty">LOADING&hellip;</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- panel: MAP (지도 타일 + 장소 검색) -->
+    <section class="panel panel-map" id="panel-map">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">MAP</span>
+          <span class="nf-sub" id="mp-coords">&mdash;</span>
+          <span class="ts-spacer"></span>
+          <input class="wx-search" id="mp-search" placeholder="장소 검색 (Enter)" autocomplete="off" spellcheck="false">
+          <button class="nf-btn" id="mp-locate">LOCATE</button>
+          <button class="nf-btn" id="mp-weather">WEATHER HERE</button>
+        </div>
+        <div class="mp-canvas-wrap">
+          <div class="mp-canvas" id="mp-canvas"></div>
+          <div class="mp-hud" id="mp-hud">&mdash;</div>
+        </div>
+        <div class="mp-attrib">MAP DATA &copy; OpenStreetMap contributors (ODbL) &middot; SEARCH: Nominatim</div>
       </div>
     </section>
 
@@ -1168,7 +1264,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.60.1</span>
+      <span>v0.61.0</span>
     </footer>
   </div>
 
@@ -1251,6 +1347,7 @@
   <script src="vendor/dsp/robot_voice.js"></script>
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/xterm-addon-fit.js"></script>
+  <script src="vendor/leaflet/leaflet.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

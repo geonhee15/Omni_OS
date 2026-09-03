@@ -987,6 +987,50 @@ static NSString *ArcSavesDir(void) {
             ok = [[NSWorkspace sharedWorkspace] openURL:url];
         }
         [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+    } else if ([cmd isEqualToString:@"net.get"]) {
+        // 패널용 HTTP GET 프록시 — WKWebView의 CORS 제약을 우회한다.
+        // 허용 호스트만(날씨·지오코딩·뉴스 RSS·지도 검색·IP 위치), https 한정.
+        NSString *urlStr = nil;
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]
+                && [parsed[@"url"] isKindOfClass:[NSString class]]) {
+                urlStr = parsed[@"url"];
+            }
+        }
+        static NSArray *allow = nil;
+        if (allow == nil) {
+            allow = @[ @"api.open-meteo.com", @"geocoding-api.open-meteo.com",
+                       @"news.google.com", @"nominatim.openstreetmap.org",
+                       @"ipwho.is", @"get.geojs.io" ];
+        }
+        NSURL *url = urlStr ? [NSURL URLWithString:urlStr] : nil;
+        if (url == nil || ![url.scheme isEqualToString:@"https"]
+            || ![allow containsObject:url.host.lowercaseString]) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"HOST_NOT_ALLOWED" }
+                           forId:msgId];
+            return;
+        }
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+        req.timeoutInterval = 15;
+        [req setValue:@"Mozilla/5.0 OmniOS/0.61 (personal desktop HUD)"
+            forHTTPHeaderField:@"User-Agent"];
+        [req setValue:@"ko-KR,ko;q=0.9,en;q=0.6" forHTTPHeaderField:@"Accept-Language"];
+        [[NSURLSession.sharedSession dataTaskWithRequest:req
+            completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+            if (err != nil || data == nil) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : err.localizedDescription ?: @"network" } forId:msgId];
+                return;
+            }
+            NSInteger status = [resp isKindOfClass:[NSHTTPURLResponse class]]
+                ? ((NSHTTPURLResponse *)resp).statusCode : 0;
+            NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+                ?: @"";
+            [self deliverPayload:@{ @"ok" : @(status > 0 && status < 400),
+                                    @"status" : @(status), @"body" : body } forId:msgId];
+        }] resume];
     } else if ([cmd isEqualToString:@"store.read"] || [cmd isEqualToString:@"store.write"]) {
         // 패널 데이터 영속화용 미니 스토어 — ~/.omni/store/<name>.json 한정
         NSDictionary *a = nil;
