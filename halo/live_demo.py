@@ -15,6 +15,7 @@ import json
 import os
 import queue
 import ssl
+import sys
 import threading
 import time
 
@@ -27,6 +28,10 @@ from halo_emulator import HaloEmulator
 from hud import banner_packet, caption_packet, render_background, status_packet
 
 import omni_link as link
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "scripts"))
+import omni_calc  # noqa: E402 — 앱과 같은 정확 계산기
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.expanduser("~/.omni/openai.key")).read().strip()
@@ -49,7 +54,8 @@ def build_instructions() -> str:
         "요약해 말합니다. 맥의 옴니 앱 패널을 열거나 조작해 달라는 요청은 "
         "app_action을 사용합니다. 날씨는 check_weather, 뉴스는 check_news, "
         "환율·주식은 check_markets, 일정은 check_calendar, 일정 추가는 "
-        "add_event를 씁니다. 도구 결과는 그대로 읽지 말고 요약합니다."
+        "add_event를 씁니다. 숫자 계산은 아무리 작아도 암산하지 말고 "
+        "calculate에 수식으로 넘깁니다. 도구 결과는 그대로 읽지 말고 요약합니다."
         + (f"\n\n[장기 메모리 — 앱과 공유]\n{memory}" if memory else ""))
 
 
@@ -67,6 +73,11 @@ TOOLS = [
      "description": "지메일 받은편지함 최근 메일을 확인한다.",
      "parameters": {"type": "object", "properties": {
          "hours": {"type": "number", "description": "조회 범위(시간), 기본 24"}}}},
+    {"type": "function", "name": "calculate",
+     "description": "정확 계산기 — 숫자 계산은 전부 여기로(암산 금지). "
+                    "expression은 파이썬식 수식 (예: 2400*0.15, sqrt(2), 2**64).",
+     "parameters": {"type": "object", "properties": {
+         "expression": {"type": "string"}}, "required": ["expression"]}},
     {"type": "function", "name": "check_weather",
      "description": "현재 위치(앱 설정)의 날씨 — 현재/오늘/내일/주간 요약.",
      "parameters": {"type": "object", "properties": {}}},
@@ -123,6 +134,9 @@ def run_tool(name: str, args: dict) -> str:
                  + (" (안읽음)" if i.get("unread") else "")
                  for i in items[:8]]
         return f"메일 {len(items)}건 —\n" + "\n".join(lines)
+    if name == "calculate":
+        r = omni_calc.evaluate(str(args.get("expression", "")))
+        return f"{r['expr']} = {r['text']}" if r.get("ok") else f"계산 오류: {r.get('error')}"
     if name == "check_weather":
         snap = link.request_refresh("weather")
         return (snap or {}).get("summary") or \

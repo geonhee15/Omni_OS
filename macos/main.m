@@ -2369,6 +2369,38 @@ static NSString *OmniAIFsValidate(NSString *path) {
             }
         });
 
+    } else if ([cmd isEqualToString:@"ai.calc"]) {
+        // 정확 계산기 — scripts/omni_calc.py (ast 화이트리스트 안전 평가기).
+        // LLM은 수식만 만들고 계산은 여기서 한다 (음성 모델의 암산 오류 방지)
+        NSString *expr = [a[@"expr"] isKindOfClass:[NSString class]] ? a[@"expr"] : @"";
+        NSString *helper = [OmniBaseDir()
+            stringByAppendingPathComponent:@"scripts/omni_calc.py"];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/python3"];
+            task.arguments = @[ helper, expr ];
+            NSPipe *outPipe = [NSPipe pipe];
+            task.standardOutput = outPipe;
+            task.standardError = [NSPipe pipe];
+            NSError *err = nil;
+            if (![task launchAndReturnError:&err]) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : err.localizedDescription ?: @"calc launch" } forId:msgId];
+                return;
+            }
+            // 5초 타임아웃 — 폭주 방지 (평가기 자체도 상한이 있음)
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                if (task.isRunning) [task terminate];
+            });
+            NSData *outData = [outPipe.fileHandleForReading readDataToEndOfFile];
+            [task waitUntilExit];
+            id parsed = outData.length
+                ? [NSJSONSerialization JSONObjectWithData:outData options:0 error:nil] : nil;
+            [self deliverPayload:([parsed isKindOfClass:[NSDictionary class]] ? parsed
+                : @{ @"ok" : @NO, @"error" : @"계산 시간 초과 또는 출력 오류" }) forId:msgId];
+        });
+
     } else if ([cmd hasPrefix:@"ai.fs"]) {
         [self handleAIFs:cmd a:a msgId:msgId];
 

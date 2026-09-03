@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.62.1",
+  version: "0.63.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -593,6 +593,7 @@ OmniOS.register("ai", {
     "- 지메일 확인: \"메일 확인해줘\" 류 요청은 check_gmail 도구로 받은편지함을 직접 읽어(IMAP, 알림 무관) 보낸 사람·제목·안읽음 여부를 요약 보고합니다. 메일 발송은 미지원입니다.",
     "- 오미니아: 당신을 돕는 보조 AI로, 로컬에서 실행되는 별도 모델입니다(텍스트 전용, 터미널 접근은 사용자 승인 필요). \"오미니아 호출/켜줘\" 같은 요청을 받으면 [[ACT:omnia]]로 팝업을 열고 짧게 보고합니다.",
     "- 날씨: \"날씨 어때/내일 비 와?\" 류는 check_weather 도구(city 생략 시 현재 설정 위치, 지정 시 그 도시)로 확인해 핵심만 말합니다. 뉴스: \"뉴스 보여줘/○○ 관련 소식\" 류는 check_news 도구(category 또는 query)로 헤드라인을 읽어 3~5개로 요약합니다. 지도: 장소를 보여 달라면 [[ACT:map.search:장소]]로 MAP 패널에 표시합니다.",
+    "- 계산: 숫자 계산(산수·퍼센트·환산·평균·큰 수)은 절대 암산하지 않고 calculate 도구에 파이썬식 수식으로 넘겨 그 결과를 말합니다. 여러 단계면 도구를 여러 번 호출합니다.",
     "- 환율·주식: \"달러 환율/삼성전자 주가/비트코인\" 류는 check_markets 도구로 확인해 핵심 수치만 말합니다. 일정: \"오늘 일정/이번 주 뭐 있어\"는 check_calendar, \"내일 3시 치과 잡아줘\"처럼 일정 추가 요청은 add_event 도구(start는 YYYY-MM-DD HH:mm, 종일이면 날짜만)로 맥 캘린더에 등록하고 결과를 보고합니다. 날짜·시각은 [실시간 상태 스냅샷]의 현재 시각 기준으로 계산합니다.",
     "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
@@ -689,6 +690,15 @@ OmniOS.register("ai", {
           count: { type: "number" },
         },
         required: [],
+      },
+    },
+    {
+      name: "calculate",
+      description: "정확 계산기. 산수·백분율·거듭제곱·큰 정수·수학 함수(sqrt/sin/log/factorial/gcd/comb…)·통계(mean/median/stdev)를 파이썬으로 정확히 계산한다. 어떤 계산이든 암산하지 말고 반드시 이 도구를 쓴다. expression은 파이썬식 수식 (예: '2400*0.15', '(37*48)+19', 'sqrt(2)', '2**64', 'mean([3,5,9])'). 단위 환산은 수식으로 풀어서(예: '5*1.60934').",
+      input_schema: {
+        type: "object",
+        properties: { expression: { type: "string" } },
+        required: ["expression"],
       },
     },
     {
@@ -1311,6 +1321,12 @@ OmniOS.register("ai", {
         if (!items || !items.length) return "(헤드라인 없음)";
         return items.slice(0, Math.max(1, Math.min(20, input.count || 8)))
           .map((i) => `[${nw.fmtTime(i.ts)}] ${i.source} — ${i.title}`).join("\n");
+      }
+      if (name === "calculate") {
+        const r = await OmniNative.request("ai.calc",
+          JSON.stringify({ expr: String(input.expression || "") }), 8000);
+        if (!r || !r.ok) return `오류: ${(r && r.error) || "계산 실패"}`;
+        return `${r.expr} = ${r.text}`;
       }
       if (name === "check_markets") {
         const mk = OmniOS.modules.markets;
@@ -1989,6 +2005,16 @@ OmniOS.register("ai", {
     },
     {
       type: "function",
+      name: "calculate",
+      description: "정확 계산기 — 숫자 계산은 전부 여기로(암산 금지): 산수, 퍼센트, 거듭제곱, 큰 수, 수학 함수, 평균/통계, 단위 환산(수식으로). expression은 파이썬식 수식. 결과 숫자를 그대로 읽어 준다.",
+      parameters: {
+        type: "object",
+        properties: { expression: { type: "string" } },
+        required: ["expression"],
+      },
+    },
+    {
+      type: "function",
       name: "check_markets",
       description: "환율·주식·코인 시세 — \"달러 환율/삼성전자 주가/비트코인\"에 사용. symbol을 주면 그 종목만. 핵심 수치와 등락만 짧게 말한다.",
       parameters: {
@@ -2063,6 +2089,7 @@ OmniOS.register("ai", {
       + "- 지금은 실시간 음성 대화입니다. 답은 짧고 자연스럽게 (1~2문장 기본).\n"
       + "- [[OPEN]]·[[ACT]] 같은 태그는 절대 말하지 않습니다 — 대신 도구를 호출합니다.\n"
       + "- 시각/날짜/시스템/보안/프로젝트 현황 → get_status (즉시). ask_brain 금지.\n"
+      + "- 숫자 계산은 전부 calculate (암산 절대 금지 — 작은 산수도). 결과를 받아 읽어준다.\n"
       + "- 패널 열기 → open_panel. 앱 심층 동작(에디터·노트·파일 열기, 상태 변경, 스캔, 워처) → app_action.\n"
       + "- 조사·분석·코드·파일 내용 확인/수정 → ask_brain (Claude가 파일 도구로 실제 수행, 수 초 소요). 호출 전에 \"확인하겠습니다\" 같은 짧은 예고를 말해도 좋습니다.\n"
       + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.\n"
@@ -2313,6 +2340,9 @@ OmniOS.register("ai", {
     } else if (name === "check_news") {
       this.logLine("sys", `도구 · check_news ${(args && (args.query || args.category)) || ""}`);
       output = await this.execTool("check_news", args || {});
+    } else if (name === "calculate") {
+      this.logLine("sys", `도구 · calculate ${(args && args.expression) || ""}`);
+      output = await this.execTool("calculate", args || {});
     } else if (name === "check_markets" || name === "check_calendar" || name === "add_event") {
       this.logLine("sys", `도구 · ${name}`);
       output = await this.execTool(name, args || {});
