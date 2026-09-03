@@ -35,7 +35,8 @@ import omni_calc  # noqa: E402 — 앱과 같은 정확 계산기
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.expanduser("~/.omni/openai.key")).read().strip()
-URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
+RT_MODEL = "gpt-realtime-2.1"
+URL = f"wss://api.openai.com/v1/realtime?model={RT_MODEL}"
 
 PANELS = ("cmd", "ai", "notif", "clock", "proj", "sys", "sp1", "r3d",
           "ino", "ce", "notes", "voice", "arc", "weather", "news", "map",
@@ -55,7 +56,9 @@ def build_instructions() -> str:
         "app_action을 사용합니다. 날씨는 check_weather, 뉴스는 check_news, "
         "환율·주식은 check_markets, 일정은 check_calendar, 일정 추가는 "
         "add_event를 씁니다. 숫자 계산은 아무리 작아도 암산하지 말고 "
-        "calculate에 수식으로 넘깁니다. 도구 결과는 그대로 읽지 말고 요약합니다."
+        "calculate에 수식으로 넘깁니다. 도구 결과에 있는 수치·시각만 말하고 "
+        "없는 것은 추정하지 말고 '기록에 없다'고 합니다. 도구 결과는 그대로 "
+        "읽지 말고 요약합니다."
         + (f"\n\n[장기 메모리 — 앱과 공유]\n{memory}" if memory else ""))
 
 
@@ -197,11 +200,20 @@ def calendar_lines(items: list, days: float = 3) -> str:
         if st > end or float(i.get("end", st)) < now - 60:
             continue
         t = time.localtime(st)
-        when = f"{t.tm_mon}/{t.tm_mday}" + (
-            " 종일" if i.get("allDay") else f" {t.tm_hour:02d}:{t.tm_min:02d}")
-        out.append(f"{when} {i.get('title','')}"
+        te = time.localtime(float(i.get("end", st)))
+        day = time.strftime("%Y-%m-%d", t)
+        label = ("오늘" if day == time.strftime("%Y-%m-%d") else
+                 "내일" if day == time.strftime("%Y-%m-%d", time.localtime(now + 86400))
+                 else "월화수목금토일"[t.tm_wday] + "요일")
+        when = f"{label} {t.tm_mon}/{t.tm_mday} " + (
+            "종일" if i.get("allDay")
+            else f"{t.tm_hour:02d}:{t.tm_min:02d}–{te.tm_hour:02d}:{te.tm_min:02d}")
+        out.append(f"[{when}] {i.get('title','')}"
                    + (f" ({i.get('calendar')})" if i.get("calendar") else ""))
-    return "\n".join(out[:12])
+    if not out:
+        return ""
+    return ("캘린더 원본 그대로 (시작–종료). 여기 없는 시각은 추정 금지.\n"
+            + "\n".join(out[:12]))
 
 
 emu = HaloEmulator(sandbox_dir=os.path.join(HERE, "sandbox"))
@@ -238,7 +250,7 @@ async def bridge():
         await ws.send(json.dumps({
             "type": "session.update",
             "session": {
-                "type": "realtime", "model": "gpt-realtime",
+                "type": "realtime", "model": RT_MODEL,
                 "output_modalities": ["audio"],
                 "instructions": build_instructions(),
                 "tools": TOOLS, "tool_choice": "auto",

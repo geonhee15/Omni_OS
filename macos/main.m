@@ -2236,7 +2236,7 @@ static NSString *OmniAIFsValidate(NSString *path) {
         }
         [self.aiRtTask cancel];
         NSString *model = [a[@"model"] isKindOfClass:[NSString class]]
-            ? a[@"model"] : @"gpt-realtime";
+            ? a[@"model"] : @"gpt-realtime-2.1";
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:
             [NSString stringWithFormat:@"wss://api.openai.com/v1/realtime?model=%@", model]]];
         [req setValue:[@"Bearer " stringByAppendingString:oai]

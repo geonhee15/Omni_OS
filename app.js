@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.63.1",
+  version: "0.64.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -593,6 +593,7 @@ OmniOS.register("ai", {
     "- 지메일 확인: \"메일 확인해줘\" 류 요청은 check_gmail 도구로 받은편지함을 직접 읽어(IMAP, 알림 무관) 보낸 사람·제목·안읽음 여부를 요약 보고합니다. 메일 발송은 미지원입니다.",
     "- 오미니아: 당신을 돕는 보조 AI로, 로컬에서 실행되는 별도 모델입니다(텍스트 전용, 터미널 접근은 사용자 승인 필요). \"오미니아 호출/켜줘\" 같은 요청을 받으면 [[ACT:omnia]]로 팝업을 열고 짧게 보고합니다.",
     "- 날씨: \"날씨 어때/내일 비 와?\" 류는 check_weather 도구(city 생략 시 현재 설정 위치, 지정 시 그 도시)로 확인해 핵심만 말합니다. 뉴스: \"뉴스 보여줘/○○ 관련 소식\" 류는 check_news 도구(category 또는 query)로 헤드라인을 읽어 3~5개로 요약합니다. 지도: 장소를 보여 달라면 [[ACT:map.search:장소]]로 MAP 패널에 표시합니다.",
+    "- 사실 규칙: 도구 결과에 있는 수치·시각·이름만 말합니다. 도구 결과에 없는 정보(예: 일정 종료 시각, 금액)는 추정하거나 '보통'으로 채우지 말고 '기록에 없습니다'라고 말합니다. 확실하냐고 물으면 도구를 다시 호출해 원본을 확인합니다.",
     "- 계산: 숫자 계산(산수·퍼센트·환산·평균·큰 수)은 절대 암산하지 않고 calculate 도구에 파이썬식 수식으로 넘겨 그 결과를 말합니다. 여러 단계면 도구를 여러 번 호출합니다.",
     "- 환율·주식: \"달러 환율/삼성전자 주가/비트코인\" 류는 check_markets 도구로 확인해 핵심 수치만 말합니다. 일정: \"오늘 일정/이번 주 뭐 있어\"는 check_calendar, \"내일 3시 치과 잡아줘\"처럼 일정 추가 요청은 add_event 도구(start는 YYYY-MM-DD HH:mm, 종일이면 날짜만)로 맥 캘린더에 등록하고 결과를 보고합니다. 날짜·시각은 [실시간 상태 스냅샷]의 현재 시각 기준으로 계산합니다.",
     "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
@@ -1931,7 +1932,8 @@ OmniOS.register("ai", {
     if (this.state === "speaking") this.setState("idle", "STANDBY", "");
   },
 
-  // ---- LIVE 모드: gpt-realtime 음성 세션 (ECHO 구조 이식) ----
+  // ---- LIVE 모드: gpt-realtime 2.1 음성 세션 (ECHO 구조 이식) ----
+  RT_MODEL: "gpt-realtime-2.1", // 2.1: 도구 호출·사실성 향상, marin 보이스 동일
   // 마이크 PCM16 24kHz → 네이티브 WSS 릴레이 → 서버 VAD가 턴 감지 →
   // marin 보이스 오디오 스트리밍 재생. 도구: ask_brain(Claude 에이전트),
   // get_status(스냅샷 즉답), open_panel, app_action(심층 액션)
@@ -2066,7 +2068,7 @@ OmniOS.register("ai", {
       return;
     }
     const r = await OmniNative.request("ai.rtStart",
-      JSON.stringify({ model: "gpt-realtime" }), 15000).catch(() => null);
+      JSON.stringify({ model: this.RT_MODEL }), 15000).catch(() => null);
     if (!r || !r.ok) {
       this.logLine("sys", (r && r.error) === "NO_OPENAI_KEY"
         ? "LIVE 모드에는 OpenAI 키가 필요합니다 (OPENAI KEY // VOICE)."
@@ -2090,6 +2092,8 @@ OmniOS.register("ai", {
       + "- [[OPEN]]·[[ACT]] 같은 태그는 절대 말하지 않습니다 — 대신 도구를 호출합니다.\n"
       + "- 시각/날짜/시스템/보안/프로젝트 현황 → get_status (즉시). ask_brain 금지.\n"
       + "- 숫자 계산은 전부 calculate (암산 절대 금지 — 작은 산수도). 결과를 받아 읽어준다.\n"
+      + "- 도구 결과에 있는 수치·시각만 말한다. 없는 것(종료 시각 등)은 추정 금지 — '기록에 없다'고 답한다. 일정 질문은 매번 check_calendar를 새로 호출한다(기억으로 답하지 않는다).\n"
+      + "- 숫자·영어 단어는 말하는 그대로 표기한다 (말과 자막이 일치해야 함).\n"
       + "- 패널 열기 → open_panel. 앱 심층 동작(에디터·노트·파일 열기, 상태 변경, 스캔, 워처) → app_action.\n"
       + "- 조사·분석·코드·파일 내용 확인/수정 → ask_brain (Claude가 파일 도구로 실제 수행, 수 초 소요). 호출 전에 \"확인하겠습니다\" 같은 짧은 예고를 말해도 좋습니다.\n"
       + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.\n"
@@ -2100,7 +2104,7 @@ OmniOS.register("ai", {
       type: "session.update",
       session: {
         type: "realtime",
-        model: "gpt-realtime",
+        model: this.RT_MODEL,
         output_modalities: ["audio"],
         instructions,
         audio: {
@@ -2244,7 +2248,7 @@ OmniOS.register("ai", {
     }
     if (!this.live) return;
     if (t === "session.created") {
-      this.logLine("sys", "LIVE 연결됨 · gpt-realtime · marin");
+      this.logLine("sys", `LIVE 연결됨 · ${this.RT_MODEL} · marin`);
     } else if (t === "input_audio_buffer.speech_started") {
       this.rtStopPlayback(); // 사용자가 말 시작 — 재생 중이면 끊고 듣기
       if (!this._rtUserLine) this._rtUserLine = this.logLine("you", "…", true);
@@ -12316,14 +12320,25 @@ OmniOS.register("calendar", {
     }
   },
 
+  // AI 도구용 — 시작·종료 시각을 모두 넣는다 (종료를 안 주면 모델이 추정해 지어냄)
   summary(days) {
     const lim = Date.now() / 1000 + (days || 7) * 86400;
     const now = Date.now() / 1000;
     const DAY = ["일", "월", "화", "수", "목", "금", "토"];
-    return this.items.filter((i) => i.start < lim && i.end > now - 60).slice(0, 40).map((i) => {
+    const today = new Date().toDateString();
+    const tomorrow = new Date(Date.now() + 86400000).toDateString();
+    const list = this.items.filter((i) => i.start < lim && i.end > now - 60).slice(0, 40);
+    if (!list.length) return "";
+    const head = `기준 현재 시각 ${new Date().toLocaleString("ko-KR", { hour12: false })} · 아래는 캘린더 원본 그대로 (시작–종료). 여기 없는 시각은 추정하지 말 것.`;
+    return head + "\n" + list.map((i) => {
       const d = new Date(i.start * 1000);
-      const when = `${d.getMonth() + 1}/${d.getDate()}(${DAY[d.getDay()]})${i.allDay ? " 종일" : ` ${this.fmtHM(i.start)}`}`;
-      return `[${when}] ${i.title}${i.location ? ` @${i.location}` : ""} (${i.calendar})`;
+      const key = d.toDateString();
+      const label = key === today ? "오늘" : key === tomorrow ? "내일" : `${DAY[d.getDay()]}요일`;
+      const mins = Math.round((i.end - i.start) / 60);
+      const when = i.allDay ? "종일"
+        : `${this.fmtHM(i.start)}–${this.fmtHM(i.end)} (${mins >= 60 ? `${Math.floor(mins / 60)}시간${mins % 60 ? ` ${mins % 60}분` : ""}` : `${mins}분`})`;
+      const state = !i.allDay && i.start <= now && i.end > now ? " [진행 중]" : "";
+      return `[${label} ${d.getMonth() + 1}/${d.getDate()} ${when}] ${i.title}${i.location ? ` @${i.location}` : ""} (${i.calendar})${state}`;
     }).join("\n");
   },
 });
