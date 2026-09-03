@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.63.0",
+  version: "0.63.1",
   bootTime: Date.now(),
   modules: {},
 

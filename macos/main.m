@@ -2005,18 +2005,64 @@ static NSString *OmniAIFsValidate(NSString *path) {
             ev.allDay = [a[@"allDay"] boolValue];
             if ([a[@"location"] isKindOfClass:[NSString class]]) ev.location = a[@"location"];
             if ([a[@"notes"] isKindOfClass:[NSString class]]) ev.notes = a[@"notes"];
+            // 대상 캘린더: 명시 이름 > "OMNI" 전용 캘린더(없으면 iCloud/로컬에 생성)
+            // > 구글이 아닌 쓰기 가능 캘린더 > 기본 캘린더. 학교 구글 계정처럼
+            // 관리자 제한이 있는 계정에 쓰면 동기화 오류가 나므로 구글은 마지막 후보.
+            NSArray<EKCalendar *> *cals = [store calendarsForEntityType:EKEntityTypeEvent];
+            BOOL (^isGoogle)(EKCalendar *) = ^BOOL(EKCalendar *c) {
+                NSString *src = c.source.title.lowercaseString ?: @"";
+                return [src containsString:@"google"] || [src containsString:@"gmail"];
+            };
             EKCalendar *target = nil;
-            if ([a[@"calendar"] isKindOfClass:[NSString class]]) {
-                for (EKCalendar *c in [store calendarsForEntityType:EKEntityTypeEvent]) {
+            if ([a[@"calendar"] isKindOfClass:[NSString class]] && [a[@"calendar"] length] > 0) {
+                for (EKCalendar *c in cals) {
                     if (c.allowsContentModifications
                         && [c.title caseInsensitiveCompare:a[@"calendar"]] == NSOrderedSame) { target = c; break; }
                 }
             }
-            if (target == nil) target = store.defaultCalendarForNewEvents;
-            if (target == nil || !target.allowsContentModifications) {
-                for (EKCalendar *c in [store calendarsForEntityType:EKEntityTypeEvent]) {
+            if (target == nil) {
+                for (EKCalendar *c in cals) {
+                    if (c.allowsContentModifications
+                        && [c.title caseInsensitiveCompare:@"OMNI"] == NSOrderedSame) { target = c; break; }
+                }
+            }
+            if (target == nil) {
+                // OMNI 캘린더 생성 — iCloud 우선, 없으면 로컬
+                EKSource *home = nil;
+                for (EKSource *src in store.sources) {
+                    if (src.sourceType == EKSourceTypeCalDAV
+                        && [src.title.lowercaseString containsString:@"icloud"]) { home = src; break; }
+                }
+                if (home == nil) {
+                    for (EKSource *src in store.sources) {
+                        if (src.sourceType == EKSourceTypeLocal) { home = src; break; }
+                    }
+                }
+                if (home != nil) {
+                    EKCalendar *nc = [EKCalendar calendarForEntityType:EKEntityTypeEvent eventStore:store];
+                    nc.title = @"OMNI";
+                    nc.source = home;
+                    nc.CGColor = [NSColor colorWithSRGBRed:0.21 green:0.84 blue:1.0 alpha:1].CGColor;
+                    NSError *cerr = nil;
+                    if ([store saveCalendar:nc commit:YES error:&cerr]) target = nc;
+                }
+            }
+            if (target == nil) {
+                for (EKCalendar *c in cals) {
+                    if (c.allowsContentModifications && !isGoogle(c)) { target = c; break; }
+                }
+            }
+            if (target == nil && store.defaultCalendarForNewEvents.allowsContentModifications) {
+                target = store.defaultCalendarForNewEvents;
+            }
+            if (target == nil) {
+                for (EKCalendar *c in cals) {
                     if (c.allowsContentModifications) { target = c; break; }
                 }
+            }
+            if (target == nil) {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"쓰기 가능한 캘린더가 없습니다" } forId:msgId];
+                return;
             }
             ev.calendar = target;
             NSError *err = nil;
