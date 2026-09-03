@@ -103,7 +103,17 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* 패널이 많아져 사이드바 높이를 넘으면 내비만 스크롤 (로고·푸터 고정) */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 12px, #000 calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 12px, #000 calc(100% - 14px), transparent 100%);
 }
+.nav::-webkit-scrollbar { width: 0; height: 0; }
+.nav-item { flex-shrink: 0; }
 
 .nav-item {
   display: flex;
@@ -171,6 +181,8 @@ body {
 
 .sidebar-foot {
   margin-top: auto;
+  flex-shrink: 0;
+  padding-top: 12px;
   display: flex;
   align-items: center;
   gap: 8px;
