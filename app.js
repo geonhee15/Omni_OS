@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.69.0",
+  version: "0.70.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -690,7 +690,7 @@ const OmniMem = {
 
   fmtEntry(e) {
     const d = new Date(e.ts * 1000);
-    const K = { conv: "", observe: "[상황] ", thought: "[생각] ", action: "[행동] ", user_other: "[건희→타인] ", note: "[메모] ", digest: "[하루 요약] " };
+    const K = { conv: "", observe: "[상황] ", screen: "[화면] ", thought: "[생각] ", action: "[행동] ", user_other: "[건희→타인] ", note: "[메모] ", digest: "[하루 요약] ", question: "[옴니의 질문] ", answer: "[건희의 답] " };
     return `${d.getMonth() + 1}/${d.getDate()} ${this.fmtTime(e.ts)} ${K[e.kind] ?? `[${e.kind}] `}${e.text}`;
   },
 
@@ -700,6 +700,7 @@ const OmniMem = {
     const rel = query ? this.search(query, 6).filter((e) => !this.today.includes(e)).map((e) => this.fmtEntry(e)) : [];
     return `[프로필 — 오래가는 사실·선호]\n${this.profile || "(비어 있음)"}`
       + `\n\n[현재 상황 — 주변음을 듣고 옴니가 추정]\n${this.situation || "(아직 관찰 없음)"}${this.people.length ? `\n주변: ${this.people.join(", ")}` : ""}`
+      + `\n\n[화면 관찰 — 건희가 지금 화면에서 하는 일]\n${this.screenActivity || "(아직 관찰 없음)"}`
       + `\n\n[오늘 일지 최근]\n${todayLines.join("\n") || "(없음)"}`
       + (rel.length ? `\n\n[관련 기억]\n${rel.join("\n")}` : "");
   },
@@ -731,6 +732,151 @@ const OmniMem = {
         this.recent.push({ ts: new Date(`${x.date}T12:00:00`).getTime() / 1000, kind: "digest", text: txt.trim() });
       }
     }
+  },
+};
+
+// ---------- OMNI SCREEN (화면 상시 관찰 + 호기심 질문) ----------
+// 상시 대기 중 주기적으로 화면을 보고(같은 화면이면 건너뜀) 무엇을 하는지·누가 보이는지를
+// 일지에 남기고, 정말 궁금한 것(모르는 닉네임, 처음 보는 프로젝트…)은 옴니가 먼저 말을
+// 걸어 묻는다. 답을 들으면 Q/A를 기억에 저장하고 프로필에 통합한다. 같은 질문은 반복하지 않는다.
+const OmniScreen = {
+  INTERVAL_MS: 60000,
+  ASK_COOLDOWN_MS: 180000,
+  ANSWER_WAIT_MS: 90000,
+  _timer: null,
+  _busy: false,
+  _lastHash: "",
+  _lastAskAt: 0,
+  _queued: null,
+  activity: "",
+  people: [],
+  asked: {},        // key → {q, at, answered}
+  pending: null,    // 방금 던진 질문 (답 대기)
+
+  start() {
+    if (this._timer) return;
+    this.loadAsked();
+    this._timer = setInterval(() => this.observe(false), this.INTERVAL_MS);
+    setTimeout(() => this.observe(false), 8000);
+  },
+
+  stop() {
+    clearInterval(this._timer);
+    this._timer = null;
+    this.pending = null;
+  },
+
+  async loadAsked() {
+    const r = await OmniMem.req("mem.read", { days: 3, limit: 900 });
+    for (const e of ((r && r.items) || [])) {
+      const key = e.meta && e.meta.key;
+      if (!key) continue;
+      if (e.kind === "question") this.asked[key] = { q: e.text, at: e.ts * 1000, answered: false };
+      if (e.kind === "answer" && this.asked[key]) this.asked[key].answered = true;
+    }
+  },
+
+  hash(b64) {
+    let h = 5381;
+    for (let i = 0; i < b64.length; i += 400) h = ((h << 5) + h + b64.charCodeAt(i)) | 0;
+    return String(h);
+  },
+
+  async observe(force) {
+    const ai = OmniOS.modules.ai;
+    if (this._busy || !OmniNative.available || !ai || (!ai.alwaysOn && !force)) return null;
+    // 지난번에 타이밍이 안 맞아 미뤄둔 질문이 있으면 지금 조용할 때 꺼낸다
+    if (this._queued && this.canAsk()) { const q = this._queued; this._queued = null; this.ask(q); }
+    this._busy = true;
+    try {
+      const shot = await OmniNative.request("cu.screenshot", JSON.stringify({ maxWidth: 1024 }), 15000);
+      if (!shot || !shot.ok) return null;
+      const h = this.hash(shot.jpeg);
+      if (!force && h === this._lastHash) return null;   // 화면 그대로 → 건너뜀
+      this._lastHash = h;
+      const askedList = Object.values(this.asked).slice(-12).map((a) => `- ${a.q}${a.answered ? " (답 들음)" : ""}`).join("\n") || "(없음)";
+      const r = await OmniNative.request("ai.chat", JSON.stringify({
+        model: "claude-haiku-4-5-20251001", maxTokens: 600,
+        system: "당신은 개인 AI '옴니'의 화면 관찰 모듈이다. 사용자 이름은 건희. 건희의 맥 화면 스크린샷을 보고 JSON만 출력한다: {\"app\":\"앱/사이트\",\"activity\":\"지금 하는 일 한 문장\",\"people\":[\"화면에 보이는 사람·닉네임\"],\"topics\":[\"주제 2~4개\"],\"changed\":true|false,\"notable\":[{\"text\":\"앞으로도 유효한 사실 한 문장\",\"remember\":true}],\"questions\":[{\"key\":\"짧은 식별자(예: nick_YOHA)\",\"q\":\"건희에게 물어볼 질문 한 문장(존댓말)\",\"why\":\"왜 궁금한지\",\"priority\":1|2|3}]}.\nchanged는 직전 관찰과 활동이 달라졌는지. questions는 옴니가 정말 궁금하고 건희만 답할 수 있는 것(모르는 사람·닉네임이 누구인지, 처음 보는 프로젝트가 뭔지, 반복해서 보는 것의 이유 등). 프로필에 이미 있는 사람·이미 물어본 것은 묻지 않는다. priority 3=지금 물어볼 만함, 1=굳이 안 물어도 됨. 없으면 빈 배열. 비밀번호·카드번호·인증코드·주민번호 같은 민감 정보는 절대 적지 않는다.",
+        messages: [{ role: "user", content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: shot.jpeg } },
+          { type: "text", text: `[건희 프로필(아는 사람·사실)]\n${OmniMem.profile.slice(0, 1500) || "(없음)"}\n\n[직전 관찰] ${this.activity || "(없음)"}\n[이미 물어본 질문]\n${askedList}\n\n지금 화면을 관찰해 JSON으로.` },
+        ] }],
+      }), 45000);
+      const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
+      const m = /\{[\s\S]*\}/.exec(txt);
+      if (!m) return null;
+      const o = JSON.parse(m[0]);
+      if (o.activity && (o.changed || o.activity !== this.activity)) {
+        this.activity = o.activity; this.people = o.people || [];
+        OmniMem.screenActivity = `${o.app ? o.app + " · " : ""}${o.activity}`;
+        OmniMem.append("screen", `${o.app ? "[" + o.app + "] " : ""}${o.activity}`, o.topics || [], { app: o.app, people: o.people || [] });
+        const l = ai.logLine("sys", `[화면] ${OmniMem.screenActivity}${(o.people || []).length ? ` · 보이는 사람: ${o.people.join(", ")}` : ""}`);
+        l.classList.add("ignored");
+      }
+      for (const n of (o.notable || [])) if (n && n.text) OmniMem.append("thought", n.text, n.remember ? ["remember"] : []);
+      const qs = (o.questions || []).filter((q) => q && q.q && q.key && !this.asked[q.key] && (q.priority || 1) >= 2);
+      if (qs.length) this.maybeAsk(qs.sort((a, b) => (b.priority || 0) - (a.priority || 0))[0]);
+      return o;
+    } catch (e) {
+      return null;
+    } finally {
+      this._busy = false;
+    }
+  },
+
+  // 지금 말 걸어도 되는가 — 사용자가 말하는 중/통화 중/옴니 발화 중이면 안 됨
+  canAsk() {
+    const ai = OmniOS.modules.ai;
+    if (!ai || !ai.alwaysOn || !ai.live) return false;
+    if (this.pending) return false;
+    if (Date.now() - this._lastAskAt < this.ASK_COOLDOWN_MS) return false;
+    if (ai._rtResponding || ai._gateMuted) return false;
+    if (Date.now() - (ai._speechStartAt || 0) < 8000) return false;
+    const now = Date.now() / 1000;
+    const talking = OmniMem.ambientBuf.slice(-6).some((l) => now - l.ts < 45 && (l.label === "user_other" || l.label === "other"));
+    return !talking;
+  },
+
+  maybeAsk(q) {
+    if (!this.canAsk()) { this._queued = q; return; }
+    this.ask(q);
+  },
+
+  ask(q) {
+    const ai = OmniOS.modules.ai;
+    this.asked[q.key] = { q: q.q, at: Date.now(), answered: false };
+    this.pending = { ...q, at: Date.now() };
+    this._lastAskAt = Date.now();
+    this._queued = null;
+    OmniMem.append("question", q.q, ["curiosity"], { key: q.key, why: q.why || "" });
+    ai._rtResponding = true;
+    ai.rtSend({ type: "response.create", response: {
+      instructions: `지금은 옴니가 먼저 말을 거는 차례입니다. 화면을 보다가 궁금해진 것을 사용자에게 한두 문장으로 자연스럽게 물어보세요 (존댓말, 호칭 없이, 부담 없는 톤). 물어볼 내용: "${q.q}"${q.why ? ` (궁금한 이유: ${q.why})` : ""}. 질문만 하고 답을 기다립니다.`,
+    } });
+    ai.logLine("sys", `[호기심] ${q.q}`).classList.add("ignored");
+    ai.gateNote(`호기심 질문: ${q.q}`);
+    setTimeout(() => {
+      if (this.pending && this.pending.key === q.key) {
+        this.pending = null;
+        ai.gateNote("호기심 질문 — 답 없음 (다음 기회에)");
+      }
+    }, this.ANSWER_WAIT_MS);
+  },
+
+  // 사용자가 옴니에게 답했을 때 (응답 경로에서 호출)
+  onUserReply(text) {
+    const ai = OmniOS.modules.ai;
+    if (!this.pending) {
+      if (this._queued && this.canAsk()) { const q = this._queued; setTimeout(() => this.ask(q), 6000); }
+      return;
+    }
+    const p = this.pending;
+    this.pending = null;
+    if (this.asked[p.key]) this.asked[p.key].answered = true;
+    OmniMem.append("answer", `Q: ${p.q}\nA: ${text}`, ["remember", "curiosity"], { key: p.key });
+    ai.gateNote(`호기심 답 기록: ${p.key} ← ${text}`);
+    setTimeout(() => ai.memoryConsolidate(), 3000);   // 프로필에 바로 통합
   },
 };
 
@@ -1806,6 +1952,11 @@ OmniOS.register("ai", {
         OmniMem.append("action", `웹 검색 열기: ${engine} "${q}"`);
         return { ok: true, msg: `${engine}에서 "${q}" 검색 결과를 브라우저로 열었습니다` };
       }
+      if (key === "screen.observe") {
+        const o = await OmniScreen.observe(true);
+        return o ? { ok: true, msg: `화면 관찰: ${o.app || ""} · ${o.activity || ""}${(o.questions || []).length ? ` · 질문 후보 ${o.questions.length}` : ""}` }
+          : { ok: false, msg: "화면 관찰 실패 (권한 또는 상시 대기 꺼짐)" };
+      }
       if (key === "computer") {
         const task = parts.slice(1).join(":").trim();
         if (!task) return { ok: false, msg: "작업 내용 없음" };
@@ -2471,6 +2622,7 @@ OmniOS.register("ai", {
       + "- 패널 열기 → open_panel. 앱 심층 동작(에디터·노트·파일 열기, 상태 변경, 스캔, 워처) → app_action.\n"
       + "- 조사·분석·코드·파일 내용 확인/수정 → ask_brain (Claude가 파일 도구로 실제 수행, 수 초 소요). 호출 전에 \"확인하겠습니다\" 같은 짧은 예고를 말해도 좋습니다.\n"
       + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.\n"
+      + "- 먼저 말 걸기: 화면 관찰 모듈이 지시하면 사용자에게 먼저 짧게 질문합니다(부담 없는 톤). 답을 들으면 짧게 고맙다고 하고 넘어갑니다 — 답은 자동으로 기억에 저장되므로 save_memory는 필요 없습니다. 사용자가 답을 미루거나 바쁘다고 하면 바로 물러납니다.\n"
       + (this.alwaysOn ? "- 상시 대기 모드: 사용자는 \"옴니야\"처럼 이름을 불러 말을 겁니다. 호출어는 되풀이하지 말고 본론에만 답합니다. 들리는 발화는 이미 사용자 본인이 옴니에게 한 말로 확인된 것입니다.\n" : "")
       + `- 언어 규칙: ${this.langDirective()}\n`
       + "- 다국어 발음 규칙 (매우 중요): 어떤 언어를 말하든 반드시 그 언어의 원어민 발음과 억양으로 발화합니다. 한 응답 안에서 여러 언어를 오갈 때는 언어 전환 지점마다 아주 짧게 멈춘 뒤 완전히 새 언어의 원어민 모드로 전환합니다 — 직전 언어(특히 한국어)의 억양·리듬을 절대 다음 언어로 끌고 가지 않습니다. 프랑스어는 프랑스인처럼, 힌디어는 인도인처럼, 각 구간을 독립적으로 발음합니다. 여러 언어 시연을 요청받으면 언어당 한 문장으로 짧게 말합니다.\n\n"
@@ -2741,10 +2893,12 @@ OmniOS.register("ai", {
     this.setInd(this.els.indTts, "ALWAYS", "ok");
     this.logLine("sys", "상시 대기 ON — 등록된 내 목소리로 \"옴니야 …\" 하고 부를 때만 답합니다. 답한 뒤 15초 안에 시작한 말은 이어지는 대화로 봅니다.");
     this.gateNote("상시 대기 시작");
+    OmniScreen.start();   // 화면 관찰 + 호기심 질문
   },
 
   stopAlways(reason, fromStopLive) {
     if (!this.alwaysOn) return;
+    OmniScreen.stop();
     this.alwaysOn = false;
     this._gateRunning = false;
     localStorage.removeItem("omni.ai.always");
@@ -2906,6 +3060,8 @@ OmniOS.register("ai", {
       `목소리 유사도 ${sig.sim ?? "?"} (임계 ${sig.thr ?? "?"}), 노트북 재생음 상관 ${sig.media ?? 0}`,
       secs == null ? "옴니가 이 세션에서 아직 말한 적 없음" : `옴니가 마지막으로 말을 마친 지 ${secs}초`,
       `현재 상황 추정: ${OmniMem.situation || "모름"}${OmniMem.people.length ? ` / 주변: ${OmniMem.people.join(", ")}` : ""}`,
+      OmniMem.screenActivity ? `화면 관찰: ${OmniMem.screenActivity}` : "",
+      OmniScreen.pending ? `옴니가 방금 먼저 물어본 질문: "${OmniScreen.pending.q}" — 이 발화는 그 답일 가능성이 큼 (답이면 respond=true, kind=reply)` : "",
     ].join("\n");
     try {
       const r = await OmniNative.request("ai.chat", JSON.stringify({
@@ -2962,6 +3118,7 @@ OmniOS.register("ai", {
       this.trimHistory();
       this.rtCreateResponse();
       this.gateNote(`응답 · ${dec.kind}/${dec.why} [${sigTxt}]: ${text}`);
+      OmniScreen.onUserReply(text);   // 호기심 질문의 답이면 기억에 저장
       if (dec.why === "호출어" || (sig.lips && sig.lips.corr >= 0.5)) this.gateCmd({ cmd: "adapt" });
     } else {
       if (line) {
