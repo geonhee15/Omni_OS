@@ -86,6 +86,35 @@ def ask_brain(question: str, extra_context: str = "") -> str:
         return f"두뇌 호출 실패: {e}"
 
 
+def classify_addressed(text: str, last_omni: str = "") -> bool:
+    """대화 이어가기 창 안의 호출어 없는 발화 — 옴니에게 이어서 하는 말인가 (Haiku)."""
+    try:
+        key = open(ANTHROPIC_KEY_PATH).read().strip()
+    except OSError:
+        return False
+    body = json.dumps({
+        "model": "claude-haiku-4-5-20251001", "max_tokens": 5,
+        "system": ("당신은 음성 비서 '옴니'의 발화 게이트입니다. 사용자는 몇 초 전 옴니의 "
+                   "답을 들었습니다. 지금 들린 발화가 옴니에게 이어서 하는 말(질문·요청·"
+                   "응답·확인·감사)이면 YES, 다른 사람에게 하는 말·혼잣말·TV/영상 소리·"
+                   "무관한 잡담이면 NO. 반드시 YES 또는 NO 한 단어만 출력합니다."),
+        "messages": [{"role": "user",
+                      "content": f"[옴니의 직전 답] {last_omni[:300] or '(없음)'}\n[지금 들린 발화] {text}"}],
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=body,
+        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
+            res = json.load(r)
+        out = "".join(b.get("text", "") for b in res.get("content", [])
+                      if b.get("type") == "text").strip().upper()
+        return out.startswith("YES")
+    except Exception:  # noqa: BLE001 — 판정 불가 → 안전하게 무시
+        return False
+
+
 # ---------------------------------------------------------------- 카톡 알림
 #
 # 알림 DB는 TCC 보호라 이 파이썬(별도 TCC 신원)은 직접 못 읽는다.

@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.64.0",
+  version: "0.65.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -758,6 +758,19 @@ OmniOS.register("ai", {
     markets: "MARKETS", calendar: "CALENDAR",
   },
   lang: "auto", // auto = 기본 한국어 + 요구 시 실시간 전환, 그 외 = 해당 언어 잠금
+  // ---- 상시 대기(ALWAYS) — "내가 옴니에게 말할 때만" 3단 게이트 ----
+  // 1·2단(사람 말인가 / 내 목소리인가)은 사이드카(scripts/omni_gate.py)가,
+  // 3단(옴니에게 한 말인가)은 여기서 전사 텍스트로 판정한다:
+  //   호출어("옴니") 포함 → 응답 / 옴니가 방금 말을 마친 뒤 FOLLOWUP_MS 안의
+  //   발화 → Haiku 분류기로 "이어지는 대화"인지 확인 / 그 외 → 무시(+문맥 삭제)
+  alwaysOn: false,
+  WAKE_RE: /(옴니|omni|오므니|옴늬|옴미|^\s*(엄니|음니|오니|옴니)\s*[야아,]?)/i,
+  FOLLOWUP_MS: 8000,
+  _gateProfile: false,
+  _gateRunning: false,
+  _lastOmniDoneAt: 0,
+  _gateMuted: false,
+  _enrollOnly: false,
   PANEL_GUIDE: [
     "COMMAND BRIDGE: 홈 상황실 — 시스템 게이지, SP-1 방어 상태, 활성 프로젝트 홀로그램, 미션 목표, 최근 커밋 티커",
     "OMNI_AI: 이 음성 인터페이스",
@@ -818,6 +831,18 @@ OmniOS.register("ai", {
     window.OmniAI = this; // 네이티브 STT 푸시 수신 (OmniAI._stt)
 
     this.els.liveBtn.addEventListener("click", () => this.toggleLive());
+    this.els.alwaysBtn = document.getElementById("ai-always");
+    this.els.enrollBtn = document.getElementById("ai-enroll");
+    this.els.voiceId = document.getElementById("ai-voiceid");
+    this.els.alwaysBtn.addEventListener("click", () => this.toggleAlways());
+    this.els.enrollBtn.addEventListener("click", () => this.enrollVoice());
+    if (OmniNative.available) {
+      this.updateVoiceId();
+      // 상시 대기가 켜져 있었으면 앱 시작 시 자동 복귀
+      if (localStorage.getItem("omni.ai.always") === "1") {
+        setTimeout(() => { if (!this.alwaysOn) this.toggleAlways(); }, 4000);
+      }
+    }
     this.els.send.addEventListener("click", () => this.sendFromInput());
     this.els.text.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.isComposing) this.sendFromInput();
@@ -1504,6 +1529,18 @@ OmniOS.register("ai", {
         return { ok: true, msg: `오미니아 호출${q && sub !== "open" ? " · 질문 전달" : ""}` };
       }
 
+      // ── 상시 대기 토글 (안경 브리지·태그용) ──
+      if (key === "ai.enroll") {
+        await this.enrollVoice();
+        return { ok: true, msg: "목소리 등록 시작" };
+      }
+      if (key === "ai.always") {
+        const want = (parts[1] || "on").toLowerCase() !== "off";
+        if (want && !this.alwaysOn) await this.toggleAlways();
+        else if (!want && this.alwaysOn) this.stopAlways("요청");
+        return { ok: true, msg: `상시 대기: ${this.alwaysOn ? "ON" : "OFF"}` };
+      }
+
       // ── 언어 모드 AUTO 전환 (언어 잠금 상태에서 옴니가 스스로 호출) ──
       if (key === "lang.auto") {
         this.lang = "auto";
@@ -2081,8 +2118,19 @@ OmniOS.register("ai", {
     this.setInd(this.els.indStt, "MARIN", "ok");
     this.setInd(this.els.indTts, "LIVE", "ok");
     this.rtSessionUpdate();
-    await this.wireMic();
-    this.logLine("sys", "LIVE 세션 시작 — 그냥 말씀하세요. (다시 누르면 종료)");
+    if (this.alwaysOn) {
+      this.ensureCtx(); // 재생용 오디오 컨텍스트만 — 마이크는 사이드카가 소유
+    } else {
+      await this.wireMic();
+      this.logLine("sys", "LIVE 세션 시작 — 그냥 말씀하세요. (다시 누르면 종료)");
+    }
+  },
+
+  ensureCtx() {
+    if (this._rtCtx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    try { this._rtCtx = new AC({ sampleRate: 24000 }); } catch (e) { this._rtCtx = new AC(); }
+    if (this._rtCtx.state === "suspended") this._rtCtx.resume();
   },
 
   rtSessionUpdate() {
@@ -2097,6 +2145,7 @@ OmniOS.register("ai", {
       + "- 패널 열기 → open_panel. 앱 심층 동작(에디터·노트·파일 열기, 상태 변경, 스캔, 워처) → app_action.\n"
       + "- 조사·분석·코드·파일 내용 확인/수정 → ask_brain (Claude가 파일 도구로 실제 수행, 수 초 소요). 호출 전에 \"확인하겠습니다\" 같은 짧은 예고를 말해도 좋습니다.\n"
       + "- 인사·잡담·간단 지식은 도구 없이 바로 대답합니다.\n"
+      + (this.alwaysOn ? "- 상시 대기 모드: 사용자는 \"옴니야\"처럼 이름을 불러 말을 겁니다. 호출어는 되풀이하지 말고 본론에만 답합니다. 들리는 발화는 이미 사용자 본인이 옴니에게 한 말로 확인된 것입니다.\n" : "")
       + `- 언어 규칙: ${this.langDirective()}\n`
       + "- 다국어 발음 규칙 (매우 중요): 어떤 언어를 말하든 반드시 그 언어의 원어민 발음과 억양으로 발화합니다. 한 응답 안에서 여러 언어를 오갈 때는 언어 전환 지점마다 아주 짧게 멈춘 뒤 완전히 새 언어의 원어민 모드로 전환합니다 — 직전 언어(특히 한국어)의 억양·리듬을 절대 다음 언어로 끌고 가지 않습니다. 프랑스어는 프랑스인처럼, 힌디어는 인도인처럼, 각 구간을 독립적으로 발음합니다. 여러 언어 시연을 요청받으면 언어당 한 문장으로 짧게 말합니다.\n\n"
       + `[장기 메모리 — 이전 세션 축적]\n${this._memory || "(비어 있음)"}`;
@@ -2110,8 +2159,11 @@ OmniOS.register("ai", {
         audio: {
           input: {
             format: { type: "audio/pcm", rate: 24000 },
-            transcription: { model: "whisper-1" },
-            turn_detection: {
+            transcription: {
+              model: "gpt-4o-transcribe",
+              prompt: "OMNI_OS의 AI 비서 이름은 '옴니'. 사용자는 '옴니야', '옴니' 하고 부른다. 한국어 대화, 숫자는 아라비아 숫자.",
+            },
+            turn_detection: this.alwaysOn ? null : {
               type: "server_vad",
               threshold: 0.75,
               prefix_padding_ms: 300,
@@ -2179,6 +2231,7 @@ OmniOS.register("ai", {
   },
 
   stopLive(reason) {
+    if (this.alwaysOn) this.stopAlways(reason, true);
     this.live = false;
     try {
       if (this._rtProc) this._rtProc.disconnect();
@@ -2254,6 +2307,7 @@ OmniOS.register("ai", {
       if (!this._rtUserLine) this._rtUserLine = this.logLine("you", "…", true);
     } else if (t === "conversation.item.input_audio_transcription.completed") {
       const text = (ev.transcript || "").trim();
+      if (this.alwaysOn) { this.gateDecide(ev.item_id, text); return; }
       if (this._rtUserLine) {
         if (text) {
           this._rtUserLine.querySelector(".txt").textContent = text;
@@ -2268,7 +2322,20 @@ OmniOS.register("ai", {
         this.trimHistory();
       }
     } else if (t === "response.output_audio.delta" || t === "response.audio.delta") {
+      if (this.alwaysOn && !this._gateMuted) this.gateMute(true); // 옴니 발화 중 마이크 무시
       this.rtPlayDelta(ev.delta);
+    } else if (t === "response.done") {
+      if (this.alwaysOn) {
+        // 재생이 끝나는 시점에 뮤트 해제 + 대화 이어가기 창 시작
+        const ctxNow = this._rtCtx ? this._rtCtx.currentTime : 0;
+        const wait = Math.max(0, ((this._rtPlayTime || 0) - ctxNow) * 1000) + 250;
+        clearTimeout(this._unmuteTimer);
+        this._unmuteTimer = setTimeout(() => {
+          this._lastOmniDoneAt = Date.now();
+          this.gateMute(false);
+          this.gateNote("옴니 발화 종료 → 청취 재개 (이어가기 창 8초)");
+        }, wait);
+      }
     } else if (t === "response.output_audio_transcript.delta"
       || t === "response.audio_transcript.delta") {
       if (!this._rtOmniLine) {
@@ -2305,6 +2372,196 @@ OmniOS.register("ai", {
     } else if (t === "error") {
       this.logLine("sys", `LIVE 오류: ${(ev.error && ev.error.message) || ""}`);
     }
+  },
+
+  // ================= 상시 대기(ALWAYS) =================
+  async toggleAlways() {
+    if (this.alwaysOn) { this.stopAlways("종료"); return; }
+    if (!OmniNative.available) {
+      this.logLine("sys", "상시 대기는 앱에서만 동작합니다.");
+      return;
+    }
+    const st = await OmniNative.request("ai.gateStatus", null, 5000).catch(() => null);
+    if (!st || !st.profile) {
+      this.logLine("sys", "내 목소리가 등록되어 있지 않습니다 — 오른쪽 VOICE ID > ENROLL로 먼저 등록하십시오. (등록 없이도 켤 수 있지만 다른 사람 목소리를 구분하지 못합니다)");
+    }
+    const g = await OmniNative.request("ai.gateStart", null, 15000).catch(() => null);
+    if (!g || !g.ok) {
+      this.logLine("sys", (g && g.error) === "NO_GATE_ENV"
+        ? "음성 게이트 환경이 없습니다 (voice_engine/venv + scripts/omni_gate.py)."
+        : `음성 게이트 시작 실패: ${(g && g.error) || "unknown"}`);
+      return;
+    }
+    this.alwaysOn = true;
+    this._gateRunning = true;
+    localStorage.setItem("omni.ai.always", "1");
+    this.els.alwaysBtn.classList.add("always");
+    if (!this.live) {
+      await this.toggleLive();
+      if (!this.live) { this.stopAlways("세션 실패", true); return; }
+    } else {
+      // 이미 LIVE(서버 VAD) 중이었으면 마이크를 사이드카로 넘기고 수동 턴으로 전환
+      try { if (this._rtProc) this._rtProc.disconnect(); if (this._rtSrcNode) this._rtSrcNode.disconnect(); } catch (e) { /* */ }
+      if (this._rtStream) { this._rtStream.getTracks().forEach((t) => t.stop()); this._rtStream = null; }
+      this.rtSessionUpdate();
+    }
+    this.setState("listening", "ALWAYS", "on");
+    this.setInd(this.els.indTts, "ALWAYS", "ok");
+    this.logLine("sys", "상시 대기 ON — 등록된 내 목소리로 \"옴니야 …\" 하고 부를 때만 답합니다. 답한 뒤 8초 안의 말은 이어지는 대화로 봅니다.");
+    this.gateNote("상시 대기 시작");
+  },
+
+  stopAlways(reason, fromStopLive) {
+    if (!this.alwaysOn) return;
+    this.alwaysOn = false;
+    this._gateRunning = false;
+    localStorage.removeItem("omni.ai.always");
+    clearTimeout(this._unmuteTimer);
+    this.els.alwaysBtn.classList.remove("always");
+    OmniNative.request("ai.gateStop", null, 5000).catch(() => {});
+    this.gateNote(`상시 대기 종료 (${reason})`);
+    if (!fromStopLive && this.live) this.stopLive(reason);
+  },
+
+  gateCmd(obj) {
+    OmniNative.request("ai.gateCmd", JSON.stringify(obj), 5000).catch(() => {});
+  },
+
+  gateMute(on) {
+    this._gateMuted = !!on;
+    this.gateCmd({ cmd: "mute", on: !!on });
+  },
+
+  gateNote(text) {
+    OmniNative.request("ai.gateNote", JSON.stringify({ text }), 5000).catch(() => {});
+  },
+
+  // 사이드카 이벤트 (네이티브가 푸시)
+  _gate(ev) {
+    if (!ev || typeof ev !== "object") return;
+    const e = ev.ev;
+    if (e === "ready") {
+      this._gateProfile = !!ev.profile;
+      this.updateVoiceId();
+      this.setInd(this.els.indStt, ev.profile ? "VOICE ID" : "NO PROFILE", ev.profile ? "ok" : "err");
+      this.logLine("sys", `음성 게이트 준비 · 화자 인증 ${ev.profile ? `ON (임계 ${ev.threshold})` : "OFF — 목소리 미등록"}`);
+      this.gateNote(`게이트 준비 profile=${ev.profile} thr=${ev.threshold}`);
+    } else if (e === "speech_start") {
+      this.micLevel = 0.7;
+    } else if (e === "segment") {
+      this.micLevel = 0;
+      if (ev.user) {
+        this.gateNote(`통과 · sim=${ev.sim} dur=${ev.dur} sent=${ev.sent}`);
+        if (this.alwaysOn && !this._rtUserLine) this._rtUserLine = this.logLine("you", "…", true);
+      } else if (ev.why !== "short") {
+        const now = Date.now();
+        if (now - (this._lastIgnoreLogAt || 0) > 4000) {
+          this._lastIgnoreLogAt = now;
+          const l = this.logLine("sys", `무시 · 내 목소리 아님 (유사도 ${ev.sim == null ? "?" : ev.sim})`);
+          l.classList.add("ignored");
+        }
+        this.gateNote(`무시 · 화자 불일치 sim=${ev.sim} dur=${ev.dur}`);
+      }
+    } else if (e === "enroll") {
+      this.els.voiceId.textContent = `RECORDING ${Math.round((ev.progress || 0) * 100)}% · ${ev.segments || 0} SEG`;
+      this.els.voiceId.className = "ai-voiceid rec";
+    } else if (e === "enrolled") {
+      this._gateProfile = true;
+      this.els.voiceId.textContent = `ENROLLED · SELF ${ev.self_sim} · THR ${ev.threshold}`;
+      this.els.voiceId.className = "ai-voiceid ok";
+      this.logLine("sys", `목소리 등록 완료 — 세그먼트 ${ev.segments}개, 자기 유사도 ${ev.self_sim}, 임계 ${ev.threshold}`);
+      this.gateNote(`등록 완료 seg=${ev.segments} self=${ev.self_sim} thr=${ev.threshold}`);
+      this.setInd(this.els.indStt, "VOICE ID", "ok");
+      if (this._enrollOnly) { this._enrollOnly = false; OmniNative.request("ai.gateStop", null, 5000).catch(() => {}); }
+    } else if (e === "enroll_failed") {
+      this.els.voiceId.textContent = "ENROLL FAILED";
+      this.els.voiceId.className = "ai-voiceid";
+      this.logLine("sys", `목소리 등록 실패 — ${ev.text || ""}`);
+      if (this._enrollOnly) { this._enrollOnly = false; OmniNative.request("ai.gateStop", null, 5000).catch(() => {}); }
+    } else if (e === "exit") {
+      if (this.alwaysOn) {
+        this.logLine("sys", "음성 게이트가 종료되어 상시 대기를 끕니다.");
+        this.stopAlways("게이트 종료");
+      }
+    }
+  },
+
+  // 3단 게이트: 이 발화가 옴니에게 한 말인가 (순수 판정 — 분류기 필요 여부 반환)
+  addressReason(text, followUp) {
+    if (this.WAKE_RE.test(text)) return { addressed: true, reason: "호출어" };
+    if (followUp) return { addressed: null, reason: "이어지는 대화?" };
+    return { addressed: false, reason: "호출어 없음" };
+  },
+
+  async gateDecide(itemId, text) {
+    const line = this._rtUserLine;
+    this._rtUserLine = null;
+    if (!text) {
+      if (line) line.remove();
+      if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId });
+      return;
+    }
+    const followUp = Date.now() - this._lastOmniDoneAt < this.FOLLOWUP_MS;
+    let { addressed, reason } = this.addressReason(text, followUp);
+    if (addressed === null) {
+      const yes = await this.classifyAddressed(text);
+      addressed = yes;
+      reason = yes ? "이어지는 대화" : "이어지는 대화 아님";
+    }
+    if (addressed) {
+      if (line) { line.querySelector(".txt").textContent = text; line.classList.remove("pending"); }
+      else this.logLine("you", text);
+      this.history.push({ role: "user", content: text });
+      this.trimHistory();
+      this.rtSend({ type: "response.create" });
+      this.gateNote(`응답 · ${reason}: ${text}`);
+      if (reason === "호출어") this.gateCmd({ cmd: "adapt" }); // 본인 확실 → 프로필 적응
+    } else {
+      if (line) {
+        line.querySelector(".txt").textContent = `(무시 · ${reason}) ${text}`;
+        line.classList.remove("pending");
+        line.classList.add("ignored");
+      }
+      if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId });
+      this.gateNote(`무시 · ${reason}: ${text}`);
+    }
+  },
+
+  // 대화 이어가기 창 안의 호출어 없는 발화 — Haiku가 "옴니에게 이어서 하는 말"인지 판정
+  async classifyAddressed(text) {
+    const lastOmni = [...this.history].reverse().find((m) => m.role === "assistant");
+    try {
+      const r = await OmniNative.request("ai.chat", JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        maxTokens: 5,
+        system: "당신은 음성 비서 '옴니'의 발화 게이트입니다. 사용자는 몇 초 전 옴니의 답을 들었습니다. 지금 들린 발화가 옴니에게 이어서 하는 말(질문·요청·응답·확인·감사)이면 YES, 다른 사람에게 하는 말·혼잣말·TV/영상 소리·무관한 잡담이면 NO. 반드시 YES 또는 NO 한 단어만 출력합니다.",
+        messages: [{ role: "user", content: `[옴니의 직전 답] ${lastOmni ? lastOmni.content.slice(0, 300) : "(없음)"}
+[지금 들린 발화] ${text}` }],
+      }), 15000);
+      const out = (r && r.ok && r.content ? r.content.map((b) => b.text || "").join("") : (r && r.text) || "").trim().toUpperCase();
+      return out.startsWith("YES");
+    } catch (e) {
+      return false; // 판정 불가 → 안전하게 무시
+    }
+  },
+
+  async updateVoiceId() {
+    const st = await OmniNative.request("ai.gateStatus", null, 5000).catch(() => null);
+    this._gateProfile = !!(st && st.profile);
+    this.els.voiceId.textContent = this._gateProfile ? "ENROLLED" : "NOT ENROLLED";
+    this.els.voiceId.className = `ai-voiceid${this._gateProfile ? " ok" : ""}`;
+  },
+
+  async enrollVoice() {
+    if (!OmniNative.available) { this.logLine("sys", "앱에서만 가능합니다."); return; }
+    if (!this._gateRunning) {
+      const g = await OmniNative.request("ai.gateStart", null, 15000).catch(() => null);
+      if (!g || !g.ok) { this.logLine("sys", "음성 게이트를 시작하지 못했습니다."); return; }
+      this._enrollOnly = !this.alwaysOn;
+      await new Promise((res) => setTimeout(res, 2500)); // 모델 로드 대기
+    }
+    this.logLine("sys", "목소리 등록 — 15초 동안 평소 톤으로 여러 문장을 말해 주세요. 예: \"옴니야 오늘 날씨 어때. 내일 일정 알려줘. 카톡 온 거 있어? 노트 패널 열어줘.\"");
+    this.gateCmd({ cmd: "enroll", seconds: 15 });
   },
 
   async handleRtTool(callId, name, args) {

@@ -4009,3 +4009,11 @@ input.vc-name {
 .cl-ev .cal { font-size: 8px; letter-spacing: 1.5px; color: var(--text-dim); white-space: nowrap; }
 .cl-ev .rm { background: none; border: none; color: rgba(111, 168, 201, 0.4); cursor: pointer; font-size: 11px; margin-left: 6px; }
 .cl-ev .rm:hover { color: var(--alert); }
+
+/* ---------- 상시 대기 / VOICE ID ---------- */
+.ai-line.ignored { opacity: 0.42; }
+.ai-line.ignored .txt { font-style: italic; }
+.ai-voiceid { font-size: 8.5px; letter-spacing: 1.5px; color: var(--text-dim); padding: 2px 0 8px; }
+.ai-voiceid.ok { color: var(--ok); }
+.ai-voiceid.rec { color: var(--warn); }
+.ai-listen.always { border-color: var(--ok); color: var(--ok); box-shadow: 0 0 14px rgba(61, 255, 168, 0.35); }

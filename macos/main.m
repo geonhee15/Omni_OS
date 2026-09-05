@@ -209,6 +209,9 @@ static NSString *ArcSavesDir(void) {
 // 오미니아 — 로컬 LLM(Ollama) 스트리밍 세션
 @property (strong) NSURLSession *omniaSession;
 @property (strong) EKEventStore *eventStore;
+@property (strong) NSTask *gateTask;          // 음성 게이트 사이드카 (scripts/omni_gate.py)
+@property (strong) NSFileHandle *gateIn;
+@property (strong) NSMutableData *gateBuf;
 @property (strong) NSNumber *omniaTurn;
 @property (strong) NSMutableString *omniaBuf;
 // OMNI_AI 외국어 음색 데몬 (seed_serve.py — Seed-VC 상주)
@@ -311,6 +314,7 @@ static NSString *ArcSavesDir(void) {
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self gateStop];
     if (self.voiceLiveTask != nil) [self.voiceLiveTask terminate];
     if (self.aiTtsTask != nil) [self.aiTtsTask terminate];
     if (self.aiSeedTask != nil) [self.aiSeedTask terminate];
@@ -1929,6 +1933,155 @@ static NSString *OmniAIFsValidate(NSString *path) {
     }
 }
 
+#pragma mark - VOICE GATE (상시 대기 — 사용자 목소리만 통과시키는 사이드카)
+
+- (void)gateStop {
+    if (self.gateTask != nil) {
+        @try { [self.gateTask terminate]; } @catch (NSException *e) { (void)e; }
+    }
+    self.gateTask = nil;
+    self.gateIn = nil;
+}
+
+- (void)gatePushToJS:(NSDictionary *)ev {
+    NSData *safe = [NSJSONSerialization dataWithJSONObject:ev options:0 error:nil];
+    NSString *json = safe ? [[NSString alloc] initWithData:safe encoding:NSUTF8StringEncoding] : nil;
+    if (json == nil) return;
+    NSString *js = [NSString stringWithFormat:@"window.OmniAI && OmniAI._gate(%@)", json];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.webView evaluateJavaScript:js completionHandler:nil];
+    });
+}
+
+// 사이드카 stdout 버퍼에서 완성된 줄을 꺼내 처리한다. 통과한 발화(pcm24)는
+// JS를 거치지 않고 바로 리얼타임 WSS로 append+commit (대용량 base64 왕복 회피).
+- (void)gateDrainLines {
+    NSArray *lines = nil;
+    @synchronized(self) {
+        NSData *buf = self.gateBuf;
+        if (buf == nil) return;
+        NSString *str = [[NSString alloc] initWithData:buf encoding:NSUTF8StringEncoding];
+        if (str == nil) return;
+        NSRange last = [str rangeOfString:@"\n" options:NSBackwardsSearch];
+        if (last.location == NSNotFound) return;
+        NSString *complete = [str substringToIndex:last.location];
+        NSString *rest = [str substringFromIndex:last.location + 1];
+        self.gateBuf = [[rest dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+        lines = [complete componentsSeparatedByString:@"\n"];
+    }
+    for (NSString *ln in lines) {
+        if (ln.length == 0) continue;
+        NSData *d = [ln dataUsingEncoding:NSUTF8StringEncoding];
+        id parsed = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+        if (![parsed isKindOfClass:[NSDictionary class]]) continue;
+        NSMutableDictionary *ev = [parsed mutableCopy];
+        NSString *pcm = [ev[@"pcm24"] isKindOfClass:[NSString class]] ? ev[@"pcm24"] : nil;
+        if (pcm != nil) {
+            [ev removeObjectForKey:@"pcm24"];
+            NSURLSessionWebSocketTask *task = self.aiRtTask;
+            if (task != nil && [ev[@"user"] boolValue]) {
+                NSDictionary *append = @{ @"type" : @"input_audio_buffer.append", @"audio" : pcm };
+                NSData *aj = [NSJSONSerialization dataWithJSONObject:append options:0 error:nil];
+                NSString *as = [[NSString alloc] initWithData:aj encoding:NSUTF8StringEncoding];
+                [task sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithString:as]
+                completionHandler:^(NSError *e) { (void)e; }];
+                [task sendMessage:[[NSURLSessionWebSocketMessage alloc]
+                    initWithString:@"{\"type\":\"input_audio_buffer.commit\"}"]
+                completionHandler:^(NSError *e) { (void)e; }];
+                ev[@"sent"] = @YES;
+            } else {
+                ev[@"sent"] = @NO;
+            }
+        }
+        [self gatePushToJS:ev];
+    }
+}
+
+- (void)handleGate:(NSString *)cmd a:(NSDictionary *)a arg:(NSString *)arg msgId:(NSString *)msgId {
+    if ([cmd isEqualToString:@"ai.gateStart"]) {
+        [self gateStop];
+        NSString *py = [OmniBaseDir() stringByAppendingPathComponent:@"voice_engine/venv/bin/python"];
+        NSString *script = [OmniBaseDir() stringByAppendingPathComponent:@"scripts/omni_gate.py"];
+        if (![NSFileManager.defaultManager fileExistsAtPath:py]
+            || ![NSFileManager.defaultManager fileExistsAtPath:script]) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NO_GATE_ENV" } forId:msgId];
+            return;
+        }
+        NSTask *task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:py];
+        task.arguments = @[ script, @"run" ];
+        task.currentDirectoryURL = [NSURL fileURLWithPath:OmniBaseDir()];
+        NSPipe *outPipe = [NSPipe pipe], *inPipe = [NSPipe pipe], *errPipe = [NSPipe pipe];
+        task.standardOutput = outPipe;
+        task.standardInput = inPipe;
+        task.standardError = errPipe;
+        self.gateBuf = [NSMutableData data];
+        __weak AppDelegate *weakSelf = self;
+        outPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+            NSData *d = fh.availableData;
+            AppDelegate *s = weakSelf;
+            if (s == nil || d.length == 0) return;
+            @synchronized(s) { [s.gateBuf appendData:d]; }
+            [s gateDrainLines];
+        };
+        errPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fh) {
+            (void)fh.availableData; // 토치 경고 등 — 버림
+        };
+        task.terminationHandler = ^(NSTask *t) {
+            AppDelegate *s = weakSelf;
+            if (s == nil || s.gateTask != t) return;
+            s.gateTask = nil;
+            [s gatePushToJS:@{ @"ev" : @"exit", @"status" : @(t.terminationStatus) }];
+        };
+        NSError *err = nil;
+        if (![task launchAndReturnError:&err]) {
+            [self deliverPayload:@{ @"ok" : @NO,
+                @"error" : err.localizedDescription ?: @"launch" } forId:msgId];
+            return;
+        }
+        self.gateTask = task;
+        self.gateIn = inPipe.fileHandleForWriting;
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.gateCmd"]) {
+        if (self.gateIn == nil || arg == nil) {
+            [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
+            return;
+        }
+        NSData *d = [[arg stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
+        @try { [self.gateIn writeData:d]; } @catch (NSException *e) { (void)e; }
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.gateStop"]) {
+        [self gateStop];
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.gateStatus"]) {
+        NSString *profile = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/voice_profile.json"];
+        [self deliverPayload:@{ @"ok" : @YES,
+                                @"running" : @(self.gateTask != nil && self.gateTask.isRunning),
+                                @"profile" : @([NSFileManager.defaultManager fileExistsAtPath:profile]) }
+                       forId:msgId];
+
+    } else if ([cmd isEqualToString:@"ai.gateNote"]) {
+        // 게이트 판정 로그 (~/.omni/gate.log) — 진단·검증용
+        NSString *text = [a[@"text"] isKindOfClass:[NSString class]] ? a[@"text"] : @"";
+        NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/gate.log"];
+        NSDateFormatter *df = [[NSDateFormatter alloc] init];
+        df.dateFormat = @"HH:mm:ss";
+        NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [df stringFromDate:NSDate.date], text];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (fh == nil) {
+            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        } else {
+            [fh seekToEndOfFile];
+            [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            [fh closeFile];
+        }
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    }
+}
+
 #pragma mark - CALENDAR (EventKit — 맥 캘린더 직접 읽기/쓰기)
 
 // 맥 캘린더 앱에 들어온 모든 캘린더(iCloud·구글 등 인터넷 계정 구독 포함)를
@@ -2106,6 +2259,10 @@ static NSString *OmniAIFsValidate(NSString *path) {
         if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
     }
 
+    if ([cmd hasPrefix:@"ai.gate"]) {
+        [self handleGate:cmd a:a arg:arg msgId:msgId];
+        return;
+    }
     if ([cmd isEqualToString:@"ai.status"]) {
         NSString *gmailKey = [NSHomeDirectory()
             stringByAppendingPathComponent:@".omni/gmail.key"];

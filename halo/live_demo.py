@@ -14,7 +14,10 @@ import base64
 import json
 import os
 import queue
+import re
 import ssl
+import struct
+import subprocess
 import sys
 import threading
 import time
@@ -36,6 +39,15 @@ import omni_calc  # noqa: E402 — 앱과 같은 정확 계산기
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.expanduser("~/.omni/openai.key")).read().strip()
 RT_MODEL = "gpt-realtime-2.1"
+
+# ---- 음성 게이트 (앱과 동일: 사람 말 → 내 목소리 → 옴니에게 한 말) ----
+REPO = os.path.dirname(HERE)
+GATE_PY = os.path.join(REPO, "voice_engine/venv/bin/python")
+GATE_SCRIPT = os.path.join(REPO, "scripts/omni_gate.py")
+USE_GATE = os.path.exists(GATE_PY) and os.path.exists(GATE_SCRIPT) \
+    and "--no-gate" not in sys.argv
+WAKE_RE = re.compile(r"(옴니|omni|오므니|옴늬|옴미|^\s*(엄니|음니|오니|옴니)\s*[야아,]?)", re.I)
+FOLLOWUP_SEC = 8.0
 URL = f"wss://api.openai.com/v1/realtime?model={RT_MODEL}"
 
 PANELS = ("cmd", "ai", "notif", "clock", "proj", "sys", "sp1", "r3d",
@@ -257,8 +269,11 @@ async def bridge():
                 "audio": {
                     "input": {
                         "format": {"type": "audio/pcm", "rate": 24000},
-                        "transcription": {"model": "whisper-1"},
-                        "turn_detection": {
+                        "transcription": {
+                            "model": "gpt-4o-transcribe",
+                            "prompt": "OMNI_OS의 AI 비서 이름은 '옴니'. 사용자는 '옴니야', '옴니' 하고 부른다. 한국어 대화, 숫자는 아라비아 숫자.",
+                        },
+                        "turn_detection": None if USE_GATE else {
                             "type": "server_vad", "threshold": 0.7,
                             "prefix_padding_ms": 300, "silence_duration_ms": 600,
                             "create_response": True,
@@ -271,6 +286,39 @@ async def bridge():
         }))
 
         cur_status = [""]
+
+        # ---- 게이트 사이드카 (파이프 모드) ----
+        gate_proc = None
+        gate_q: "asyncio.Queue[dict]" = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        gate_state = {"last_done": 0.0, "muted": False, "last_omni": ""}
+
+        def gate_write(payload: bytes):
+            if gate_proc is None or gate_proc.stdin is None:
+                return
+            try:
+                gate_proc.stdin.write(struct.pack("<I", len(payload)) + payload)
+                gate_proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass
+
+        def gate_cmd(obj: dict):
+            gate_write(json.dumps(obj).encode())
+
+        if USE_GATE:
+            gate_proc = subprocess.Popen(
+                [GATE_PY, GATE_SCRIPT, "pipe"], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=REPO)
+
+            def gate_reader():
+                for line in gate_proc.stdout:
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    loop.call_soon_threadsafe(gate_q.put_nowait, ev)
+            threading.Thread(target=gate_reader, daemon=True).start()
+            print("음성 게이트: 사이드카 기동 (내 목소리 + 호출어만 통과)")
 
         def set_status(st: str):
             if st != cur_status[0]:
@@ -291,6 +339,9 @@ async def bridge():
             while running:
                 for pkt in emu.get_bluetooth_sent():
                     if pkt[:1] == b"\x20":
+                        if USE_GATE:
+                            gate_write(pkt[1:])      # 16k PCM → 사이드카 판정
+                            continue
                         pcm24 = resample(
                             np.frombuffer(pkt[1:], dtype=np.int16), 16000, 24000)
                         await ws.send(json.dumps({
@@ -308,6 +359,28 @@ async def bridge():
                         await ws.send(json.dumps({"type": "response.create"}))
                 emu.clear_bluetooth_sent()
                 await asyncio.sleep(0.04)
+
+        async def gate_events():
+            """사이드카 판정: 내 목소리 발화만 세션에 append+commit."""
+            while running:
+                ev = await gate_q.get()
+                e = ev.get("ev")
+                if e == "ready":
+                    print(f"게이트 준비 · 화자 인증 {'ON' if ev.get('profile') else 'OFF(미등록)'} thr={ev.get('threshold')}")
+                elif e == "speech_start":
+                    set_status("HEARING")
+                elif e == "segment":
+                    if ev.get("user") and ev.get("pcm24"):
+                        await ws.send(json.dumps({"type": "input_audio_buffer.append",
+                                                  "audio": ev["pcm24"]}))
+                        await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                        set_status("THINKING")
+                    else:
+                        if ev.get("why") != "short":
+                            print(f"무시 · 내 목소리 아님 (sim={ev.get('sim')})")
+                        set_status("LISTENING")
+                elif e == "exit":
+                    print("게이트 종료됨")
 
         banner_seq = [0]
 
@@ -382,6 +455,33 @@ async def bridge():
                 elif t == "conversation.item.input_audio_transcription.completed":
                     # 사용자 발화는 화면에 띄우지 않음 (로그 + 앱 릴레이만)
                     ut = ev.get("transcript", "").strip()
+                    if USE_GATE:
+                        # 3단: 옴니에게 한 말인가 — 호출어 / 이어가기 창(분류기)
+                        item_id = ev.get("item_id")
+                        follow = time.time() - gate_state["last_done"] < FOLLOWUP_SEC
+                        if not ut:
+                            addressed, why = False, "빈 전사"
+                        elif WAKE_RE.search(ut):
+                            addressed, why = True, "호출어"
+                        elif follow:
+                            addressed = await asyncio.to_thread(
+                                link.classify_addressed, ut, gate_state["last_omni"])
+                            why = "이어지는 대화" if addressed else "이어지는 대화 아님"
+                        else:
+                            addressed, why = False, "호출어 없음"
+                        if addressed:
+                            print(f"YOU ({why}):", ut)
+                            link.mailbox_push({"type": "transcript", "who": "you", "text": ut})
+                            await ws.send(json.dumps({"type": "response.create"}))
+                            if why == "호출어":
+                                gate_cmd({"cmd": "adapt"})
+                        else:
+                            print(f"무시 ({why}):", ut)
+                            set_status("LISTENING")
+                            if item_id:
+                                await ws.send(json.dumps({"type": "conversation.item.delete",
+                                                          "item_id": item_id}))
+                        continue
                     print("YOU :", ut)
                     if ut:
                         link.mailbox_push({"type": "transcript",
@@ -404,6 +504,9 @@ async def bridge():
                     await ws.send(json.dumps({"type": "response.create"}))
                 elif t in ("response.output_audio.delta", "response.audio.delta"):
                     set_status("SPEAKING")
+                    if USE_GATE and not gate_state["muted"]:
+                        gate_state["muted"] = True
+                        gate_cmd({"cmd": "mute", "on": True})
                     chunk = base64.b64decode(ev.get("delta", ""))
                     speaker_q.put(chunk)
                     pcm16 = resample(
@@ -422,6 +525,7 @@ async def bridge():
                 elif t in ("response.output_audio_transcript.done",
                            "response.audio_transcript.done"):
                     ft = ev.get("transcript", "") or omni_txt
+                    gate_state["last_omni"] = ft
                     print("OMNI:", ft)
                     emu.inject_bluetooth_data(caption_packet(ft))
                     if ft.strip():
@@ -431,13 +535,29 @@ async def bridge():
                 elif t == "response.done":
                     speaking_until += 0.5
                     set_status("LISTENING")
+                    if USE_GATE:
+                        async def unmute_after_playback():
+                            while time.time() < speaking_until and running:
+                                await asyncio.sleep(0.1)
+                            gate_state["muted"] = False
+                            gate_state["last_done"] = time.time()
+                            gate_cmd({"cmd": "mute", "on": False})
+                        asyncio.ensure_future(unmute_after_playback())
                 elif t == "error":
                     print("RT ERROR:", ev.get("error"))
 
         try:
-            await asyncio.gather(glasses_to_ws(), ws_events(), notif_watch())
+            tasks = [glasses_to_ws(), ws_events(), notif_watch()]
+            if USE_GATE:
+                tasks.append(gate_events())
+            await asyncio.gather(*tasks)
         finally:
             mic.stop()
+            if gate_proc is not None:
+                try:
+                    gate_proc.terminate()
+                except OSError:
+                    pass
 
 
 def main():

@@ -198,6 +198,7 @@
             <div class="ai-hint">LIVE를 누르면 음성 대화, 아래 입력창은 텍스트 대화입니다.</div>
           </div>
           <div class="ai-input-row">
+            <button class="ai-listen" id="ai-always" title="상시 대기 — 등록된 내 목소리로 '옴니야' 하고 부를 때만 응답"><span>&#9673;</span><span>ALWAYS</span></button>
             <button class="ai-listen" id="ai-live"><span>&#9678;</span><span>LIVE</span></button>
             <input class="ai-text" id="ai-text" placeholder="명령 입력..." autocomplete="off" spellcheck="false">
             <button class="ai-sendbtn" id="ai-send">&#9655;</button>
@@ -210,6 +211,11 @@
             <div class="ai-ind"><span>LLM</span><span id="ai-ind-llm">--</span></div>
             <div class="ai-ind"><span>MODE</span><span id="ai-ind-tts">--</span></div>
           </div>
+          <div class="ai-side-h">VOICE ID</div>
+          <div class="ai-modelrow">
+            <button class="ai-model" id="ai-enroll" title="15초 동안 평소처럼 말해 내 목소리를 등록">ENROLL</button>
+          </div>
+          <div class="ai-voiceid" id="ai-voiceid">NOT ENROLLED</div>
           <div class="ai-side-h">LANG</div>
           <div class="ai-modelrow ai-langrow">
             <button class="ai-model ai-lang active" data-lang="auto">AUTO</button>
@@ -1323,7 +1329,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.64.0</span>
+      <span>v0.65.0</span>
     </footer>
   </div>
 
