@@ -71,6 +71,10 @@
         <span class="nav-icon">&#9633;</span>
         <span class="nav-label">CALENDAR</span>
       </button>
+      <button class="nav-item" data-panel="smart">
+        <span class="nav-icon">&#9673;</span>
+        <span class="nav-label">SMART CONTROL</span>
+      </button>
       <button class="nav-item" data-panel="proj">
         <span class="nav-icon">&#10697;</span>
         <span class="nav-label">PROJECTS</span>
@@ -465,6 +469,42 @@
         <div class="nf-body">
           <div class="wx-err" id="cl-err" hidden></div>
           <div class="cl-days" id="cl-days"><div class="nf-empty">LOADING&hellip;</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- panel: SMART CONTROL (Tapo 플러그·전구 로컬 제어) -->
+    <section class="panel panel-smart" id="panel-smart">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">SMART CONTROL</span>
+          <span class="nf-sub" id="sc-sub">&mdash;</span>
+          <span class="ts-spacer"></span>
+          <span class="nf-updated" id="sc-updated"></span>
+          <button class="nf-btn" id="sc-setup-toggle">SETUP</button>
+          <button class="nf-btn" id="sc-scan">SCAN</button>
+          <button class="nf-btn" id="sc-refresh">REFRESH</button>
+        </div>
+        <div class="sc-setup" id="sc-setup" hidden>
+          <div class="sc-steps">
+            <div class="sc-step"><span class="n">1</span>폰에 <b>Tapo</b> 앱을 설치하고 TP-Link ID(이메일·비밀번호)로 가입·로그인</div>
+            <div class="sc-step"><span class="n">2</span>플러그를 콘센트에 꽂고 표시등이 주황·초록으로 깜빡이면 준비 완료 (안 깜빡이면 버튼 5초 눌러 초기화)</div>
+            <div class="sc-step"><span class="n">3</span>Tapo 앱 오른쪽 위 <b>+</b> &rarr; 기기 추가 &rarr; 플러그 &rarr; 안내대로 폰을 잠시 <b>Tapo_Plug_XXXX</b> 와이파이에 연결 &rarr; 집 와이파이(<b>2.4GHz</b>, 이 맥과 같은 공유기) 선택 &rarr; 이름 정하기 (예: 책상 조명)</div>
+            <div class="sc-step"><span class="n">4</span>전등을 플러그에 꽂고 전등 자체 스위치는 <b>켜진 상태</b>로 둔다</div>
+            <div class="sc-step"><span class="n">5</span>아래에 Tapo 계정을 저장하고 <b>SCAN</b>. 맥이 "로컬 네트워크" 권한을 물으면 허용</div>
+          </div>
+          <div class="sc-creds">
+            <input class="wx-search sc-user" id="sc-user" placeholder="Tapo 계정 이메일" autocomplete="off" spellcheck="false">
+            <input class="wx-search sc-pass" id="sc-pass" type="password" placeholder="Tapo 계정 비밀번호" autocomplete="off">
+            <button class="nf-btn" id="sc-save">SAVE ACCOUNT</button>
+            <span class="sc-setup-state" id="sc-setup-state"></span>
+          </div>
+          <div class="sc-note">계정은 이 맥의 ~/.omni/tapo.json 에만 저장되고 플러그와 직접(로컬) 통신하는 데만 쓰입니다. 안 되면: Tapo 앱 &rarr; 나 &rarr; Tapo Lab &rarr; 서드파티 호환 켜기</div>
+        </div>
+        <div class="nf-body">
+          <div class="wx-err" id="sc-err" hidden></div>
+          <div class="sc-hint" id="sc-hint" hidden></div>
+          <div class="sc-grid" id="sc-grid"><div class="nf-empty">LOADING&hellip;</div></div>
         </div>
       </div>
     </section>
@@ -1336,7 +1376,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.73.0</span>
+      <span>v0.74.0</span>
     </footer>
   </div>
 

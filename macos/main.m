@@ -1274,6 +1274,8 @@ static NSString *ArcSavesDir(void) {
         [self handleMem:cmd a:ma msgId:msgId];
     } else if ([cmd hasPrefix:@"cal."]) {
         [self handleCal:cmd arg:arg msgId:msgId];
+    } else if ([cmd hasPrefix:@"smart."]) {
+        [self handleSmart:cmd arg:arg msgId:msgId];
     } else if ([cmd hasPrefix:@"ai."] || [cmd hasPrefix:@"omnia."]) {
         // 오미니아(omnia.*) 명령도 같은 핸들러에서 처리한다 — 접두사가 달라
         // 분기에 도달하지 못하던 문제 수정
@@ -2920,6 +2922,109 @@ static NSAlert *OmniMakeAlert(NSString *message, NSString *okTitle, BOOL cancel)
 // 맥 캘린더 앱에 들어온 모든 캘린더(iCloud·구글 등 인터넷 계정 구독 포함)를
 // EventKit으로 읽고 쓴다. 학교 구글 계정처럼 개발자 API를 못 쓰는 계정도
 // 시스템 설정 > 인터넷 계정에 추가만 하면 여기 잡힌다. 권한: 캘린더 전체 접근.
+// ---- SMART CONTROL: Tapo 플러그·전구 — scripts/omni_smart.py (smart_engine/venv, python-kasa) ----
+// 계정은 사용자가 패널에 직접 입력 → ~/.omni/tapo.json(0600). 기기 캐시 ~/.omni/smart_devices.json.
+
+static NSString *OmniSmartPath(NSString *name) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:[@".omni/" stringByAppendingString:name]];
+}
+
+- (void)handleSmart:(NSString *)cmd arg:(NSString *)arg msgId:(NSString *)msgId {
+    NSDictionary *a = @{};
+    if (arg != nil) {
+        NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+        id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+        if ([parsed isKindOfClass:[NSDictionary class]]) a = parsed;
+    }
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if ([cmd isEqualToString:@"smart.setup"]) {
+        NSString *u = [a[@"username"] isKindOfClass:[NSString class]] ? a[@"username"] : @"";
+        NSString *p = [a[@"password"] isKindOfClass:[NSString class]] ? a[@"password"] : @"";
+        if (u.length == 0 || p.length == 0) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"EMPTY" } forId:msgId];
+            return;
+        }
+        [fm createDirectoryAtPath:OmniSmartPath(@"") withIntermediateDirectories:YES attributes:nil error:nil];
+        NSData *d = [NSJSONSerialization dataWithJSONObject:@{ @"username" : u, @"password" : p } options:0 error:nil];
+        BOOL ok = [d writeToFile:OmniSmartPath(@"tapo.json") options:NSDataWritingAtomic error:nil];
+        [fm setAttributes:@{ NSFilePosixPermissions : @0600 } ofItemAtPath:OmniSmartPath(@"tapo.json") error:nil];
+        [fm removeItemAtPath:OmniSmartPath(@"smart_devices.json") error:nil];   // 계정이 바뀌면 캐시도 새로
+        [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        return;
+    }
+    if ([cmd isEqualToString:@"smart.status"]) {
+        NSData *cd = [NSData dataWithContentsOfFile:OmniSmartPath(@"tapo.json")];
+        NSDictionary *creds = cd ? [NSJSONSerialization JSONObjectWithData:cd options:0 error:nil] : nil;
+        NSString *user = [creds[@"username"] isKindOfClass:[NSString class]] ? creds[@"username"] : @"";
+        NSData *kd = [NSData dataWithContentsOfFile:OmniSmartPath(@"smart_devices.json")];
+        NSDictionary *cache = kd ? [NSJSONSerialization JSONObjectWithData:kd options:0 error:nil] : nil;
+        NSMutableArray *known = [NSMutableArray array];
+        for (NSString *host in [cache isKindOfClass:[NSDictionary class]] ? cache : @{}) {
+            NSDictionary *e = cache[host];
+            [known addObject:@{ @"host" : host, @"alias" : e[@"alias"] ?: @"", @"model" : e[@"model"] ?: @"",
+                                @"type" : e[@"type"] ?: @"" }];
+        }
+        BOOL engine = [fm fileExistsAtPath:[OmniBaseDir() stringByAppendingPathComponent:@"smart_engine/venv/bin/python"]];
+        [self deliverPayload:@{ @"ok" : @YES, @"hasCreds" : @(user.length > 0), @"username" : user,
+                                @"count" : @(known.count), @"known" : known, @"engine" : @(engine) } forId:msgId];
+        return;
+    }
+    // smart.run {cmd, args} → 사이드카 한 번 실행
+    NSString *sub = [a[@"cmd"] isKindOfClass:[NSString class]] ? a[@"cmd"] : @"states";
+    NSString *argsJSON = @"{}";
+    if ([a[@"args"] isKindOfClass:[NSDictionary class]]) {
+        NSData *ad = [NSJSONSerialization dataWithJSONObject:a[@"args"] options:0 error:nil];
+        if (ad) argsJSON = [[NSString alloc] initWithData:ad encoding:NSUTF8StringEncoding];
+    } else if ([a[@"args"] isKindOfClass:[NSString class]]) {
+        argsJSON = a[@"args"];
+    }
+    NSString *py = [OmniBaseDir() stringByAppendingPathComponent:@"smart_engine/venv/bin/python"];
+    NSString *helper = [OmniBaseDir() stringByAppendingPathComponent:@"scripts/omni_smart.py"];
+    if (![fm fileExistsAtPath:py] || ![fm fileExistsAtPath:helper]) {
+        [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NO_ENGINE",
+            @"hint" : @"smart_engine/venv가 없습니다 — 터미널에서 python3 -m venv smart_engine/venv && smart_engine/venv/bin/pip install python-kasa" } forId:msgId];
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSTask *task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:py];
+        task.arguments = @[ helper, sub, argsJSON ];
+        task.currentDirectoryURL = [NSURL fileURLWithPath:OmniBaseDir()];
+        NSPipe *outPipe = [NSPipe pipe];
+        NSPipe *errPipe = [NSPipe pipe];
+        task.standardOutput = outPipe;
+        task.standardError = errPipe;
+        NSError *err = nil;
+        if (![task launchAndReturnError:&err]) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : err.localizedDescription ?: @"launch failed" } forId:msgId];
+            return;
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 40 * NSEC_PER_SEC),
+                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            if (task.isRunning) [task terminate];
+        });
+        NSData *outData = [outPipe.fileHandleForReading readDataToEndOfFile];
+        NSData *errData = [errPipe.fileHandleForReading readDataToEndOfFile];
+        [task waitUntilExit];
+        // 마지막 JSON 줄만 채택 (라이브러리 경고가 앞에 섞여도 무시)
+        NSString *outStr = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding] ?: @"";
+        id parsed = nil;
+        for (NSString *line in [[outStr componentsSeparatedByString:@"\n"] reverseObjectEnumerator]) {
+            if (![line hasPrefix:@"{"]) continue;
+            parsed = [NSJSONSerialization JSONObjectWithData:[line dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+            if (parsed) break;
+        }
+        if (![parsed isKindOfClass:[NSDictionary class]]) {
+            NSString *errStr = [[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding] ?: @"";
+            NSArray *lines = [errStr componentsSeparatedByString:@"\n"];
+            NSString *tail = lines.count ? [[lines subarrayWithRange:NSMakeRange(MAX(0, (NSInteger)lines.count - 3), MIN(3, lines.count))] componentsJoinedByString:@" "] : @"";
+            parsed = @{ @"ok" : @NO, @"error" : task.terminationStatus == 15 ? @"TIMEOUT" : @"ENGINE_ERROR",
+                        @"hint" : [tail length] ? [tail substringToIndex:MIN(300, tail.length)] : @"사이드카 출력 없음" };
+        }
+        [self deliverPayload:parsed forId:msgId];
+    });
+}
+
 - (void)handleCal:(NSString *)cmd arg:(NSString *)arg msgId:(NSString *)msgId {
     NSDictionary *a = @{};
     if (arg != nil) {

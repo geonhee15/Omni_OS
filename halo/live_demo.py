@@ -71,7 +71,7 @@ URL = f"wss://api.openai.com/v1/realtime?model={RT_MODEL}"
 
 PANELS = ("cmd", "ai", "notif", "clock", "proj", "sys", "sp1", "r3d",
           "ino", "ce", "notes", "voice", "arc", "weather", "news", "map",
-          "markets", "calendar")
+          "markets", "calendar", "smart")
 
 
 def build_instructions() -> str:
@@ -85,7 +85,9 @@ def build_instructions() -> str:
         "요약해 말합니다. 맥의 옴니 앱 패널을 열거나 조작해 달라는 요청은 "
         "app_action을 사용합니다. 날씨는 check_weather, 뉴스는 check_news, "
         "환율·주식은 check_markets, 일정은 check_calendar, 일정 추가는 "
-        "add_event를 씁니다. 숫자 계산은 아무리 작아도 암산하지 말고 "
+        "add_event를 씁니다. 집 조명·플러그는 check_smart(상태)와 "
+        "app_action의 smart.on/smart.off/smart.timer 스펙으로 제어합니다. "
+        "숫자 계산은 아무리 작아도 암산하지 말고 "
         "calculate에 수식으로 넘깁니다. 도구 결과에 있는 수치·시각만 말하고 "
         "없는 것은 추정하지 말고 '기록에 없다'고 합니다. 도구 결과는 그대로 "
         "읽지 말고 요약합니다."
@@ -121,6 +123,11 @@ TOOLS = [
     {"type": "function", "name": "check_markets",
      "description": "환율(원화 기준)과 관심 종목/지수/코인 시세 요약.",
      "parameters": {"type": "object", "properties": {}}},
+    {"type": "function", "name": "check_smart",
+     "description": "집 스마트 플러그·조명(Tapo) 현재 상태 — '불 켜져 있어?'. "
+                    "켜기/끄기/예약은 app_action spec smart.on:이름, smart.off:이름, "
+                    "smart.timer:이름:분 으로 보낸다.",
+     "parameters": {"type": "object", "properties": {}}},
     {"type": "function", "name": "check_calendar",
      "description": "맥 캘린더의 오늘/다가오는 일정. days 기본 3.",
      "parameters": {"type": "object", "properties": {
@@ -139,6 +146,7 @@ TOOLS = [
                     "web.search:google:검색어 — 브라우저 검색 바로 열기, "
                     "computer:작업설명 — 맥의 마우스·키보드로 직접 수행, "
                     "shell:명령 — 맥에서 셸 명령 실행(파일 찾기·정리·설치), "
+                    "smart.on:기기이름 / smart.off:기기이름 / smart.timer:기기이름:분 — 집 스마트 플러그·조명(Tapo) 제어, "
                     "ui.read:패널키 / ui.click:패널키:버튼글자 — 패널 직접 조작).",
      "parameters": {"type": "object", "properties": {
          "open": {"type": "string", "description": "열 패널 키"},
@@ -192,6 +200,15 @@ def run_tool(name: str, args: dict) -> str:
         snap = link.request_refresh("markets")
         return (snap or {}).get("summary") or \
             "시세 정보를 받지 못했습니다. 맥의 옴니 앱이 실행 중이어야 합니다."
+    if name == "check_smart":
+        snap = link.request_refresh("smart")
+        devs = (snap or {}).get("devices") or []
+        if not devs:
+            return "등록된 스마트 기기가 없습니다. 맥의 옴니 앱 SMART CONTROL 패널에서 SCAN을 눌러 주십시오."
+        return "\n".join(
+            f"{d.get('alias') or d.get('model')}: {'오프라인' if d.get('offline') else ('켜짐' if d.get('on') else '꺼짐')}"
+            + (f", 밝기 {d['brightness']}%" if d.get("brightness") is not None else "")
+            for d in devs)
     if name == "check_calendar":
         snap = link.request_refresh("calendar")
         if not snap:

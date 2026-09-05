@@ -28,6 +28,8 @@
 	<string>CALENDAR 패널과 옴니 AI가 맥 캘린더의 일정을 읽고 추가하기 위해 필요합니다.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>상시 대기 모드에서 노트북이 재생 중인 소리(유튜브 등)를 마이크 입력과 구분하기 위해 시스템 오디오를 참조합니다. 녹음·저장하지 않습니다.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>SMART CONTROL 패널이 같은 와이파이의 스마트 플러그·전구(Tapo)를 찾아 직접 제어합니다.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera is used for 3D hand gesture control in the RENDER_3D panel.</string>
 	<key>NSMicrophoneUsageDescription</key>

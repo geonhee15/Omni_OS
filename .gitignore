@@ -20,3 +20,4 @@ halo/halo_reply.wav
 halo/halo_final.png
 models/face_landmarker.task
 .claude/settings.local.json
+smart_engine/venv/

@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.73.0",
+  version: "0.74.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -958,6 +958,7 @@ OmniOS.register("ai", {
     "- 날씨: \"날씨 어때/내일 비 와?\" 류는 check_weather 도구(city 생략 시 현재 설정 위치, 지정 시 그 도시)로 확인해 핵심만 말합니다. 뉴스: \"뉴스 보여줘/○○ 관련 소식\" 류는 check_news 도구(category 또는 query)로 헤드라인을 읽어 3~5개로 요약합니다. 지도: 장소를 보여 달라면 [[ACT:map.search:장소]]로 MAP 패널에 표시합니다.",
     "- 사실 규칙: 도구 결과에 있는 수치·시각·이름만 말합니다. 도구 결과에 없는 정보(예: 일정 종료 시각, 금액)는 추정하거나 '보통'으로 채우지 말고 '기록에 없습니다'라고 말합니다. 확실하냐고 물으면 도구를 다시 호출해 원본을 확인합니다.",
     "- 계산: 숫자 계산(산수·퍼센트·환산·평균·큰 수)은 절대 암산하지 않고 calculate 도구에 파이썬식 수식으로 넘겨 그 결과를 말합니다. 여러 단계면 도구를 여러 번 호출합니다.",
+    "- 스마트 조명·플러그(SMART CONTROL 패널, Tapo): \"불 꺼줘/켜줘\", \"30분 뒤에 꺼줘\", \"조명 켜져 있어?\"는 smart_control 도구로 직접 실행하고 결과(켜짐/꺼짐)를 확인해 보고합니다. 기기가 없거나 계정이 없다는 결과면 패널의 SETUP/SCAN 절차를 안내합니다.",
     "- 환율·주식: \"달러 환율/삼성전자 주가/비트코인\" 류는 check_markets 도구로 확인해 핵심 수치만 말합니다. 일정: \"오늘 일정/이번 주 뭐 있어\"는 check_calendar, \"내일 3시 치과 잡아줘\"처럼 일정 추가 요청은 add_event 도구(start는 YYYY-MM-DD HH:mm, 종일이면 날짜만)로 맥 캘린더에 등록하고 결과를 보고합니다. 날짜·시각은 [실시간 상태 스냅샷]의 현재 시각 기준으로 계산합니다.",
     "- 패널 전권: OMNI_OS의 모든 패널은 당신 것입니다. 전용 액션이 없는 패널이나 세부 조작은 app_ui 도구로 직접 합니다 — op:'read'로 그 패널의 화면(제목·버튼·입력창·목록)을 읽고, op:'click'(target=버튼 글자)·op:'type'(target=입력창 placeholder/라벨, value=입력값, 끝에 \\n이면 Enter)·op:'select'로 조작한 뒤 다시 read로 결과를 확인합니다. 새 패널이 생겨도 같은 방식으로 씁니다.",
     "- 웹 검색: \"구글에 ○○ 검색해줘\", \"쿠팡에서 ○○ 찾아줘\" 류는 open_web_search(engine: google/naver/youtube/coupang/amazon/maps, query)로 브라우저에 결과 페이지를 바로 엽니다.",
@@ -1096,6 +1097,19 @@ OmniOS.register("ai", {
           minutes: { type: "number" }, location: { type: "string" }, notes: { type: "string" },
         },
         required: ["title", "start"],
+      },
+    },
+    {
+      name: "smart_control",
+      description: "집 안 스마트 플러그·전구(Tapo) 제어 — '불 꺼줘/켜줘', '30분 뒤에 꺼줘', '조명 밝기 40%', '지금 켜져 있어?'. action: status(전체 상태)/on/off/toggle/timer(minutes 뒤 끄기, timer_action=on이면 켜기)/cancel_timer/brightness(1-100, 전구만)/color_temp/scan(기기 검색). device는 기기 이름 일부(기기가 하나면 생략 가능). 플러그에 꽂힌 전등은 켜기/끄기만 된다.",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["status", "on", "off", "toggle", "timer", "cancel_timer", "brightness", "color_temp", "scan"] },
+          device: { type: "string" }, minutes: { type: "number" }, timer_action: { type: "string", enum: ["on", "off"] },
+          brightness: { type: "number" }, color_temp: { type: "number" },
+        },
+        required: ["action"],
       },
     },
     {
@@ -1853,6 +1867,12 @@ OmniOS.register("ai", {
         const r = await cl.add(input);
         return r.ok ? `일정 추가됨: ${r.msg}` : `오류: ${r.msg}`;
       }
+      if (name === "smart_control") {
+        const sc = OmniOS.modules.smart;
+        if (!sc) return "오류: 스마트 제어 모듈 없음";
+        const r = await sc.control(input || {});
+        return r.ok ? r.msg : `오류: ${r.msg}`;
+      }
       if (name === "check_gmail") {
         const r = await OmniNative.request("ai.gmailRecent",
           JSON.stringify({ hours: input.hours || 48 }), 30000);
@@ -2083,6 +2103,16 @@ OmniOS.register("ai", {
         const ok = q ? await OmniOS.modules.weather.setCity(q) : true;
         return ok ? { ok: true, msg: `날씨: ${OmniOS.modules.weather.locName()}` }
           : { ok: false, msg: `도시를 찾지 못했습니다: ${q}` };
+      }
+      if (key.startsWith("smart.")) {
+        // smart.on:이름 / smart.off:이름 / smart.toggle:이름 / smart.timer:이름:분[:on] / smart.status[:이름] / smart.scan (안경·태그용)
+        const sc = OmniOS.modules.smart;
+        if (!sc) return { ok: false, msg: "스마트 제어 모듈 없음" };
+        const act = key.slice(6);
+        const input = { action: act === "list" ? "status" : act, device: parts[1] || "" };
+        if (act === "timer") { input.minutes = Number(parts[2]) || 30; input.timer_action = parts[3] === "on" ? "on" : "off"; }
+        if (act === "brightness") { input.brightness = Number(parts[2]); }
+        return await sc.control(input);
       }
       if (key === "cal.add") {
         // cal.add:제목:YYYY-MM-DD HH:mm:분 (안경 브리지·태그용)
@@ -2647,6 +2677,19 @@ OmniOS.register("ai", {
         type: "object",
         properties: { title: { type: "string" }, start: { type: "string" }, minutes: { type: "number" } },
         required: ["title", "start"],
+      },
+    },
+    {
+      type: "function",
+      name: "smart_control",
+      description: "집 안 스마트 플러그·전구(Tapo) 제어 — \"불 꺼줘/켜줘\", \"30분 뒤에 꺼줘\", \"조명 밝기 40%\", \"불 켜져 있어?\". action: status/on/off/toggle/timer(minutes 뒤 끄기, timer_action=on이면 켜기)/cancel_timer/brightness(전구만)/scan. device는 기기 이름 일부(하나뿐이면 생략). 결과를 한 문장으로 말한다.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["status", "on", "off", "toggle", "timer", "cancel_timer", "brightness", "scan"] },
+          device: { type: "string" }, minutes: { type: "number" }, timer_action: { type: "string" }, brightness: { type: "number" },
+        },
+        required: ["action"],
       },
     },
     {
@@ -3578,7 +3621,7 @@ OmniOS.register("ai", {
     } else if (name === "calculate") {
       this.logLine("sys", `도구 · calculate ${(args && args.expression) || ""}`);
       output = await this.execTool("calculate", args || {});
-    } else if (["check_markets", "check_calendar", "add_event", "recall_memory", "open_web_search", "app_ui", "use_computer", "run_shell"].includes(name)) {
+    } else if (["check_markets", "check_calendar", "add_event", "smart_control", "recall_memory", "open_web_search", "app_ui", "use_computer", "run_shell"].includes(name)) {
       this.logLine("sys", `도구 · ${name}`);
       output = await this.execTool(name, args || {});
     } else {
@@ -13572,4 +13615,288 @@ OmniOS.register("calendar", {
       return `[${label} ${d.getMonth() + 1}/${d.getDate()} ${when}] ${i.title}${i.location ? ` @${i.location}` : ""} (${i.calendar})${state}`;
     }).join("\n");
   },
+});
+
+// ---------------- SMART CONTROL — Tapo 플러그·전구 로컬 제어 (scripts/omni_smart.py) ----------------
+// 옴니 전권: smart_control 도구 / smart.on|off|toggle|timer|scan|list 액션 / app_ui. 안경: halo_smart 스냅샷.
+OmniOS.register("smart", {
+  devices: [],
+  timers: {},          // host → { at, action, alias, handle }
+  _at: 0,
+  _busy: false,
+  _status: null,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = { sub: $("sc-sub"), updated: $("sc-updated"), refresh: $("sc-refresh"), scan: $("sc-scan"), err: $("sc-err"),
+      hint: $("sc-hint"), setup: $("sc-setup"), setupToggle: $("sc-setup-toggle"), user: $("sc-user"), pass: $("sc-pass"),
+      save: $("sc-save"), setupState: $("sc-setup-state"), grid: $("sc-grid") };
+    this.els.refresh.addEventListener("click", () => this.refresh());
+    this.els.scan.addEventListener("click", () => this.scan());
+    this.els.save.addEventListener("click", () => this.saveCreds());
+    this.els.pass.addEventListener("keydown", (e) => { if (e.key === "Enter") this.saveCreds(); });
+    this.els.setupToggle.addEventListener("click", () => { this.els.setup.hidden = !this.els.setup.hidden; });
+    this.els.grid.addEventListener("click", (e) => this.onGridClick(e));
+    this.els.grid.addEventListener("change", (e) => this.onGridChange(e));
+    document.addEventListener("omni:panel", async (e) => {
+      if (e.detail !== "smart") return;
+      await this.status();
+      if (this._status.hasCreds && Date.now() - this._at > 60000) this.refresh();
+    });
+    if (OmniNative.available) {
+      setTimeout(async () => { await this.status(); if (this._status.hasCreds && this._status.count) this.refresh(); }, 7000);
+      setInterval(() => { if (this._status && this._status.hasCreds && this.devices.length) this.refresh(); }, 3 * 60000);
+    } else {
+      this.els.grid.innerHTML = '<div class="nf-err">브라우저 개발 모드 — 스마트 기기는 앱에서만 제어됩니다</div>';
+      this.els.setup.hidden = false;
+    }
+    setInterval(() => this.renderTimers(), 1000);
+  },
+
+  async status() {
+    const r = OmniNative.available ? await OmniNative.request("smart.status", null, 8000).catch(() => null) : null;
+    this._status = r && r.ok ? r : { hasCreds: false, count: 0, known: [], engine: false };
+    const s = this._status;
+    this.els.setupState.textContent = s.hasCreds ? `저장됨 · ${s.username}` : "계정 미저장";
+    this.els.setupState.className = `sc-setup-state${s.hasCreds ? " ok" : ""}`;
+    this.els.sub.textContent = s.hasCreds ? `TAPO · ${s.count}개 기기` : "TAPO 계정 필요 — SETUP";
+    if (!s.hasCreds) { this.els.setup.hidden = false; if (!this.devices.length) this.els.grid.innerHTML = '<div class="nf-empty">SETUP에서 Tapo 계정을 저장한 뒤 SCAN</div>'; }
+    if (OmniNative.available && !s.engine) this.setErr("smart_engine/venv가 없습니다 — 터미널: python3 -m venv smart_engine/venv && smart_engine/venv/bin/pip install python-kasa");
+    return s;
+  },
+
+  async saveCreds() {
+    const username = this.els.user.value.trim(), password = this.els.pass.value;
+    if (!username || !password) { this.setErr("이메일과 비밀번호를 모두 입력"); return; }
+    const r = await OmniNative.request("smart.setup", JSON.stringify({ username, password }), 8000).catch(() => null);
+    if (!r || !r.ok) { this.setErr("계정 저장 실패"); return; }
+    this.els.pass.value = "";
+    this.setErr("");
+    this.devices = [];
+    await this.status();
+    this.scan();
+  },
+
+  setErr(msg) { this.els.err.hidden = !msg; this.els.err.textContent = msg || ""; },
+  setHint(msg) { this.els.hint.hidden = !msg; this.els.hint.textContent = msg || ""; },
+
+  async run(cmd, args) {
+    if (!OmniNative.available) return { ok: false, error: "앱에서만 가능" };
+    const r = await OmniNative.request("smart.run", JSON.stringify({ cmd, args: args || {} }), 50000).catch((e) => ({ ok: false, error: e.message }));
+    return r || { ok: false, error: "응답 없음" };
+  },
+
+  async scan() {
+    if (this._busy) return null;
+    this._busy = true;
+    this.els.scan.textContent = "SCANNING…";
+    this.setHint("같은 와이파이에서 Tapo 기기를 찾는 중 (약 8초)…");
+    try {
+      const r = await this.run("discover");
+      this.apply(r, true);
+      return r;
+    } finally {
+      this._busy = false;
+      this.els.scan.textContent = "SCAN";
+    }
+  },
+
+  async refresh() {
+    if (this._busy) return null;
+    this._busy = true;
+    try {
+      const r = await this.run("states");
+      this.apply(r, false);
+      return r;
+    } finally { this._busy = false; }
+  },
+
+  apply(r, fromScan) {
+    if (!r) return;
+    if (r.ok && Array.isArray(r.devices)) {
+      this.devices = r.devices;
+      this._at = Date.now();
+      const t = new Date();
+      this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+      this.els.sub.textContent = `TAPO · ${this.devices.length}개 기기${this.devices.filter((d) => d.on).length ? ` · ${this.devices.filter((d) => d.on).length}개 켜짐` : ""}`;
+      this.setErr("");
+      const errs = (r.errors || []).map((e) => `${e.model || e.host}: ${e.error}`).join(" / ");
+      this.setHint([r.hint || "", errs].filter(Boolean).join(" · "));
+      if (fromScan && this.devices.length) { this.els.setup.hidden = true; if (this._status) this._status.count = this.devices.length; }
+    } else {
+      this.setErr(`${r.error || "오류"}${r.hint ? ` — ${r.hint}` : ""}`);
+      if (r.error === "NO_CREDS") this.els.setup.hidden = false;
+    }
+    this.render();
+    OmniNet.haloExport("smart", { devices: this.devices.map((d) => ({ alias: d.alias, model: d.model, host: d.host, on: !!d.on,
+      brightness: d.brightness, power_w: d.power_w, offline: !!d.offline })) });
+  },
+
+  // 이름·모델·IP로 기기 찾기 (부분 일치, 대소문자 무시)
+  find(name) {
+    const n = String(name || "").trim().toLowerCase();
+    if (!n) return this.devices.length === 1 ? this.devices[0] : null;
+    return this.devices.find((d) => (d.alias || "").toLowerCase() === n)
+      || this.devices.find((d) => (d.alias || "").toLowerCase().includes(n) || (d.model || "").toLowerCase().includes(n) || d.host === n)
+      || null;
+  },
+
+  label(d) { return d.alias || d.model || d.host; },
+  fmt(d) {
+    if (d.offline) return `${this.label(d)} (${d.model}): 오프라인`;
+    const extra = [d.brightness != null ? `밝기 ${d.brightness}%` : "", d.power_w != null ? `${Number(d.power_w).toFixed(1)}W` : ""].filter(Boolean).join(", ");
+    const tm = this.timers[d.host];
+    return `${this.label(d)} (${d.model}): ${d.on ? "켜짐" : "꺼짐"}${extra ? ` · ${extra}` : ""}${tm ? ` · ${Math.max(0, Math.ceil((tm.at - Date.now()) / 60000))}분 뒤 ${tm.action === "on" ? "켜짐" : "꺼짐"} 예약` : ""}`;
+  },
+
+  // AI 도구용 요약
+  summary() {
+    if (!this.devices.length) return "";
+    return this.devices.map((d) => this.fmt(d)).join("\n");
+  },
+
+  // 옴니·안경·패널 공통 제어 진입점 → {ok, msg}
+  async control(input) {
+    const action = String(input.action || "status").toLowerCase();
+    if (!OmniNative.available) return { ok: false, msg: "앱에서만 가능" };
+    if (action === "scan") {
+      const r = await this.scan();
+      if (!r || !r.ok) return { ok: false, msg: `${(r && r.error) || "검색 실패"}${r && r.hint ? ` — ${r.hint}` : ""}` };
+      return { ok: true, msg: this.devices.length ? `기기 ${this.devices.length}개:\n${this.summary()}` : (r.hint || "기기를 찾지 못했습니다") };
+    }
+    if (action === "list" || action === "status") {
+      if (!this.devices.length || Date.now() - this._at > 20000) await this.refresh();
+      if (!this.devices.length) {
+        const s = await this.status();
+        return { ok: false, msg: s.hasCreds ? "등록된 스마트 기기가 없습니다. 사용자에게 안내하라: SMART CONTROL 패널에서 SCAN을 누르거나 Tapo 앱에서 플러그를 먼저 설정해 주십시오." : "Tapo 계정이 아직 저장되지 않았습니다. 사용자에게 안내하라: SMART CONTROL 패널 SETUP에서 Tapo 계정 이메일·비밀번호를 저장해 주십시오." };
+      }
+      if (input.device) { const d = this.find(input.device); return d ? { ok: true, msg: this.fmt(d) } : { ok: false, msg: `기기를 찾지 못함: ${input.device}. 있는 기기: ${this.devices.map((x) => this.label(x)).join(", ")}` }; }
+      return { ok: true, msg: this.summary() };
+    }
+    if (!this.devices.length) await this.refresh();
+    const d = this.find(input.device);
+    if (!d) {
+      return { ok: false, msg: this.devices.length ? `기기를 찾지 못함: ${input.device || "(이름 없음)"}. 있는 기기: ${this.devices.map((x) => this.label(x)).join(", ")}` : "등록된 스마트 기기가 없습니다 — SMART CONTROL 패널에서 SCAN" };
+    }
+    if (action === "timer") {
+      const min = Number(input.minutes);
+      if (!(min > 0)) return { ok: false, msg: "분 단위 시간이 필요합니다" };
+      const act = input.timer_action === "on" || input.then === "on" ? "on" : "off";
+      this.setTimer(d, min, act);
+      return { ok: true, msg: `${this.label(d)}: ${min}분 뒤 ${act === "on" ? "켜기" : "끄기"} 예약됨` };
+    }
+    if (action === "cancel_timer") {
+      this.clearTimer(d.host);
+      return { ok: true, msg: `${this.label(d)}: 예약 취소` };
+    }
+    let r;
+    if (action === "on" || action === "off" || action === "toggle") r = await this.run(action, { target: d.host });
+    else if (action === "brightness" || action === "color_temp" || action === "hsv") {
+      const args = { target: d.host };
+      if (action === "brightness") args.brightness = Number(input.brightness ?? input.value);
+      if (action === "color_temp") args.color_temp = Number(input.color_temp ?? input.value);
+      if (action === "hsv") args.hsv = input.hsv;
+      r = await this.run("set", args);
+    } else return { ok: false, msg: `알 수 없는 동작: ${action}` };
+    if (!r.ok) return { ok: false, msg: `${r.error || "실패"}${r.hint ? ` — ${r.hint}` : ""}` };
+    if (r.device) {
+      const i = this.devices.findIndex((x) => x.host === r.device.host);
+      if (i >= 0) this.devices[i] = r.device; else this.devices.push(r.device);
+      this._at = Date.now();
+      this.render();
+      OmniMem.append("action", `스마트 제어: ${this.label(r.device)} ${action}${input.brightness != null ? ` ${input.brightness}%` : ""} → ${r.device.on ? "켜짐" : "꺼짐"}`);
+      OmniNet.haloExport("smart", { devices: this.devices.map((x) => ({ alias: x.alias, model: x.model, host: x.host, on: !!x.on, brightness: x.brightness, power_w: x.power_w, offline: !!x.offline })) });
+      return { ok: true, msg: this.fmt(r.device) };
+    }
+    return { ok: true, msg: "완료" };
+  },
+
+  setTimer(d, minutes, action) {
+    this.clearTimer(d.host);
+    const at = Date.now() + minutes * 60000;
+    const handle = setTimeout(async () => {
+      delete this.timers[d.host];
+      const r = await this.control({ device: d.host, action });
+      const ai = OmniOS.modules.ai;
+      if (ai) ai.logLine("sys", `[스마트] 예약 실행 · ${this.label(d)} ${action === "on" ? "켜짐" : "꺼짐"} · ${r.msg}`).classList.add("ignored");
+      this.render();
+    }, minutes * 60000);
+    this.timers[d.host] = { at, action, alias: this.label(d), handle };
+    this.render();
+  },
+  clearTimer(host) {
+    if (this.timers[host]) { clearTimeout(this.timers[host].handle); delete this.timers[host]; }
+  },
+
+  render() {
+    const g = this.els.grid;
+    if (!this.devices.length) {
+      g.innerHTML = `<div class="nf-empty">${this._status && this._status.hasCreds ? "기기 없음 — SCAN으로 같은 와이파이의 Tapo 기기를 찾습니다" : "SETUP에서 Tapo 계정을 저장한 뒤 SCAN"}</div>`;
+      return;
+    }
+    g.innerHTML = "";
+    for (const d of this.devices) {
+      const card = document.createElement("div");
+      card.className = `sc-card${d.on ? " on" : ""}${d.offline ? " offline" : ""}`;
+      card.dataset.host = d.host;
+      const meta = [d.model, d.host, d.power_w != null ? `${Number(d.power_w).toFixed(1)} W` : "", d.today_kwh != null ? `오늘 ${Number(d.today_kwh).toFixed(2)} kWh` : ""].filter(Boolean).join(" · ");
+      card.innerHTML = `
+        <div class="sc-name">${this.esc(this.label(d))}</div>
+        <div class="sc-meta">${this.esc(meta)}</div>
+        <div class="sc-state">${d.offline ? "OFFLINE" : d.on ? "ON" : "OFF"}</div>
+        <div class="sc-btns">
+          <button class="nf-btn sc-on${d.on ? " active" : ""}" data-act="on">ON</button>
+          <button class="nf-btn sc-off${!d.on && !d.offline ? " active" : ""}" data-act="off">OFF</button>
+        </div>
+        ${d.brightness != null ? `<div class="sc-brow"><span>밝기</span><input type="range" class="sc-bright" min="1" max="100" value="${Number(d.brightness)}" title="밝기"><span class="sc-bval">${Number(d.brightness)}%</span></div>` : ""}
+        <div class="sc-timer">
+          <input class="wx-search sc-min" type="number" min="1" step="5" value="30" placeholder="분" title="분">
+          <button class="nf-btn" data-act="timer-off">OFF IN N MIN</button>
+          <button class="nf-btn" data-act="timer-on">ON IN N MIN</button>
+          <span class="sc-countdown"></span>
+        </div>`;
+      g.appendChild(card);
+    }
+    this.renderTimers();
+  },
+
+  renderTimers() {
+    for (const card of this.els.grid.querySelectorAll(".sc-card")) {
+      const tm = this.timers[card.dataset.host];
+      const el = card.querySelector(".sc-countdown");
+      if (!el) continue;
+      if (!tm) { el.textContent = ""; continue; }
+      const s = Math.max(0, Math.round((tm.at - Date.now()) / 1000));
+      el.textContent = `${tm.action === "on" ? "ON" : "OFF"} IN ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · 취소는 다시 누르기`;
+    }
+  },
+
+  async onGridClick(e) {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const card = btn.closest(".sc-card");
+    const d = this.devices.find((x) => x.host === card.dataset.host);
+    if (!d) return;
+    const act = btn.dataset.act;
+    if (act === "timer-off" || act === "timer-on") {
+      if (this.timers[d.host]) { this.clearTimer(d.host); this.render(); return; }
+      const min = Number(card.querySelector(".sc-min").value) || 30;
+      this.setTimer(d, min, act === "timer-on" ? "on" : "off");
+      return;
+    }
+    btn.disabled = true;
+    const r = await this.control({ device: d.host, action: act });
+    btn.disabled = false;
+    if (!r.ok) this.setErr(r.msg);
+  },
+
+  async onGridChange(e) {
+    const inp = e.target.closest(".sc-bright");
+    if (!inp) return;
+    const card = inp.closest(".sc-card");
+    const r = await this.control({ device: card.dataset.host, action: "brightness", brightness: Number(inp.value) });
+    if (!r.ok) this.setErr(r.msg);
+  },
+
+  esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); },
 });
