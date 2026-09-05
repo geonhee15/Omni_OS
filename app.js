@@ -765,7 +765,12 @@ OmniOS.register("ai", {
   //   발화 → Haiku 분류기로 "이어지는 대화"인지 확인 / 그 외 → 무시(+문맥 삭제)
   alwaysOn: false,
   WAKE_RE: /(옴니|omni|오므니|옴늬|옴미|^\s*(엄니|음니|오니|옴니)\s*[야아,]?)/i,
-  FOLLOWUP_MS: 8000,
+  FOLLOWUP_MS: 15000,     // 옴니가 말을 마친 뒤 이 시간 안에 *시작된* 발화는 이어지는 대화 후보
+  _speechStartAt: 0,
+  _pendingBand: "user",
+  _pendingSim: null,
+  _pendingThr: 0,
+  _pendingStart: 0,
   _gateProfile: false,
   _gateRunning: false,
   _lastOmniDoneAt: 0,
@@ -2448,10 +2453,15 @@ OmniOS.register("ai", {
       this.gateNote(`게이트 준비 profile=${ev.profile} thr=${ev.threshold}`);
     } else if (e === "speech_start") {
       this.micLevel = 0.7;
+      this._speechStartAt = Date.now();
     } else if (e === "segment") {
       this.micLevel = 0;
       if (ev.user) {
-        this.gateNote(`통과 · sim=${ev.sim} dur=${ev.dur} sent=${ev.sent}`);
+        this._pendingBand = ev.band || "user";
+        this._pendingSim = ev.sim;
+        this._pendingThr = ev.thr || 0;
+        this._pendingStart = this._speechStartAt || Date.now();
+        this.gateNote(`통과(${this._pendingBand}) · sim=${ev.sim} thr=${ev.thr} dur=${ev.dur} sent=${ev.sent}`);
         if (this.alwaysOn && !this._rtUserLine) this._rtUserLine = this.logLine("you", "…", true);
       } else if (ev.why !== "short") {
         const now = Date.now();
@@ -2501,13 +2511,25 @@ OmniOS.register("ai", {
       if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId });
       return;
     }
-    const followUp = Date.now() - this._lastOmniDoneAt < this.FOLLOWUP_MS;
+    // 이어가기 창은 발화 *시작* 시각 기준 (긴 문장을 말하면 끝날 땐 창 밖이 되던 문제)
+    const startedAt = this._pendingStart || Date.now();
+    const followUp = startedAt - this._lastOmniDoneAt < this.FOLLOWUP_MS;
+    const band = this._pendingBand || "user";
+    const sim = this._pendingSim;
+    this._pendingBand = "user"; this._pendingSim = null; this._pendingStart = 0;
     let { addressed, reason } = this.addressReason(text, followUp);
     if (addressed === null) {
-      const yes = await this.classifyAddressed(text);
-      addressed = yes;
-      reason = yes ? "이어지는 대화" : "이어지는 대화 아님";
+      // 목소리가 애매(maybe)한 발화는 호출어 없이는 임계 바로 아래(0.04 안)일 때만 분류기에 맡긴다
+      if (band === "maybe" && sim != null && sim < this._pendingThr - 0.04) {
+        addressed = false;
+        reason = `목소리 불확실(${sim})`;
+      } else {
+        const yes = await this.classifyAddressed(text);
+        addressed = yes;
+        reason = yes ? "이어지는 대화" : "이어지는 대화 아님";
+      }
     }
+    if (addressed && band === "maybe") reason += ` · 목소리 ${sim}`;
     if (addressed) {
       if (line) { line.querySelector(".txt").textContent = text; line.classList.remove("pending"); }
       else this.logLine("you", text);

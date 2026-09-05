@@ -38,6 +38,8 @@ SR = 16000
 WIN = 512                       # silero VAD 프레임 (32ms @16k)
 PROFILE = os.path.expanduser("~/.omni/voice_profile.json")
 DEFAULT_THRESHOLD = 0.76
+MAYBE_MARGIN = 0.08             # 임계 바로 아래 구간 — 버리지 않고 호출어/분류기 게이트에 맡김
+MAX_PROFILE_EMBS = 14           # 프로필 임베딩 집합 크기 (등록 + 적응)
 MIN_SEG = 0.4                   # 이보다 짧으면 판정 불가 → 버림
 MIN_ENROLL_SEG = 0.7
 MAX_SEG = 12.0
@@ -66,6 +68,7 @@ class Gate:
                                min_silence_duration_ms=450, speech_pad_ms=100)
         self.encoder = VoiceEncoder("cpu", verbose=False)
         self.ref = None
+        self.ref_set = []
         self.threshold = DEFAULT_THRESHOLD
         self.load_profile()
         if threshold is not None:
@@ -89,26 +92,52 @@ class Gate:
                 p = json.load(f)
             self.ref = np.asarray(p["emb"], dtype=np.float32)
             self.ref /= np.linalg.norm(self.ref) + 1e-9
+            embs = p.get("embs") or [p["emb"]]
+            self.ref_set = [self._unit(np.asarray(e, dtype=np.float32)) for e in embs]
             self.threshold = float(p.get("threshold", DEFAULT_THRESHOLD))
         except (OSError, ValueError, KeyError):
             self.ref = None
+            self.ref_set = []
 
-    def save_profile(self, embs):
-        ref = np.mean(embs, axis=0)
-        ref /= np.linalg.norm(ref) + 1e-9
-        sims = [float(np.dot(ref, e / (np.linalg.norm(e) + 1e-9))) for e in embs]
-        mean_self = float(np.mean(sims))
-        # 자기 유사도에서 여유를 둔 임계 (0.70~0.78). 마이크 거리·자세에 따라
-        # 같은 사람도 0.1 가까이 흔들리므로 넉넉히 — 타인 배제는 호출어
-        # 게이트가 함께 맡고, 호출어로 확정된 발화로 프로필이 계속 적응한다.
-        thr = max(0.70, min(0.78, mean_self - 0.15))
+    @staticmethod
+    def _unit(e):
+        return e / (np.linalg.norm(e) + 1e-9)
+
+    def _write_profile(self, extra=None):
+        p = {"emb": self.ref.tolist(), "embs": [e.tolist() for e in self.ref_set],
+             "threshold": self.threshold, "updated": time.time()}
+        try:
+            with open(PROFILE) as f:
+                old = json.load(f)
+            for k in ("self_sim", "segments", "created", "adapted"):
+                if k in old:
+                    p[k] = old[k]
+        except (OSError, ValueError):
+            pass
+        if extra:
+            p.update(extra)
         os.makedirs(os.path.dirname(PROFILE), exist_ok=True)
         with open(PROFILE, "w") as f:
-            json.dump({"emb": ref.tolist(), "threshold": thr, "self_sim": mean_self,
-                       "segments": len(embs), "created": time.time()}, f)
+            json.dump(p, f)
         os.chmod(PROFILE, 0o600)
+
+    def save_profile(self, embs):
+        """등록: 임베딩 집합(2초 창들) + 중심. 임계는 leave-one-out 자기 유사도 기반."""
+        units = [self._unit(np.asarray(e, dtype=np.float32)) for e in embs]
+        ref = self._unit(np.mean(units, axis=0))
+        # 각 임베딩이 "나머지"와 얼마나 닮았는지 (실사용 판정과 같은 max 방식)
+        sims = []
+        for i, e in enumerate(units):
+            others = units[:i] + units[i + 1:]
+            sims.append(max(float(np.dot(e, o)) for o in others) if others else 1.0)
+        mean_self = float(np.mean(sims))
+        # 사람 목소리는 톤·거리로 0.1 이상 흔들린다 — 넉넉한 임계(0.68~0.76).
+        # 그 바로 아래 MAYBE_MARGIN 구간은 호출어/분류기 게이트가 판정한다.
+        thr = max(0.68, min(0.76, mean_self - 0.15))
         self.ref = ref
+        self.ref_set = units[-MAX_PROFILE_EMBS:]
         self.threshold = thr
+        self._write_profile({"self_sim": mean_self, "segments": len(embs), "created": time.time()})
         return mean_self, thr
 
     # ---------------- 임베딩
@@ -120,33 +149,38 @@ class Gate:
         return self.encoder.embed_utterance(wav)
 
     def verify(self, pcm: np.ndarray):
+        """중심 유사도와 집합 내 최대 유사도 중 큰 값 — 톤·거리 변동을 흡수."""
         if self.ref is None:
             return None
         e = self.embed(pcm)
         if e is None:
             return None
-        self._last_emb = e
-        return float(np.dot(self.ref, e / (np.linalg.norm(e) + 1e-9)))
+        u = self._unit(e)
+        self._last_emb = u
+        best = float(np.dot(self.ref, u))
+        for r in self.ref_set:
+            best = max(best, float(np.dot(r, u)))
+        return best
 
     def adapt(self):
-        """호출어까지 확인된 발화(= 사용자 본인 확실)로 프로필을 점진 갱신."""
-        e = getattr(self, "_last_emb", None)
-        if e is None or self.ref is None:
+        """호출어까지 확인된 발화(= 사용자 본인 확실)로 프로필 집합을 넓힌다."""
+        u = getattr(self, "_last_emb", None)
+        if u is None or self.ref is None:
             return
-        e = e / (np.linalg.norm(e) + 1e-9)
-        self.ref = self.ref * 0.9 + e * 0.1
-        self.ref /= np.linalg.norm(self.ref) + 1e-9
+        # 이미 아주 닮은 것과 중복이면 추가하지 않음 (다양성 확보)
+        if self.ref_set and max(float(np.dot(r, u)) for r in self.ref_set) > 0.95:
+            return
+        self.ref_set.append(u)
+        if len(self.ref_set) > MAX_PROFILE_EMBS:
+            self.ref_set.pop(0)
+        self.ref = self._unit(np.mean(self.ref_set, axis=0))
         try:
             with open(PROFILE) as f:
-                p = json.load(f)
+                n = int(json.load(f).get("adapted", 0)) + 1
         except (OSError, ValueError):
-            p = {}
-        p["emb"] = self.ref.tolist()
-        p["threshold"] = self.threshold
-        p["adapted"] = int(p.get("adapted", 0)) + 1
-        with open(PROFILE, "w") as f:
-            json.dump(p, f)
-        emit({"ev": "log", "text": f"profile adapted x{p['adapted']}"})
+            n = 1
+        self._write_profile({"adapted": n})
+        emit({"ev": "log", "text": f"profile adapted x{n} (set={len(self.ref_set)})"})
 
     # ---------------- 오디오 스트림
     def on_chunk(self, chunk: np.ndarray, now: float):
@@ -204,12 +238,16 @@ class Gate:
         sim = self.verify(pcm)
         if sim is None:
             user = self.ref is None      # 프로필 없으면 통과(등록 전 폴백) — JS가 안내
+            band = "user" if user else "other"
             why = "no_profile" if self.ref is None else "unverifiable"
         else:
-            user = sim >= self.threshold
+            band = ("user" if sim >= self.threshold
+                    else "maybe" if sim >= self.threshold - MAYBE_MARGIN else "other")
+            user = band != "other"       # maybe도 전달 — 호출어/분류기가 최종 판정
             why = ""
-        out = {"ev": "segment", "user": bool(user), "sim": None if sim is None else round(sim, 3),
-               "dur": round(dur, 2)}
+        out = {"ev": "segment", "user": bool(user), "band": band,
+               "sim": None if sim is None else round(sim, 3),
+               "thr": round(self.threshold, 3), "dur": round(dur, 2)}
         if why:
             out["why"] = why
         if user:
