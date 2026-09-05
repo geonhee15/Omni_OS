@@ -90,6 +90,7 @@ class Gate:
         if threshold is not None:
             self.threshold = float(threshold)
         self.muted = False
+        self.omni_speaking = False      # 옴니 발화 중 (루프백 있는 앱에서 mute 대신 사용)
         self.in_speech = False
         self.seg = []
         self.pre = []                       # 프리롤 링버퍼 (청크 단위)
@@ -546,7 +547,9 @@ class Gate:
                "lips": lips, "dur": round(dur, 2), "t0": round(t0, 2)}
         if why:
             out["why"] = why
-        if not user:
+        if not user and label == "media" and self.omni_speaking:
+            out["why"] = "omni_voice"          # 옴니 자신의 목소리 — 전사·기록하지 않음
+        elif not user:
             self.queue_ambient(pcm, t0, label, {"sim": out["sim"], "media": out["media"],
                                                 "lips": lips.get("corr"), "faces": lips.get("faces")})
         if user:
@@ -640,6 +643,10 @@ def handle_cmd(gate: Gate, c: dict):
             gate.calibrate()
         else:
             emit({"ev": "analysis", "name": None, "verdict": "프로필 없음"})
+    elif cmd == "speaking":
+        # 옴니가 말하는 중 — 마이크는 열어두되(끼어들기), 루프백으로 걸러진 옴니 목소리는
+        # 주변음 전사에서 제외한다
+        gate.omni_speaking = bool(c.get("on"))
     elif cmd == "adapt":
         gate.adapt()
     elif cmd == "threshold":

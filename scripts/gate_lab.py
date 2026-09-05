@@ -151,6 +151,19 @@ def main():
     run("(f) 유튜브 위에 내 말 겹침 + 입술", "user", mic=mic, sysout=other[0], mouth=envelope_mouth(me[5]), faces=1, frontal=True)
     # (g) 내 목소리인데 입이 가만히 (녹음된 내 목소리 재생 등) → 유사도만으로는 통과하지만 입 정지면 거부
     run("(g) 내 목소리 재생 + 입 가만히", "other", mic=me[3] * 0.9, mouth=still, faces=1, frontal=True)
+    # (h) 옴니가 말하는 중(speaking on): 스피커로 나오는 옴니 목소리 → media/omni_voice (전사 제외)
+    lab.frame(json.dumps({"cmd": "speaking", "on": True}).encode())
+    x = other[0]
+    mic = np.concatenate([np.zeros(int(0.12 * SR), np.float32), x * 0.5]) + rng.normal(0, 0.003, len(x) + int(0.12 * SR)).astype(np.float32)
+    segs = lab.stream(mic=mic, sysout=x)
+    ok = bool(segs) and segs[0]["label"] == "media" and segs[0].get("why") == "omni_voice"
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'} (h) 옴니 발화 중 옴니 목소리            → {segs[0]['label'] if segs else '(없음)'}/{segs[0].get('why') if segs else ''} (기대 media/omni_voice)")
+    # (i) 옴니가 말하는 중 내가 끼어듦 (내 목소리 + 입술, 옴니 목소리 겹침) → user
+    mix = me[3] if len(me[3]) >= len(other[1]) else np.concatenate([me[3], np.zeros(len(other[1]) - len(me[3]), np.float32)])
+    mic = mix + np.concatenate([np.zeros(int(0.1 * SR), np.float32), other[1] * 0.35])[:len(mix)]
+    run("(i) 옴니 발화 중 끼어들기 + 입술", "user", mic=mic, sysout=other[1], mouth=envelope_mouth(me[3]), faces=1, frontal=True)
+    lab.frame(json.dumps({"cmd": "speaking", "on": False}).encode())
     lab.close()
     print(f"\n{sum(results)}/{len(results)} 통과")
     sys.exit(0 if all(results) else 1)

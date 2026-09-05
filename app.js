@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.70.0",
+  version: "0.71.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -1952,6 +1952,14 @@ OmniOS.register("ai", {
         OmniMem.append("action", `웹 검색 열기: ${engine} "${q}"`);
         return { ok: true, msg: `${engine}에서 "${q}" 검색 결과를 브라우저로 열었습니다` };
       }
+      if (key === "ai.say") {
+        // 옴니가 지정 문장을 말함 (테스트·안경 브리지용) — LIVE 세션 필요
+        const txt = parts.slice(1).join(":").trim();
+        if (!this.live) return { ok: false, msg: "LIVE 세션이 없습니다" };
+        this._rtResponding = true;
+        this.rtSend({ type: "response.create", response: { instructions: `다음 내용을 그대로 자연스럽게 말하세요: "${txt}"` } });
+        return { ok: true, msg: `발화 요청: ${txt.slice(0, 60)}` };
+      }
       if (key === "screen.observe") {
         const o = await OmniScreen.observe(true);
         return o ? { ok: true, msg: `화면 관찰: ${o.app || ""} · ${o.activity || ""}${(o.questions || []).length ? ` · 질문 후보 ${o.questions.length}` : ""}` }
@@ -2878,6 +2886,7 @@ OmniOS.register("ai", {
     }
     this.alwaysOn = true;
     this._gateRunning = true;
+    this._gateLoopback = !!g.loopback;   // 시스템 오디오 참조 가능 → 옴니 발화 중에도 마이크를 열어 끼어들기 허용
     localStorage.setItem("omni.ai.always", "1");
     this.els.alwaysBtn.classList.add("always");
     if (!this.live) {
@@ -2937,9 +2946,27 @@ OmniOS.register("ai", {
     OmniNative.request("ai.gateCmd", JSON.stringify(obj), 5000).catch(() => {});
   },
 
+  // 옴니 발화 중 마이크 처리: 루프백이 있으면 닫지 않고 "말하는 중"만 알린다(옴니 목소리는
+  // 미디어로 걸러지고 사용자 목소리는 통과 → 끼어들기 가능). 루프백이 없으면 예전처럼 닫는다.
   gateMute(on) {
     this._gateMuted = !!on;
-    this.gateCmd({ cmd: "mute", on: !!on });
+    this._omniSpeaking = !!on;
+    if (this._gateLoopback) this.gateCmd({ cmd: "speaking", on: !!on });
+    else this.gateCmd({ cmd: "mute", on: !!on });
+  },
+
+  // 끼어들기: 옴니가 말하는 중에 사용자 발화가 확인되면 재생을 끊고 응답을 취소한다
+  bargeIn() {
+    this.rtStopPlayback();
+    this.rtSend({ type: "response.cancel" });
+    this._rtResponding = false;
+    this._rtQueuedCreate = false;
+    clearTimeout(this._unmuteTimer);
+    this._lastOmniDoneAt = Date.now();
+    this._omniSpeaking = false;
+    this._gateMuted = false;
+    if (this._rtOmniLine) { this._rtOmniLine.querySelector(".txt").textContent += " …(끼어듦)"; this._rtOmniLine = null; this._rtOmniText = ""; }
+    this.gateNote("끼어들기 → 옴니 발화 중단");
   },
 
   gateNote(text) {
@@ -2962,12 +2989,16 @@ OmniOS.register("ai", {
     } else if (e === "segment") {
       this.micLevel = 0;
       if (ev.user) {
+        const interrupt = !!this._omniSpeaking;
+        if (interrupt) this.bargeIn();
         this._pendingSig = { label: ev.label || "user", band: ev.band, sim: ev.sim, thr: ev.thr, media: ev.media,
-          lips: ev.lips, dur: ev.dur || 0, t0: ev.t0 };
+          lips: ev.lips, dur: ev.dur || 0, t0: ev.t0, interrupt };
         this.gateNote(`통과(${ev.label}) · sim=${ev.sim} media=${ev.media} lips=${ev.lips && ev.lips.corr} faces=${ev.lips && ev.lips.faces} dur=${ev.dur}`);
         if (this.alwaysOn && !this._rtUserLine) {
           this._rtUserLine = this.logLine("you", `… (${ev.label === "user" ? "내 목소리" : "불확실"}${ev.lips && ev.lips.face ? ` · 입술 ${ev.lips.corr}` : ""})`, true);
         }
+      } else if (ev.why === "omni_voice") {
+        // 옴니 자신의 목소리(루프백 확인) — 조용히 무시
       } else if (ev.why !== "short") {
         const now = Date.now();
         if (now - (this._lastIgnoreLogAt || 0) > 6000) {
@@ -3061,6 +3092,7 @@ OmniOS.register("ai", {
       secs == null ? "옴니가 이 세션에서 아직 말한 적 없음" : `옴니가 마지막으로 말을 마친 지 ${secs}초`,
       `현재 상황 추정: ${OmniMem.situation || "모름"}${OmniMem.people.length ? ` / 주변: ${OmniMem.people.join(", ")}` : ""}`,
       OmniMem.screenActivity ? `화면 관찰: ${OmniMem.screenActivity}` : "",
+      sig.interrupt ? "이 발화는 옴니가 말하는 도중에 끼어든 것 — 대부분 옴니에게 하는 말(정정·중단·질문). \"그만/됐어/조용히\"처럼 멈추라는 뜻이면 respond=false, kind=command" : "",
       OmniScreen.pending ? `옴니가 방금 먼저 물어본 질문: "${OmniScreen.pending.q}" — 이 발화는 그 답일 가능성이 큼 (답이면 respond=true, kind=reply)` : "",
     ].join("\n");
     try {
