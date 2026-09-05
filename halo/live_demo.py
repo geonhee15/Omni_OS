@@ -135,8 +135,10 @@ TOOLS = [
     {"type": "function", "name": "app_action",
      "description": "맥의 옴니 앱을 제어한다. open=패널 열기 "
                     f"(키: {', '.join(PANELS)}). spec=세부 액션 문자열 "
-                    "(예: notes.open:파일명, proj.editor:프로젝트명, "
-                    "omnia, lang.auto).",
+                    "(예: notes.open:파일명, proj.editor:프로젝트명, omnia, "
+                    "web.search:google:검색어 — 브라우저 검색 바로 열기, "
+                    "computer:작업설명 — 맥의 마우스·키보드로 직접 수행, "
+                    "ui.read:패널키 / ui.click:패널키:버튼글자 — 패널 직접 조작).",
      "parameters": {"type": "object", "properties": {
          "open": {"type": "string", "description": "열 패널 키"},
          "spec": {"type": "string", "description": "실행할 액션 스펙"}}}},

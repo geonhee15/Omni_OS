@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.67.0",
+  version: "0.68.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -767,7 +767,9 @@ OmniOS.register("ai", {
     "- 사실 규칙: 도구 결과에 있는 수치·시각·이름만 말합니다. 도구 결과에 없는 정보(예: 일정 종료 시각, 금액)는 추정하거나 '보통'으로 채우지 말고 '기록에 없습니다'라고 말합니다. 확실하냐고 물으면 도구를 다시 호출해 원본을 확인합니다.",
     "- 계산: 숫자 계산(산수·퍼센트·환산·평균·큰 수)은 절대 암산하지 않고 calculate 도구에 파이썬식 수식으로 넘겨 그 결과를 말합니다. 여러 단계면 도구를 여러 번 호출합니다.",
     "- 환율·주식: \"달러 환율/삼성전자 주가/비트코인\" 류는 check_markets 도구로 확인해 핵심 수치만 말합니다. 일정: \"오늘 일정/이번 주 뭐 있어\"는 check_calendar, \"내일 3시 치과 잡아줘\"처럼 일정 추가 요청은 add_event 도구(start는 YYYY-MM-DD HH:mm, 종일이면 날짜만)로 맥 캘린더에 등록하고 결과를 보고합니다. 날짜·시각은 [실시간 상태 스냅샷]의 현재 시각 기준으로 계산합니다.",
-    "- 그 외 제어(메일 발송, 외부 앱 실행 등)는 아직 미연동이므로 짧게 보고합니다.",
+    "- 패널 전권: OMNI_OS의 모든 패널은 당신 것입니다. 전용 액션이 없는 패널이나 세부 조작은 app_ui 도구로 직접 합니다 — op:'read'로 그 패널의 화면(제목·버튼·입력창·목록)을 읽고, op:'click'(target=버튼 글자)·op:'type'(target=입력창 placeholder/라벨, value=입력값, 끝에 \\n이면 Enter)·op:'select'로 조작한 뒤 다시 read로 결과를 확인합니다. 새 패널이 생겨도 같은 방식으로 씁니다.",
+    "- 웹 검색: \"구글에 ○○ 검색해줘\", \"쿠팡에서 ○○ 찾아줘\" 류는 open_web_search(engine: google/naver/youtube/coupang/amazon/maps, query)로 브라우저에 결과 페이지를 바로 엽니다.",
+    "- 그 외 제어(메일 발송 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
   // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
   FS_TOOLS: [
@@ -901,6 +903,27 @@ OmniOS.register("ai", {
           minutes: { type: "number" }, location: { type: "string" }, notes: { type: "string" },
         },
         required: ["title", "start"],
+      },
+    },
+    {
+      name: "app_ui",
+      description: "OMNI_OS 패널 화면을 직접 읽고 조작한다 (전용 액션이 없는 세부 조작용). op:'read' → 패널의 제목·버튼·입력창·목록 텍스트. op:'click' target=버튼/항목 글자(부분 일치) 또는 CSS 선택자. op:'type' target=입력창 placeholder/라벨/선택자, value=입력값(끝에 \\n이면 Enter). op:'select' target=select 라벨, value=옵션 글자. panel은 패널 키(weather/news/map/markets/calendar/notif/proj/notes/ce/…). 조작 후 read로 확인.",
+      input_schema: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["read", "click", "type", "select"] },
+          panel: { type: "string" }, target: { type: "string" }, value: { type: "string" },
+        },
+        required: ["op", "panel"],
+      },
+    },
+    {
+      name: "open_web_search",
+      description: "기본 브라우저에서 검색 결과 페이지를 바로 연다. engine: google|naver|youtube|coupang|amazon|maps, query: 검색어.",
+      input_schema: {
+        type: "object",
+        properties: { engine: { type: "string" }, query: { type: "string" } },
+        required: ["engine", "query"],
       },
     },
     {
@@ -1536,6 +1559,11 @@ OmniOS.register("ai", {
         await this.saveMemory(String(input.content || ""));
         return "프로필 기억 저장 완료";
       }
+      if (name === "app_ui") return await this.appUI(input);
+      if (name === "open_web_search") {
+        const r = await this.runAction(`web.search:${input.engine || "google"}:${input.query || ""}`);
+        return r.msg;
+      }
       if (name === "recall_memory") {
         const days = Math.max(1, Math.min(60, input.days || 7));
         let pool = OmniMem.recent;
@@ -1752,6 +1780,25 @@ OmniOS.register("ai", {
       }
 
       // ── 상시 대기 토글 (안경 브리지·태그용) ──
+      // ── 웹 검색 바로 열기 / 패널 UI 직접 조작 (안경·태그용) ──
+      if (key === "web.search") {
+        const engine = (parts[1] || "google").toLowerCase();
+        const q = parts.slice(2).join(":").trim();
+        const URLS = {
+          google: "https://www.google.com/search?q=", naver: "https://search.naver.com/search.naver?query=",
+          youtube: "https://www.youtube.com/results?search_query=", coupang: "https://www.coupang.com/np/search?q=",
+          amazon: "https://www.amazon.com/s?k=", maps: "https://www.google.com/maps/search/",
+        };
+        if (!URLS[engine]) return { ok: false, msg: `모르는 검색 엔진: ${engine}` };
+        if (!q) return { ok: false, msg: "검색어 없음" };
+        OmniNet.openUrl(URLS[engine] + encodeURIComponent(q));
+        OmniMem.append("action", `웹 검색 열기: ${engine} "${q}"`);
+        return { ok: true, msg: `${engine}에서 "${q}" 검색 결과를 브라우저로 열었습니다` };
+      }
+      if (key === "ui.read" || key === "ui.click" || key === "ui.type" || key === "ui.select") {
+        const out = await this.appUI({ op: key.slice(3), panel: parts[1] || "", target: parts[2] || "", value: parts.slice(3).join(":") });
+        return { ok: !/^오류/.test(out), msg: out.slice(0, 400) };
+      }
       if (key === "ai.enroll") {
         await this.enrollVoice();
         return { ok: true, msg: "목소리 등록 시작" };
@@ -2272,6 +2319,26 @@ OmniOS.register("ai", {
         type: "object",
         properties: { expression: { type: "string" } },
         required: ["expression"],
+      },
+    },
+    {
+      type: "function",
+      name: "open_web_search",
+      description: "브라우저에서 검색 결과를 바로 연다 — \"구글에 ○○ 검색해줘\", \"쿠팡에서 ○○ 찾아줘\"에 사용. engine: google|naver|youtube|coupang|amazon|maps.",
+      parameters: {
+        type: "object",
+        properties: { engine: { type: "string" }, query: { type: "string" } },
+        required: ["engine", "query"],
+      },
+    },
+    {
+      type: "function",
+      name: "app_ui",
+      description: "OMNI_OS 패널 화면을 읽고(op read) 버튼 클릭·입력(op click/type/select)으로 세부 조작. 전용 액션이 없는 패널 작업에 사용.",
+      parameters: {
+        type: "object",
+        properties: { op: { type: "string" }, panel: { type: "string" }, target: { type: "string" }, value: { type: "string" } },
+        required: ["op", "panel"],
       },
     },
     {
@@ -2925,6 +2992,78 @@ OmniOS.register("ai", {
     this.gateCmd({ cmd: "enroll", seconds: 15, kind: "user", name });
   },
 
+  // ================= 패널 UI 직접 조작 (전권) =================
+  // 어떤 패널이든 화면에 있는 것을 읽고, 글자로 버튼을 찾아 누르고, 입력창에 쓴다.
+  async appUI(input) {
+    const key = String(input.panel || "").toLowerCase();
+    const root = document.getElementById(`panel-${key}`) || document.querySelector(`.panel-${key}`);
+    if (!root) return `오류: 패널 없음: ${key} (키: ${Object.keys(this.PANEL_LABELS).join(", ")})`;
+    const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    const label = (el) => (el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("placeholder")
+      || (el.id ? ((root.querySelector(`label[for="${el.id}"]`) || {}).textContent || "") : "")
+      || el.textContent || el.value || "").replace(/\s+/g, " ").trim();
+    const findEl = (sel, target) => {
+      const t = String(target || "").trim().toLowerCase();
+      if (!t) return null;
+      let el = null;
+      try { el = root.querySelector(t); } catch (e) { el = null; }
+      if (el) return el;
+      const cands = [...root.querySelectorAll(sel)].filter(visible);
+      return cands.find((c) => label(c).toLowerCase() === t) || cands.find((c) => label(c).toLowerCase().includes(t))
+        || cands.find((c) => (c.id || "").toLowerCase().includes(t)) || null;
+    };
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const op = String(input.op || "read").toLowerCase();
+    if (op === "read") {
+      const btn = document.querySelector(`.nav-item[data-panel="${key}"]`);
+      if (btn && !root.classList.contains("active")) { btn.click(); await wait(400); }
+      const heads = [...root.querySelectorAll("h1,h2,h3,.nf-title,.ai-title,.sp1-title,.nf-sec-h,.ai-side-h")].filter(visible).map(label).filter(Boolean);
+      const buttons = [...new Set([...root.querySelectorAll("button,[role=button],.ig-tab")].filter(visible).map(label).filter(Boolean))];
+      const inputs = [...root.querySelectorAll("input,textarea,select")].filter(visible).map((el) =>
+        `${el.tagName.toLowerCase()}${el.type ? "[" + el.type + "]" : ""} "${label(el)}"${el.value ? ` = ${String(el.value).slice(0, 40)}` : ""}`);
+      const items = [...root.querySelectorAll("li,.nf-item,.nw-item,.mk-row,.cl-ev,.wx-day,.pj-item,.mk-fxcard,.cl-day .h,.wx-now")].filter(visible).map(label).filter(Boolean).slice(0, 40);
+      let text = root.innerText.replace(/\n{2,}/g, "\n").trim();
+      if (text.length > 1800) text = text.slice(0, 1800) + " …";
+      return [`[패널 ${this.PANEL_LABELS[key] || key}]`, heads.length ? `제목: ${heads.join(" | ")}` : "",
+        buttons.length ? `버튼: ${buttons.slice(0, 40).join(" | ")}` : "",
+        inputs.length ? `입력: ${inputs.join(" | ")}` : "",
+        items.length ? `항목:\n${items.map((x) => "- " + x.slice(0, 120)).join("\n")}` : "",
+        `본문:\n${text}`].filter(Boolean).join("\n");
+    }
+    if (op === "click") {
+      const el = findEl("button,[role=button],a,.ig-tab,.nav-item,.nf-item,.nw-item,.mk-row,.cl-ev,.pj-item,option,label,span,div", input.target);
+      if (!el) return `오류: '${input.target}' 요소를 찾지 못했습니다 (read로 버튼 목록 확인)`;
+      el.click();
+      await wait(300);
+      OmniMem.append("action", `패널 ${key} 클릭: ${label(el)}`);
+      return `클릭: ${label(el) || input.target}`;
+    }
+    if (op === "type") {
+      const el = findEl("input,textarea,[contenteditable=true]", input.target);
+      if (!el) return `오류: '${input.target}' 입력창을 찾지 못했습니다`;
+      let v = String(input.value ?? "");
+      const enter = v.endsWith("\n"); if (enter) v = v.slice(0, -1);
+      el.focus();
+      if (el.isContentEditable) el.textContent = v; else el.value = v;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      if (enter) el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await wait(400);
+      OmniMem.append("action", `패널 ${key} 입력: ${label(el)} ← ${v}${enter ? " ⏎" : ""}`);
+      return `입력 완료: ${label(el) || input.target} ← "${v}"${enter ? " (Enter)" : ""}`;
+    }
+    if (op === "select") {
+      const el = findEl("select", input.target);
+      if (!el) return `오류: '${input.target}' 선택 상자를 찾지 못했습니다`;
+      const want = String(input.value || "").toLowerCase();
+      const opt = [...el.options].find((o) => o.textContent.toLowerCase().includes(want) || o.value.toLowerCase() === want);
+      if (!opt) return `오류: 옵션 없음: ${input.value} (있는 옵션: ${[...el.options].map((o) => o.textContent).join(", ")})`;
+      el.value = opt.value; el.dispatchEvent(new Event("change", { bubbles: true }));
+      return `선택: ${opt.textContent}`;
+    }
+    return `오류: 모르는 op ${op}`;
+  },
+
   async handleRtTool(callId, name, args) {
     let output = "";
     if (name === "ask_brain") {
@@ -2965,7 +3104,7 @@ OmniOS.register("ai", {
     } else if (name === "calculate") {
       this.logLine("sys", `도구 · calculate ${(args && args.expression) || ""}`);
       output = await this.execTool("calculate", args || {});
-    } else if (name === "check_markets" || name === "check_calendar" || name === "add_event" || name === "recall_memory") {
+    } else if (["check_markets", "check_calendar", "add_event", "recall_memory", "open_web_search", "app_ui"].includes(name)) {
       this.logLine("sys", `도구 · ${name}`);
       output = await this.execTool(name, args || {});
     } else {
