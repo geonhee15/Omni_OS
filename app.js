@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.74.1",
+  version: "0.75.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -9,7 +9,18 @@ const OmniOS = {
     this.modules[name] = module;
     if (typeof module.init === "function") module.init();
   },
+
+  // 카메라 감시기(SP-1)가 UDP로 보낸 손 포즈 — 네이티브가 넘겨준다. 관심 있는 모듈에 배달.
+  gestureEvent(ev) {
+    if (!ev || typeof ev !== "object" || !ev.gesture) return;
+    for (const m of Object.values(this.modules)) {
+      if (typeof m.onGesture === "function") {
+        try { Promise.resolve(m.onGesture(ev)).catch(() => {}); } catch (e) { /* 모듈 오류 격리 */ }
+      }
+    }
+  },
 };
+window.OmniOS = OmniOS;   // 네이티브가 evaluateJavaScript로 부른다 (const는 window 속성이 아님)
 
 // ---------- native bridge (WKWebView <-> Objective-C) ----------
 const OmniNative = {
@@ -13630,7 +13641,12 @@ OmniOS.register("smart", {
     const $ = (id) => document.getElementById(id);
     this.els = { sub: $("sc-sub"), updated: $("sc-updated"), refresh: $("sc-refresh"), scan: $("sc-scan"), err: $("sc-err"),
       hint: $("sc-hint"), setup: $("sc-setup"), setupToggle: $("sc-setup-toggle"), user: $("sc-user"), pass: $("sc-pass"),
-      save: $("sc-save"), setupState: $("sc-setup-state"), grid: $("sc-grid"), ip: $("sc-ip"), addip: $("sc-addip") };
+      save: $("sc-save"), setupState: $("sc-setup-state"), grid: $("sc-grid"), ip: $("sc-ip"), addip: $("sc-addip"),
+      gestRows: $("sc-gest-rows"), gestState: $("sc-gest-state"), gestAdd: $("sc-gest-add") };
+    this.els.gestAdd.addEventListener("click", () => { this.gestures.push({ gesture: "Open_Palm", action: "off", device: "", enabled: true }); this.saveGestures(); this.renderGestures(); });
+    this.els.gestRows.addEventListener("change", (e) => this.onGestureRowChange(e));
+    this.els.gestRows.addEventListener("click", (e) => { const rm = e.target.closest("button.rm"); if (!rm) return; this.gestures.splice(Number(rm.dataset.i), 1); this.saveGestures(); this.renderGestures(); });
+    this.loadGestures();
     this.els.refresh.addEventListener("click", () => this.refresh());
     this.els.scan.addEventListener("click", () => this.scan());
     this.els.save.addEventListener("click", () => this.saveCreds());
@@ -13919,4 +13935,86 @@ OmniOS.register("smart", {
   },
 
   esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); },
+
+  // ---- 제스처 → 동작 (SP-1 카메라 손 포즈, 네이티브 UDP 47832 → OmniOS.gestureEvent)
+  GESTURE_NAMES: [["Finger_Gun", "손가락 총 (검지 + 엄지 L자)"], ["Thumb_Up", "엄지 척"], ["Open_Palm", "손바닥 펴기"],
+    ["Closed_Fist", "주먹"], ["Victory", "브이"], ["Pointing_Up", "검지 위로"], ["ILoveYou", "엄지·검지·새끼"]],
+  GESTURE_ACTIONS: [["toggle", "켜짐/꺼짐 토글"], ["on", "켜기"], ["off", "끄기"]],
+  gestures: [],
+  _gestureAt: {},
+  _gestureBusy: false,
+
+  async loadGestures() {
+    let list = null;
+    if (OmniNative.available) {
+      const r = await OmniNative.request("store.read", JSON.stringify({ name: "smart_gestures" }), 5000).catch(() => null);
+      try { list = r && r.data ? JSON.parse(r.data) : null; } catch (e) { list = null; }
+    } else {
+      try { list = JSON.parse(localStorage.getItem("omni.smart_gestures") || "null"); } catch (e) { list = null; }
+    }
+    this.gestures = Array.isArray(list) ? list : [{ gesture: "Finger_Gun", action: "toggle", device: "", enabled: true }];
+    this.renderGestures();
+  },
+
+  saveGestures() {
+    const data = JSON.stringify(this.gestures);
+    if (OmniNative.available) OmniNative.request("store.write", JSON.stringify({ name: "smart_gestures", data }), 5000).catch(() => {});
+    else localStorage.setItem("omni.smart_gestures", data);
+  },
+
+  renderGestures() {
+    const box = this.els.gestRows;
+    box.innerHTML = "";
+    if (!this.gestures.length) { box.innerHTML = '<div class="nf-empty">등록된 제스처 없음 — + ADD GESTURE</div>'; return; }
+    this.gestures.forEach((g, i) => {
+      const row = document.createElement("div");
+      row.className = "sc-gest-row";
+      row.dataset.i = String(i);
+      const opts = (list, v) => list.map(([k, l]) => `<option value="${k}"${k === v ? " selected" : ""}>${l}</option>`).join("");
+      row.innerHTML = `
+        <label class="sc-gon"><input type="checkbox" class="sc-gen" title="사용"${g.enabled !== false ? " checked" : ""}>사용</label>
+        <select class="sc-gges" title="제스처">${opts(this.GESTURE_NAMES, g.gesture)}</select>
+        <span class="arrow">&rarr;</span>
+        <select class="sc-gact" title="동작">${opts(this.GESTURE_ACTIONS, g.action)}</select>
+        <input class="sc-gdev" placeholder="기기 이름 (비우면 첫 기기)" value="${this.esc(g.device || "")}" autocomplete="off" spellcheck="false">
+        <button class="rm" data-i="${i}" title="삭제">&#10005;</button>`;
+      box.appendChild(row);
+    });
+  },
+
+  onGestureRowChange(e) {
+    const row = e.target.closest(".sc-gest-row");
+    if (!row) return;
+    const g = this.gestures[Number(row.dataset.i)];
+    if (!g) return;
+    g.enabled = row.querySelector(".sc-gen").checked;
+    g.gesture = row.querySelector(".sc-gges").value;
+    g.action = row.querySelector(".sc-gact").value;
+    g.device = row.querySelector(".sc-gdev").value.trim();
+    this.saveGestures();
+  },
+
+  gestureLabel(k) { const f = this.GESTURE_NAMES.find((x) => x[0] === k); return f ? f[1] : k; },
+
+  async onGesture(ev) {
+    const g = String(ev.gesture || "");
+    const t = new Date();
+    const hm = `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}:${String(t.getSeconds()).padStart(2, "0")}`;
+    const maps = this.gestures.filter((x) => x.enabled !== false && x.gesture === g);
+    if (!maps.length) { this.els.gestState.textContent = `${hm} ${this.gestureLabel(g)} (매핑 없음)`; this.els.gestState.className = "sc-gest-state"; return; }
+    const now = Date.now();
+    if (now - (this._gestureAt[g] || 0) < 2000 || this._gestureBusy) return;   // 연속 발동 방지
+    this._gestureAt[g] = now;
+    this._gestureBusy = true;
+    try {
+      for (const m of maps) {
+        const r = await this.control({ device: m.device, action: m.action });
+        this.els.gestState.textContent = `${hm} ${this.gestureLabel(g)} → ${r.msg}`;
+        this.els.gestState.className = `sc-gest-state${r.ok ? " fired" : ""}`;
+        const ai = OmniOS.modules.ai;
+        if (ai) { const l = ai.logLine("sys", `[제스처] ${this.gestureLabel(g)} → ${r.msg}`); l.classList.add("ignored"); ai.gateNote(`제스처 ${g} → ${m.action} ${m.device || "(첫 기기)"}: ${r.msg}`); }
+        OmniMem.append("action", `제스처(${g}) → 스마트 ${m.action} ${m.device || ""}: ${r.msg}`);
+      }
+    } finally { this._gestureBusy = false; }
+  },
 });

@@ -8,6 +8,9 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <Vision/Vision.h>
 #import <signal.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 #import "sp1_status.h"
 #import "sysmon.h"
 #import "code_editor.h"
@@ -321,7 +324,49 @@ static NSString *ArcSavesDir(void) {
     self.window = window;
     self.webView = webView;
     self.arduino = [[ArduinoBridge alloc] initWithWebView:webView];
+    [self startGestureListener];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+// ---- 제스처 브리지: SP-1(카메라 감시기)이 손 포즈를 UDP 127.0.0.1:47832로 보내면
+// JS OmniOS.gestureEvent(ev)로 넘긴다 (SMART CONTROL 손가락 총 → 조명 등)
+static dispatch_source_t gGestureSource = nil;
+
+- (void)startGestureListener {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return;
+    int yes = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(47832);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        NSLog(@"gesture listener: bind 47832 failed");
+        return;
+    }
+    gGestureSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)fd, 0,
+                                            dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(gGestureSource, ^{
+        char buf[4096];
+        ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
+        if (n <= 0) return;
+        NSData *d = [NSData dataWithBytes:buf length:(NSUInteger)n];
+        id parsed = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+        if (![parsed isKindOfClass:[NSDictionary class]]) return;      // JSON 객체만 통과
+        NSData *safe = [NSJSONSerialization dataWithJSONObject:parsed options:0 error:nil];
+        NSString *json = safe ? [[NSString alloc] initWithData:safe encoding:NSUTF8StringEncoding] : nil;
+        if (json == nil) return;
+        NSString *js = [NSString stringWithFormat:@"window.OmniOS && OmniOS.gestureEvent && OmniOS.gestureEvent(%@)", json];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf.webView evaluateJavaScript:js completionHandler:nil];
+        });
+    });
+    dispatch_source_set_cancel_handler(gGestureSource, ^{ close(fd); });
+    dispatch_resume(gGestureSource);
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {

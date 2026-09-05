@@ -4055,3 +4055,15 @@ input.vc-name {
 .sc-card .sc-timer { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sc-card .sc-timer .sc-min { width: 56px; }
 .sc-card .sc-countdown { font-size: 9px; letter-spacing: 1.5px; color: var(--warn); }
+.sc-gest { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--cyan-faint); border-radius: 4px; background: rgba(3, 14, 28, 0.55); }
+.sc-gest-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sc-gest-state { font-size: 9px; letter-spacing: 1.5px; color: var(--text-dim); }
+.sc-gest-state.fired { color: var(--ok); }
+.sc-gest-rows { display: flex; flex-direction: column; gap: 6px; }
+.sc-gest-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sc-gest-row select, .sc-gest-row .sc-gdev { font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; color: var(--cyan); background: rgba(3, 14, 28, 0.7); border: 1px solid var(--cyan-faint); border-radius: 3px; padding: 4px 6px; outline: none; }
+.sc-gest-row .sc-gdev { width: 160px; }
+.sc-gest-row .arrow { color: var(--text-dim); font-size: 10px; }
+.sc-gest-row .sc-gon { font-size: 9px; letter-spacing: 1px; color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
+.sc-gest-row .rm { background: none; border: none; color: rgba(111, 168, 201, 0.4); cursor: pointer; font-size: 11px; }
+.sc-gest-row .rm:hover { color: var(--alert); }
