@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.65.0",
+  version: "0.66.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -845,7 +845,23 @@ OmniOS.register("ai", {
     this.els.enrollBtn = document.getElementById("ai-enroll");
     this.els.voiceId = document.getElementById("ai-voiceid");
     this.els.alwaysBtn.addEventListener("click", () => this.toggleAlways());
-    this.els.enrollBtn.addEventListener("click", () => this.enrollVoice());
+    this.els.enrollBtn.addEventListener("click", () => this.enrollVoice("user"));
+    this.els.voiceSel = document.getElementById("ai-voicesel");
+    this.els.enrollOther = document.getElementById("ai-enroll-other");
+    this.els.voiceNew = document.getElementById("ai-voice-new");
+    this.els.voiceAnalyze = document.getElementById("ai-voice-analyze");
+    this.els.voiceDel = document.getElementById("ai-voice-del");
+    this.els.enrollOther.addEventListener("click", () => this.enrollVoice("other"));
+    this.els.voiceSel.addEventListener("change", () => this.voiceCmd({ cmd: "select", name: this.els.voiceSel.value }));
+    this.els.voiceNew.addEventListener("click", () => {
+      const name = prompt("새 목소리 ID 이름 (예: me, me-mic2)", "me");
+      if (name) this.voiceCmd({ cmd: "new", name: name.trim(), kind: "user" });
+    });
+    this.els.voiceAnalyze.addEventListener("click", () => this.voiceCmd({ cmd: "analyze" }));
+    this.els.voiceDel.addEventListener("click", () => {
+      const name = this.els.voiceSel.value;
+      if (name && confirm(`목소리 ID 삭제: ${name}?`)) this.voiceCmd({ cmd: "delete", name });
+    });
     if (OmniNative.available) {
       this.updateVoiceId();
       // 상시 대기가 켜져 있었으면 앱 시작 시 자동 복귀
@@ -2482,7 +2498,7 @@ OmniOS.register("ai", {
       this.updateVoiceId();
       this.setInd(this.els.indStt, ev.profile ? "VOICE ID" : "NO PROFILE", ev.profile ? "ok" : "err");
       this.logLine("sys", `음성 게이트 준비 · 화자 인증 ${ev.profile ? `ON (임계 ${ev.threshold})` : "OFF — 목소리 미등록"}`);
-      this.gateNote(`게이트 준비 profile=${ev.profile} thr=${ev.threshold}`);
+      this.gateNote(`게이트 준비 profile=${ev.profile} thr=${ev.threshold} active=${ev.active} negatives=${(ev.negatives || []).join(",")}`);
     } else if (e === "speech_start") {
       this.micLevel = 0.7;
       this._speechStartAt = Date.now();
@@ -2500,27 +2516,62 @@ OmniOS.register("ai", {
         const now = Date.now();
         if (now - (this._lastIgnoreLogAt || 0) > 4000) {
           this._lastIgnoreLogAt = now;
-          const l = this.logLine("sys", `무시 · 내 목소리 아님 (유사도 ${ev.sim == null ? "?" : ev.sim})`);
+          const who = ev.why && ev.why.startsWith("closer_to:") ? ` — 등록된 타인 [${ev.why.slice(10)}]에 더 가까움 (${ev.neg})` : "";
+          const l = this.logLine("sys", `무시 · 내 목소리 아님 (유사도 ${ev.sim == null ? "?" : ev.sim})${who}`);
           l.classList.add("ignored");
         }
         this.gateNote(`무시 · 화자 불일치 sim=${ev.sim} dur=${ev.dur}`);
       }
     } else if (e === "enroll") {
+      this._lastAnalysis = null;
       this.els.voiceId.textContent = `RECORDING ${Math.round((ev.progress || 0) * 100)}% · 발화 ${ev.secs || 0}s`;
       this.els.voiceId.className = "ai-voiceid rec";
+    } else if (e === "profiles") {
+      this._voiceProfiles = ev;
+      const sel = this.els.voiceSel;
+      sel.textContent = "";
+      const users = (ev.list || []).filter((p) => p.kind === "user");
+      for (const p of users) {
+        const o = document.createElement("option");
+        o.value = p.name;
+        o.textContent = `${p.name} · ${p.embs}개 · ${p.secs}s`;
+        if (p.name === ev.active) o.selected = true;
+        sel.appendChild(o);
+      }
+      if (!users.length) { const o = document.createElement("option"); o.value = "me"; o.textContent = "me (미등록)"; sel.appendChild(o); }
+      const others = (ev.list || []).filter((p) => p.kind === "other");
+      this._gateProfile = users.some((p) => p.name === ev.active && p.embs > 0);
+      if (!this._lastAnalysis) {
+        this.els.voiceId.textContent = this._gateProfile
+          ? `ID ${ev.active} 사용 중 · 타인 ${others.length}명 등록${others.length ? " (" + others.map((o) => o.name).join(", ") + ")" : ""}`
+          : "NOT ENROLLED — ENROLL ME로 등록";
+        this.els.voiceId.className = `ai-voiceid${this._gateProfile ? " ok" : ""}`;
+      }
+    } else if (e === "analysis") {
+      this._lastAnalysis = ev;
+      const negs = Object.entries(ev.neg || {}).map(([k, v]) => `${k} ${v}`).join(", ");
+      const txt = ev.name
+        ? `ID ${ev.name} · 임베딩 ${ev.embs}개 (등록 ${ev.sessions}회, 발화 ${ev.secs}s)\n자기 유사도 평균 ${ev.self_mean} · 최저 ${ev.self_min}\n타인 최대 ${ev.neg_max == null ? "— (타인 미등록)" : ev.neg_max + " [" + negs + "]"}\n구분 여유 ${ev.margin == null ? "—" : ev.margin} · 임계 ${ev.threshold} · 판정: ${ev.verdict}`
+        : "프로필 없음";
+      this.els.voiceId.textContent = txt;
+      this.els.voiceId.className = `ai-voiceid ${ev.verdict === "약함" ? "warn" : "ok"}`;
+      if (ev.verdict === "약함") this.logLine("sys", "주의: 내 목소리와 등록된 타인 목소리의 구분 여유가 좁습니다 — 더 다양한 톤으로 ENROLL ME를 하거나, 그 타인 목소리를 OTHER로 더 등록하세요.");
+      if (ev.verdict === "타인 미등록") this.logLine("sys", "팁: OTHER로 TV·가족 등 다른 목소리를 등록하면 구분 경계를 학습해 더 정확해집니다.");
+      this.gateNote(`분석 ${ev.name}: self=${ev.self_mean}/${ev.self_min} neg=${ev.neg_max} margin=${ev.margin} thr=${ev.threshold} ${ev.verdict}`);
     } else if (e === "enrolled") {
-      this._gateProfile = true;
-      this.els.voiceId.textContent = `ENROLLED · SELF ${ev.self_sim} · THR ${ev.threshold}`;
-      this.els.voiceId.className = "ai-voiceid ok";
-      this.logLine("sys", `목소리 등록 완료 — 세그먼트 ${ev.segments}개, 자기 유사도 ${ev.self_sim}, 임계 ${ev.threshold}`);
-      this.gateNote(`등록 완료 seg=${ev.segments} self=${ev.self_sim} thr=${ev.threshold}`);
+      this._gateProfile = ev.kind === "user" || this._gateProfile;
+      this.logLine("sys", ev.kind === "other"
+        ? `타인 목소리 등록 [${ev.name}] — ${ev.added}개 추가 (총 ${ev.total}). 임계 ${ev.threshold}${ev.warn ? " · " + ev.warn : ""}`
+        : `목소리 등록 [${ev.name}] — ${ev.added}개 추가, 총 ${ev.total}개 (등록 ${ev.sessions}회 · 발화 ${ev.secs}s) · 임계 ${ev.threshold}${ev.verdict ? " · 판정 " + ev.verdict : ""}`);
+      if (ev.warn) { const l = this.logLine("sys", ev.warn); l.className += " ignored"; }
+      this.gateNote(`등록 ${ev.kind} ${ev.name} +${ev.added}=${ev.total} thr=${ev.threshold} ${ev.verdict || ""}`);
       this.setInd(this.els.indStt, "VOICE ID", "ok");
-      if (this._enrollOnly) { this._enrollOnly = false; OmniNative.request("ai.gateStop", null, 5000).catch(() => {}); }
+      if (this._enrollOnly) { this._enrollOnly = false; this._gateRunning = false; OmniNative.request("ai.gateStop", null, 5000).catch(() => {}); }
     } else if (e === "enroll_failed") {
       this.els.voiceId.textContent = "ENROLL FAILED";
       this.els.voiceId.className = "ai-voiceid";
       this.logLine("sys", `목소리 등록 실패 — ${ev.text || ""}`);
-      if (this._enrollOnly) { this._enrollOnly = false; OmniNative.request("ai.gateStop", null, 5000).catch(() => {}); }
+      if (this._enrollOnly) { this._enrollOnly = false; this._gateRunning = false; OmniNative.request("ai.gateStop", null, 5000).catch(() => {}); }
     } else if (e === "exit") {
       if (this.alwaysOn) {
         this.logLine("sys", "음성 게이트가 종료되어 상시 대기를 끕니다.");
@@ -2618,20 +2669,45 @@ OmniOS.register("ai", {
   async updateVoiceId() {
     const st = await OmniNative.request("ai.gateStatus", null, 5000).catch(() => null);
     this._gateProfile = !!(st && st.profile);
-    this.els.voiceId.textContent = this._gateProfile ? "ENROLLED" : "NOT ENROLLED";
-    this.els.voiceId.className = `ai-voiceid${this._gateProfile ? " ok" : ""}`;
+    if (!this._voiceProfiles) {
+      this.els.voiceId.textContent = this._gateProfile ? "ENROLLED" : "NOT ENROLLED — ENROLL ME로 등록";
+      this.els.voiceId.className = `ai-voiceid${this._gateProfile ? " ok" : ""}`;
+    }
   },
 
-  async enrollVoice() {
-    if (!OmniNative.available) { this.logLine("sys", "앱에서만 가능합니다."); return; }
-    if (!this._gateRunning) {
-      const g = await OmniNative.request("ai.gateStart", null, 15000).catch(() => null);
-      if (!g || !g.ok) { this.logLine("sys", "음성 게이트를 시작하지 못했습니다."); return; }
-      this._enrollOnly = !this.alwaysOn;
-      await new Promise((res) => setTimeout(res, 2500)); // 모델 로드 대기
+  async ensureGate() {
+    if (this._gateRunning) return true;
+    const g = await OmniNative.request("ai.gateStart", null, 15000).catch(() => null);
+    if (!g || !g.ok) { this.logLine("sys", "음성 게이트를 시작하지 못했습니다."); return false; }
+    this._gateRunning = true;
+    this._enrollOnly = !this.alwaysOn;
+    await new Promise((res) => setTimeout(res, 2500)); // 모델 로드 대기
+    return true;
+  },
+
+  async voiceCmd(obj) {
+    if (!OmniNative.available) return;
+    if (!(await this.ensureGate())) return;
+    this.gateCmd(obj);
+    if (this._enrollOnly && obj.cmd !== "enroll") {
+      // 상시 모드가 아니면 프로필 명령 처리 후 게이트 내림 (이벤트 수신 시간 확보)
+      setTimeout(() => { if (!this.alwaysOn) { this._enrollOnly = false; this._gateRunning = false; OmniNative.request("ai.gateStop", null, 5000).catch(() => {}); } }, 2500);
     }
-    this.logLine("sys", "목소리 등록 — 15초 동안 평소 톤으로 여러 문장을 말해 주세요. 예: \"옴니야 오늘 날씨 어때. 내일 일정 알려줘. 카톡 온 거 있어? 노트 패널 열어줘.\"");
-    this.gateCmd({ cmd: "enroll", seconds: 15 });
+  },
+
+  async enrollVoice(kind) {
+    if (!OmniNative.available) { this.logLine("sys", "앱에서만 가능합니다."); return; }
+    if (!(await this.ensureGate())) return;
+    if (kind === "other") {
+      const label = prompt("타인 목소리 라벨 (예: TV, 엄마, 친구)", "TV");
+      if (!label) return;
+      this.logLine("sys", `타인 목소리 등록 [${label.trim()}] — 15초 동안 그 사람(또는 TV)이 말하게 두세요. 내 목소리는 섞이지 않게.`);
+      this.gateCmd({ cmd: "enroll", seconds: 15, kind: "other", name: label.trim() });
+      return;
+    }
+    const name = this.els.voiceSel.value || "me";
+    this.logLine("sys", `목소리 등록 [${name}] — 15초 동안 평소 톤으로 여러 문장을 말해 주세요 (덧붙여 누적됩니다). 예: \"옴니야 오늘 날씨 어때. 내일 일정 알려줘. 카톡 온 거 있어?\"`);
+    this.gateCmd({ cmd: "enroll", seconds: 15, kind: "user", name });
   },
 
   async handleRtTool(callId, name, args) {

@@ -4017,3 +4017,11 @@ input.vc-name {
 .ai-voiceid.ok { color: var(--ok); }
 .ai-voiceid.rec { color: var(--warn); }
 .ai-listen.always { border-color: var(--ok); color: var(--ok); box-shadow: 0 0 14px rgba(61, 255, 168, 0.35); }
+
+.ai-voicesel {
+  width: 100%; margin: 4px 0 6px; padding: 4px 6px; font-family: var(--font-mono); font-size: 9.5px;
+  letter-spacing: 1px; color: var(--cyan); background: rgba(3, 14, 28, 0.7);
+  border: 1px solid var(--cyan-faint); border-radius: 3px; outline: none;
+}
+.ai-voiceid { white-space: pre-line; line-height: 1.5; }
+.ai-voiceid.warn { color: var(--warn); }

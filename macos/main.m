@@ -2058,9 +2058,12 @@ static NSString *OmniAIFsValidate(NSString *path) {
 
     } else if ([cmd isEqualToString:@"ai.gateStatus"]) {
         NSString *profile = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/voice_profile.json"];
+        NSString *store = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/voice/profiles.json"];
+        BOOL has = [NSFileManager.defaultManager fileExistsAtPath:profile]
+                || [NSFileManager.defaultManager fileExistsAtPath:store];
         [self deliverPayload:@{ @"ok" : @YES,
                                 @"running" : @(self.gateTask != nil && self.gateTask.isRunning),
-                                @"profile" : @([NSFileManager.defaultManager fileExistsAtPath:profile]) }
+                                @"profile" : @(has) }
                        forId:msgId];
 
     } else if ([cmd isEqualToString:@"ai.gateNote"]) {

@@ -36,10 +36,12 @@ warnings.filterwarnings("ignore")
 
 SR = 16000
 WIN = 512                       # silero VAD 프레임 (32ms @16k)
-PROFILE = os.path.expanduser("~/.omni/voice_profile.json")
+PROFILE = os.path.expanduser("~/.omni/voice_profile.json")   # 구버전 (이전용)
+VOICE_DIR = os.path.expanduser("~/.omni/voice")
+STORE = os.path.join(VOICE_DIR, "profiles.json")
 DEFAULT_THRESHOLD = 0.76
 MAYBE_MARGIN = 0.08             # 임계 바로 아래 구간 — 버리지 않고 호출어/분류기 게이트에 맡김
-MAX_PROFILE_EMBS = 14           # 프로필 임베딩 집합 크기 (등록 + 적응)
+MAX_PROFILE_EMBS = 40           # 프로필당 임베딩 집합 상한 (등록 누적 + 적응)
 MIN_SEG = 0.4                   # 이보다 짧으면 판정 불가 → 버림
 MIN_ENROLL_SEG = 0.7
 MAX_SEG = 12.0
@@ -69,6 +71,7 @@ class Gate:
         self.encoder = VoiceEncoder("cpu", verbose=False)
         self.ref = None
         self.ref_set = []
+        self.neg_sets = {}
         self.threshold = DEFAULT_THRESHOLD
         self.load_profile()
         if threshold is not None:
@@ -83,62 +86,143 @@ class Gate:
         self.enroll_target = 0
         self.enroll_secs = 0.0
         self._enroll_tick = 0.0
+        self.enroll_kind = "user"
+        self.enroll_name = None
         self.last_user_emb = None       # 마지막으로 통과한 발화 임베딩 (적응용)
 
-    # ---------------- 프로필
+    # ---------------- 프로필 저장소 (~/.omni/voice/profiles.json)
+    #
+    # {"active": "me", "profiles": {이름: {"kind": "user"|"other", "embs": [...],
+    #   "secs": 누적 발화초, "sessions": 등록 횟수, "threshold": (user만), ...}}}
+    # user 프로필은 골라 쓰고(active) ENROLL마다 덧붙인다. other 프로필(타인 목소리)은
+    # 전부 부정 예시로 쓰여 "나보다 타인에 더 가까운" 발화를 거부하고 임계를 보정한다.
+
     def load_profile(self):
+        self.store = {"active": None, "profiles": {}}
         try:
-            with open(PROFILE) as f:
-                p = json.load(f)
-            self.ref = np.asarray(p["emb"], dtype=np.float32)
-            self.ref /= np.linalg.norm(self.ref) + 1e-9
-            embs = p.get("embs") or [p["emb"]]
-            self.ref_set = [self._unit(np.asarray(e, dtype=np.float32)) for e in embs]
-            self.threshold = float(p.get("threshold", DEFAULT_THRESHOLD))
-        except (OSError, ValueError, KeyError):
-            self.ref = None
-            self.ref_set = []
+            with open(STORE) as f:
+                self.store = json.load(f)
+        except (OSError, ValueError):
+            # 구버전 단일 프로필 이전
+            try:
+                with open(PROFILE) as f:
+                    old = json.load(f)
+                embs = old.get("embs") or [old["emb"]]
+                self.store = {"active": "me", "profiles": {"me": {
+                    "kind": "user", "embs": embs, "secs": 0.0,
+                    "sessions": int(old.get("segments", 0) > 0),
+                    "threshold": float(old.get("threshold", DEFAULT_THRESHOLD)),
+                    "created": old.get("created", time.time()), "updated": time.time()}}}
+                self._save_store()
+            except (OSError, ValueError, KeyError):
+                pass
+        self._rebuild_sets()
+
+    def _save_store(self):
+        os.makedirs(VOICE_DIR, exist_ok=True)
+        tmp = STORE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.store, f)
+        os.replace(tmp, STORE)
+        os.chmod(STORE, 0o600)
 
     @staticmethod
     def _unit(e):
+        e = np.asarray(e, dtype=np.float32)
         return e / (np.linalg.norm(e) + 1e-9)
 
-    def _write_profile(self, extra=None):
-        p = {"emb": self.ref.tolist(), "embs": [e.tolist() for e in self.ref_set],
-             "threshold": self.threshold, "updated": time.time()}
-        try:
-            with open(PROFILE) as f:
-                old = json.load(f)
-            for k in ("self_sim", "segments", "created", "adapted"):
-                if k in old:
-                    p[k] = old[k]
-        except (OSError, ValueError):
-            pass
-        if extra:
-            p.update(extra)
-        os.makedirs(os.path.dirname(PROFILE), exist_ok=True)
-        with open(PROFILE, "w") as f:
-            json.dump(p, f)
-        os.chmod(PROFILE, 0o600)
+    def _rebuild_sets(self):
+        """active user 집합 + 모든 other 집합을 메모리에 준비."""
+        profs = self.store.get("profiles", {})
+        name = self.store.get("active")
+        prof = profs.get(name) if name else None
+        if prof and prof.get("kind") == "user" and prof.get("embs"):
+            self.ref_set = [self._unit(e) for e in prof["embs"]]
+            self.ref = self._unit(np.mean(self.ref_set, axis=0))
+            self.threshold = float(prof.get("threshold", DEFAULT_THRESHOLD))
+        else:
+            self.ref_set, self.ref = [], None
+            self.threshold = DEFAULT_THRESHOLD
+        self.neg_sets = {n: [self._unit(e) for e in p.get("embs", [])]
+                         for n, p in profs.items() if p.get("kind") == "other" and p.get("embs")}
 
-    def save_profile(self, embs):
-        """등록: 임베딩 집합(2초 창들) + 중심. 임계는 leave-one-out 자기 유사도 기반."""
-        units = [self._unit(np.asarray(e, dtype=np.float32)) for e in embs]
-        ref = self._unit(np.mean(units, axis=0))
-        # 각 임베딩이 "나머지"와 얼마나 닮았는지 (실사용 판정과 같은 max 방식)
-        sims = []
+    def profiles_event(self):
+        profs = self.store.get("profiles", {})
+        return {"ev": "profiles", "active": self.store.get("active"),
+                "list": [{"name": n, "kind": p.get("kind"), "embs": len(p.get("embs", [])),
+                          "secs": round(float(p.get("secs", 0)), 1),
+                          "sessions": int(p.get("sessions", 0)),
+                          "threshold": p.get("threshold")} for n, p in profs.items()]}
+
+    def select_profile(self, name):
+        if name in self.store.get("profiles", {}) and self.store["profiles"][name].get("kind") == "user":
+            self.store["active"] = name
+            self._save_store()
+        self._rebuild_sets()
+        emit(self.profiles_event())
+
+    def new_profile(self, name, kind="user"):
+        name = (name or "").strip()[:32] or ("me" if kind == "user" else "other")
+        profs = self.store.setdefault("profiles", {})
+        if name not in profs:
+            profs[name] = {"kind": kind, "embs": [], "secs": 0.0, "sessions": 0,
+                           "created": time.time(), "updated": time.time()}
+        if kind == "user":
+            self.store["active"] = name
+        self._save_store()
+        self._rebuild_sets()
+        emit(self.profiles_event())
+        return name
+
+    def delete_profile(self, name):
+        profs = self.store.get("profiles", {})
+        if name in profs:
+            del profs[name]
+            if self.store.get("active") == name:
+                users = [n for n, p in profs.items() if p.get("kind") == "user"]
+                self.store["active"] = users[0] if users else None
+            self._save_store()
+        self._rebuild_sets()
+        emit(self.profiles_event())
+
+    # ---------------- 보정·분석
+    def calibrate(self):
+        """active user 프로필의 자기 유사도(leave-one-out)와 타인 최대 유사도로
+        임계를 정하고 구분 여유를 리포트한다."""
+        units = self.ref_set
+        if len(units) < 2:
+            return None
+        loo = []
         for i, e in enumerate(units):
             others = units[:i] + units[i + 1:]
-            sims.append(max(float(np.dot(e, o)) for o in others) if others else 1.0)
-        mean_self = float(np.mean(sims))
-        # 사람 목소리는 톤·거리로 0.1 이상 흔들린다 — 넉넉한 임계(0.68~0.76).
-        # 그 바로 아래 MAYBE_MARGIN 구간은 호출어/분류기 게이트가 판정한다.
-        thr = max(0.68, min(0.76, mean_self - 0.15))
-        self.ref = ref
-        self.ref_set = units[-MAX_PROFILE_EMBS:]
+            loo.append(max(float(np.dot(e, o)) for o in others))
+        mean_self, min_self = float(np.mean(loo)), float(np.min(loo))
+        per_neg = {}
+        for label, negs in self.neg_sets.items():
+            per_neg[label] = max(max(float(np.dot(n, u)) for u in units) for n in negs)
+        max_neg = max(per_neg.values()) if per_neg else None
+        if max_neg is None:
+            thr = max(0.68, min(0.76, mean_self - 0.15))
+            margin = None
+        else:
+            thr = max(0.62, min(0.80, max(max_neg + 0.04, (mean_self + max_neg) / 2)))
+            margin = mean_self - max_neg
+        verdict = ("타인 미등록" if margin is None else
+                   "명확" if margin >= 0.15 else "보통" if margin >= 0.08 else "약함")
         self.threshold = thr
-        self._write_profile({"self_sim": mean_self, "segments": len(embs), "created": time.time()})
-        return mean_self, thr
+        prof = self.store["profiles"][self.store["active"]]
+        prof["threshold"] = thr
+        prof["updated"] = time.time()
+        self._save_store()
+        report = {"ev": "analysis", "name": self.store["active"], "embs": len(units),
+                  "sessions": int(prof.get("sessions", 0)), "secs": round(float(prof.get("secs", 0)), 1),
+                  "self_mean": round(mean_self, 3), "self_min": round(min_self, 3),
+                  "neg": {k: round(v, 3) for k, v in per_neg.items()},
+                  "neg_max": None if max_neg is None else round(max_neg, 3),
+                  "margin": None if margin is None else round(margin, 3),
+                  "threshold": round(thr, 3), "verdict": verdict}
+        emit(report)
+        return report
 
     # ---------------- 임베딩
     def embed(self, pcm: np.ndarray):
@@ -149,38 +233,45 @@ class Gate:
         return self.encoder.embed_utterance(wav)
 
     def verify(self, pcm: np.ndarray):
-        """중심 유사도와 집합 내 최대 유사도 중 큰 값 — 톤·거리 변동을 흡수."""
+        """(내 집합 최대 유사도, 타인 집합 최대 유사도, 가장 가까운 타인 라벨)."""
         if self.ref is None:
-            return None
+            return None, None, None
         e = self.embed(pcm)
         if e is None:
-            return None
+            return None, None, None
         u = self._unit(e)
         self._last_emb = u
         best = float(np.dot(self.ref, u))
         for r in self.ref_set:
             best = max(best, float(np.dot(r, u)))
-        return best
+        neg, label = None, None
+        for lab, negs in self.neg_sets.items():
+            m = max(float(np.dot(n, u)) for n in negs)
+            if neg is None or m > neg:
+                neg, label = m, lab
+        return best, neg, label
 
     def adapt(self):
-        """호출어까지 확인된 발화(= 사용자 본인 확실)로 프로필 집합을 넓힌다."""
+        """호출어까지 확인된 발화(= 사용자 본인 확실)로 active 집합을 넓힌다.
+        단, 등록된 타인 목소리에 더 가까운 발화는 넣지 않는다(오염 방지)."""
         u = getattr(self, "_last_emb", None)
-        if u is None or self.ref is None:
+        if u is None or self.ref is None or not self.store.get("active"):
             return
-        # 이미 아주 닮은 것과 중복이면 추가하지 않음 (다양성 확보)
         if self.ref_set and max(float(np.dot(r, u)) for r in self.ref_set) > 0.95:
             return
-        self.ref_set.append(u)
-        if len(self.ref_set) > MAX_PROFILE_EMBS:
-            self.ref_set.pop(0)
-        self.ref = self._unit(np.mean(self.ref_set, axis=0))
-        try:
-            with open(PROFILE) as f:
-                n = int(json.load(f).get("adapted", 0)) + 1
-        except (OSError, ValueError):
-            n = 1
-        self._write_profile({"adapted": n})
-        emit({"ev": "log", "text": f"profile adapted x{n} (set={len(self.ref_set)})"})
+        for negs in self.neg_sets.values():
+            if max(float(np.dot(n, u)) for n in negs) > max(float(np.dot(r, u)) for r in self.ref_set):
+                emit({"ev": "log", "text": "adapt skipped: closer to a known other voice"})
+                return
+        prof = self.store["profiles"][self.store["active"]]
+        prof["embs"].append(u.tolist())
+        if len(prof["embs"]) > MAX_PROFILE_EMBS:
+            prof["embs"].pop(0)
+        prof["adapted"] = int(prof.get("adapted", 0)) + 1
+        prof["updated"] = time.time()
+        self._save_store()
+        self._rebuild_sets()
+        emit({"ev": "log", "text": f"profile adapted x{prof['adapted']} (set={len(self.ref_set)})"})
 
     # ---------------- 오디오 스트림
     def on_chunk(self, chunk: np.ndarray, now: float):
@@ -235,11 +326,13 @@ class Gate:
         if dur < MIN_SEG:
             emit({"ev": "segment", "user": False, "sim": None, "dur": round(dur, 2), "why": "short"})
             return
-        sim = self.verify(pcm)
+        sim, neg, neg_label = self.verify(pcm)
         if sim is None:
             user = self.ref is None      # 프로필 없으면 통과(등록 전 폴백) — JS가 안내
             band = "user" if user else "other"
             why = "no_profile" if self.ref is None else "unverifiable"
+        elif neg is not None and neg >= 0.5 and neg >= sim - 0.02:
+            band, user, why = "other", False, f"closer_to:{neg_label}"   # 타인 집합에 더 가까움
         else:
             band = ("user" if sim >= self.threshold
                     else "maybe" if sim >= self.threshold - MAYBE_MARGIN else "other")
@@ -247,6 +340,7 @@ class Gate:
             why = ""
         out = {"ev": "segment", "user": bool(user), "band": band,
                "sim": None if sim is None else round(sim, 3),
+               "neg": None if neg is None else round(neg, 3), "neg_label": neg_label,
                "thr": round(self.threshold, 3), "dur": round(dur, 2)}
         if why:
             out["why"] = why
@@ -256,7 +350,17 @@ class Gate:
         emit(out)
 
     # ---------------- 등록
-    def start_enroll(self, seconds):
+    def start_enroll(self, seconds, kind="user", name=None):
+        self.enroll_kind = "other" if kind == "other" else "user"
+        if self.enroll_kind == "user":
+            name = name or self.store.get("active") or "me"
+            if name not in self.store.get("profiles", {}):
+                self.new_profile(name, "user")
+            elif self.store.get("active") != name:
+                self.select_profile(name)
+        else:
+            name = self.new_profile(name or "other", "other")
+        self.enroll_name = name
         self.enroll_target = float(seconds)
         self.enroll_until = time.monotonic() + float(seconds)
         self.enroll_embs = []
@@ -272,9 +376,29 @@ class Gate:
                   "secs": round(self.enroll_secs, 1),
                   "text": f"말소리가 충분하지 않습니다 (인식된 발화 {self.enroll_secs:.1f}초) — 마이크 가까이에서 15초 동안 또렷하게 말해 주세요"})
             return
-        mean_self, thr = self.save_profile(self.enroll_embs)
-        emit({"ev": "enrolled", "segments": len(self.enroll_embs),
-              "self_sim": round(mean_self, 3), "threshold": round(thr, 3)})
+        prof = self.store["profiles"][self.enroll_name]
+        units = [self._unit(e) for e in self.enroll_embs]
+        warn = ""
+        if self.enroll_kind == "other" and self.ref is not None:
+            # 타인 등록인데 내 목소리와 아주 닮았으면 경고 (잘못 등록 방지)
+            close = max(max(float(np.dot(u, r)) for r in self.ref_set) for u in units)
+            if close >= self.threshold:
+                warn = f"주의: 이 목소리는 내 프로필과 {close:.2f}로 매우 닮았습니다 — 정말 다른 사람인지 확인"
+        prof["embs"].extend(u.tolist() for u in units)
+        if len(prof["embs"]) > MAX_PROFILE_EMBS:
+            prof["embs"] = prof["embs"][-MAX_PROFILE_EMBS:]
+        prof["secs"] = float(prof.get("secs", 0)) + self.enroll_secs
+        prof["sessions"] = int(prof.get("sessions", 0)) + 1
+        prof["updated"] = time.time()
+        self._save_store()
+        self._rebuild_sets()
+        report = self.calibrate() if self.ref is not None else None
+        emit({"ev": "enrolled", "name": self.enroll_name, "kind": self.enroll_kind,
+              "added": len(units), "total": len(prof["embs"]),
+              "secs": round(float(prof["secs"]), 1), "sessions": prof["sessions"],
+              "threshold": round(self.threshold, 3), "warn": warn,
+              "verdict": report["verdict"] if report else None})
+        emit(self.profiles_event())
 
 
 # ---------------------------------------------------------------- 실행 모드
@@ -297,7 +421,20 @@ def handle_cmd(gate: Gate, c: dict):
     if cmd == "mute":
         gate.muted = bool(c.get("on"))
     elif cmd == "enroll":
-        gate.start_enroll(c.get("seconds", 15))
+        gate.start_enroll(c.get("seconds", 15), c.get("kind", "user"), c.get("name"))
+    elif cmd == "profiles":
+        emit(gate.profiles_event())
+    elif cmd == "select":
+        gate.select_profile(c.get("name"))
+    elif cmd == "new":
+        gate.new_profile(c.get("name"), c.get("kind", "user"))
+    elif cmd == "delete":
+        gate.delete_profile(c.get("name"))
+    elif cmd == "analyze":
+        if gate.ref is not None:
+            gate.calibrate()
+        else:
+            emit({"ev": "analysis", "name": None, "verdict": "프로필 없음"})
     elif cmd == "adapt":
         gate.adapt()
     elif cmd == "threshold":
@@ -310,7 +447,9 @@ def handle_cmd(gate: Gate, c: dict):
 def run_mic(threshold=None):
     import sounddevice as sd
     gate = Gate(threshold)
-    emit({"ev": "ready", "profile": gate.ref is not None, "threshold": round(gate.threshold, 3)})
+    emit({"ev": "ready", "profile": gate.ref is not None, "threshold": round(gate.threshold, 3),
+          "active": gate.store.get("active"), "negatives": list(gate.neg_sets.keys())})
+    emit(gate.profiles_event())
     q: "queue.Queue[np.ndarray]" = queue.Queue()
 
     def cb(indata, frames, t_info, status):
@@ -335,7 +474,9 @@ def run_pipe(threshold=None):
     페이로드가 '{'로 시작하면 JSON 명령, 아니면 PCM16 16kHz 모노."""
     import struct
     gate = Gate(threshold)
-    emit({"ev": "ready", "profile": gate.ref is not None, "threshold": round(gate.threshold, 3)})
+    emit({"ev": "ready", "profile": gate.ref is not None, "threshold": round(gate.threshold, 3),
+          "active": gate.store.get("active"), "negatives": list(gate.neg_sets.keys())})
+    emit(gate.profiles_event())
     stdin = sys.stdin.buffer
     buf = np.zeros(0, np.float32)
     while True:
@@ -367,17 +508,20 @@ def main():
         run_mic(thr)
     elif mode == "pipe":
         run_pipe(float(args[1]) if len(args) > 1 else None)
-    elif mode == "enroll-files":
+    elif mode in ("enroll-files", "enroll-other-files"):
+        # enroll-files <이름> a.wav ...  /  enroll-other-files <라벨> a.wav ...
         gate = Gate()
-        gate.enroll_target = 1e9
+        kind = "other" if mode == "enroll-other-files" else "user"
+        gate.start_enroll(1e9, kind, args[1])
         gate.enroll_until = 1e12       # finish()가 등록 경로를 타게
-        for p in args[1:]:
+        for p in args[2:]:
             feed_wav(gate, p)
         gate.enroll_until = 1.0        # 강제 종료 경로
         gate.finish_enroll()
     elif mode == "test-file":
         gate = Gate(float(args[2]) if len(args) > 2 else None)
-        emit({"ev": "ready", "profile": gate.ref is not None, "threshold": round(gate.threshold, 3)})
+        emit({"ev": "ready", "profile": gate.ref is not None, "threshold": round(gate.threshold, 3),
+              "active": gate.store.get("active"), "negatives": list(gate.neg_sets.keys())})
         feed_wav(gate, args[1])
     else:
         print(__doc__)

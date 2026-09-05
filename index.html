@@ -212,8 +212,15 @@
             <div class="ai-ind"><span>MODE</span><span id="ai-ind-tts">--</span></div>
           </div>
           <div class="ai-side-h">VOICE ID</div>
+          <select class="ai-voicesel" id="ai-voicesel" title="사용할 내 목소리 ID"></select>
           <div class="ai-modelrow">
-            <button class="ai-model" id="ai-enroll" title="15초 동안 평소처럼 말해 내 목소리를 등록">ENROLL</button>
+            <button class="ai-model" id="ai-enroll" title="선택한 ID에 15초 발화를 덧붙여 정확도 향상">ENROLL ME</button>
+            <button class="ai-model" id="ai-enroll-other" title="다른 사람·TV 목소리를 15초 들려줘 타인으로 등록 — 구분 경계 학습">OTHER</button>
+          </div>
+          <div class="ai-modelrow">
+            <button class="ai-model" id="ai-voice-new" title="새 ID 만들기">NEW ID</button>
+            <button class="ai-model" id="ai-voice-analyze" title="내 목소리 vs 타인 구분 분석">ANALYZE</button>
+            <button class="ai-model" id="ai-voice-del" title="선택한 ID 삭제">DEL</button>
           </div>
           <div class="ai-voiceid" id="ai-voiceid">NOT ENROLLED</div>
           <div class="ai-side-h">LANG</div>
@@ -1329,7 +1336,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.65.0</span>
+      <span>v0.66.0</span>
     </footer>
   </div>
 
