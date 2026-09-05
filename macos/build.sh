@@ -22,7 +22,7 @@ cp "$ROOT/macos/Info.plist" "$APP/Contents/"
 clang -fobjc-arc -O2 "$ROOT/macos/main.m" "$ROOT/macos/sp1_status.m" "$ROOT/macos/arduino_bridge.m" "$ROOT/macos/sysmon.m" "$ROOT/macos/code_editor.m" "$ROOT/macos/omni_ai.m" \
   -o "$APP/Contents/MacOS/OmniOS" \
   -framework Cocoa -framework WebKit -framework ImageIO -framework CoreGraphics -framework IOKit \
-  -framework Speech -framework AVFoundation -framework EventKit -framework CoreAudio -framework ScreenCaptureKit -lsqlite3
+  -framework Speech -framework AVFoundation -framework EventKit -framework CoreAudio -framework ScreenCaptureKit -framework Vision -lsqlite3
 
 # 4. 아이콘 (icon.svg → AppIcon.icns)
 ICONSET="$(mktemp -d)/AppIcon.iconset"

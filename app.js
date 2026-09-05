@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.72.0",
+  version: "0.73.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -789,39 +789,84 @@ const OmniScreen = {
     if (this._queued && this.canAsk()) { const q = this._queued; this._queued = null; this.ask(q); }
     this._busy = true;
     try {
-      const shot = await OmniNative.request("cu.screenshot", JSON.stringify({ maxWidth: 1024 }), 15000);
+      // 사실 근거: 전면 앱·창 제목(네이티브) + 화면 텍스트(OCR, 원본 해상도) — 이미지만 보고 추측하지 않게
+      const [shot, front] = await Promise.all([
+        OmniNative.request("cu.screenshot", JSON.stringify({ maxWidth: 1024, ocr: true }), 40000),
+        OmniNative.request("cu.front", null, 5000).catch(() => null),
+      ]);
       if (!shot || !shot.ok) return null;
-      const h = this.hash(shot.jpeg);
-      if (!force && h === this._lastHash) return null;   // 화면 그대로 → 건너뜀
-      this._lastHash = h;
+      const app = (front && front.ok && front.app) || "";
+      const title = (front && front.ok && (front.title || front.doc)) || "";
+      const ocr = String(shot.text || "").slice(0, 7000);
+      // 변화 감지: 같은 앱·창이고 화면 텍스트가 거의 같으면(시계·커서만 바뀜) 건너뜀
+      const key = `${app}|${title}`;
+      const same = key === this._lastKey && this.textSim(ocr, this._lastOcr || "") >= 0.9;
+      if (!force && same) return null;
+      this._lastKey = key; this._lastOcr = ocr;
       const askedList = Object.values(this.asked).slice(-12).map((a) => `- ${a.q}${a.answered ? " (답 들음)" : ""}`).join("\n") || "(없음)";
       const r = await OmniNative.request("ai.chat", JSON.stringify({
-        model: "claude-haiku-4-5-20251001", maxTokens: 600,
-        system: "당신은 개인 AI '옴니'의 화면 관찰 모듈이다. 사용자 이름은 건희. 건희의 맥 화면 스크린샷을 보고 JSON만 출력한다: {\"app\":\"앱/사이트\",\"activity\":\"지금 하는 일 한 문장\",\"people\":[\"화면에 보이는 사람·닉네임\"],\"topics\":[\"주제 2~4개\"],\"changed\":true|false,\"notable\":[{\"text\":\"앞으로도 유효한 사실 한 문장\",\"remember\":true}],\"questions\":[{\"key\":\"짧은 식별자(예: nick_YOHA)\",\"q\":\"건희에게 물어볼 질문 한 문장(존댓말)\",\"why\":\"왜 궁금한지\",\"priority\":1|2|3}]}.\nchanged는 직전 관찰과 활동이 달라졌는지. questions는 옴니가 정말 궁금하고 건희만 답할 수 있는 것(모르는 사람·닉네임이 누구인지, 처음 보는 프로젝트가 뭔지, 반복해서 보는 것의 이유 등). 프로필에 이미 있는 사람·이미 물어본 것은 묻지 않는다. OMNI_OS/옴니 OS 자체(Command Bridge 등 이 앱의 패널·기능 — 건희가 개발 중인 옴니 자신의 몸)에 대해서는 묻지 않는다. priority 3=지금 물어볼 만함, 1=굳이 안 물어도 됨. 없으면 빈 배열. 비밀번호·카드번호·인증코드·주민번호 같은 민감 정보는 절대 적지 않는다.",
+        model: "claude-sonnet-5", maxTokens: 700,
+        system: [{ type: "text", cache_control: { type: "ephemeral" }, text: "당신은 개인 AI '옴니'의 화면 관찰 모듈이다. 사용자 이름은 건희. 건희의 맥 화면 스크린샷과 함께 [사실]로 전면 앱 이름·창 제목(운영체제가 알려준 확정 정보)과 화면 텍스트(OCR, 원본 해상도에서 읽음)가 주어진다. JSON만 출력한다: {\"app\":\"앱/사이트\",\"activity\":\"지금 하는 일 한 문장\",\"people\":[\"건희가 상호작용 중인 사람·닉네임\"],\"topics\":[\"주제 2~4개\"],\"changed\":true|false,\"notable\":[{\"text\":\"앞으로도 유효한 사실 한 문장\",\"remember\":true}],\"questions\":[{\"key\":\"짧은 식별자(예: nick_YOHA)\",\"q\":\"건희에게 물어볼 질문 한 문장(존댓말)\",\"why\":\"왜 궁금한지\",\"priority\":1|2|3,\"confidence\":0.0~1.0}]}.\n규칙:\n- app은 [사실]의 앱 이름을 그대로 쓰고(브라우저면 창 제목의 사이트·페이지명을 덧붙임), 이미지만 보고 앱을 추측하지 않는다.\n- 이름·닉네임·숫자·제목은 반드시 OCR 텍스트에 있는 철자를 그대로 쓴다. OCR에도 없고 이미지에서도 또렷하지 않은 이름은 적지 않는다.\n- people은 건희가 실제로 대화·협업하는 상대만(채팅 상대, 문서 공동 작업자). 뉴스·영상 추천·댓글·검색 결과·광고에 스쳐 지나가는 이름은 넣지 않는다.\n- notable은 건희에 관한 오래가는 사실만(진행 중인 프로젝트·관계·선호·마감). 화면 내용 요약은 notable이 아니다.\n- questions는 다음을 모두 만족할 때만: (1) 건희가 지금 실제로 관여하는 사람·프로젝트·물건에 관한 것 (2) 화면·프로필·이미 물어본 목록으로는 답을 알 수 없음 (3) 답을 알면 옴니가 앞으로 건희를 더 잘 도울 수 있음 (4) OMNI_OS/옴니 OS 자체(Command Bridge 등 이 앱의 패널·기능 — 건희가 개발 중인 옴니 자신의 몸)가 아님 (5) 잠깐 스쳐 가는 내용(뉴스·영상 한 편·검색 결과)이 아님. 확신이 없으면 넣지 않는다 — 잘못된 질문 하나가 안 하는 것보다 나쁘다. priority 3=지금 물어볼 만함, 1=굳이 안 물어도 됨. confidence는 위 조건을 충족한다는 확신.\n- changed는 직전 관찰과 활동이 달라졌는지.\n- 비밀번호·카드번호·인증코드·주민번호 같은 민감 정보는 절대 적지 않는다." }],
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: "image/jpeg", data: shot.jpeg } },
-          { type: "text", text: `[건희 프로필(아는 사람·사실)]\n${OmniMem.profile.slice(0, 1500) || "(없음)"}\n\n[직전 관찰] ${this.activity || "(없음)"}\n[이미 물어본 질문]\n${askedList}\n\n지금 화면을 관찰해 JSON으로.` },
+          { type: "text", text: `[사실] 전면 앱: ${app || "(불명)"} · 창 제목: ${title || "(없음)"}\n\n[화면 텍스트(OCR)]\n${ocr || "(없음)"}\n\n[건희 프로필(아는 사람·사실)]\n${OmniMem.profile.slice(0, 1500) || "(없음)"}\n\n[직전 관찰] ${this.activity || "(없음)"}\n[이미 물어본 질문]\n${askedList}\n\n지금 화면을 관찰해 JSON으로.` },
         ] }],
-      }), 45000);
+      }), 60000);
       const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
       const m = /\{[\s\S]*\}/.exec(txt);
       if (!m) return null;
       const o = JSON.parse(m[0]);
+      if (app) o.app = o.app && o.app.includes(app) ? o.app : `${app}${o.app ? " · " + o.app : ""}`;
       if (o.activity && (o.changed || o.activity !== this.activity)) {
         this.activity = o.activity; this.people = o.people || [];
         OmniMem.screenActivity = `${o.app ? o.app + " · " : ""}${o.activity}`;
-        OmniMem.append("screen", `${o.app ? "[" + o.app + "] " : ""}${o.activity}`, o.topics || [], { app: o.app, people: o.people || [] });
+        OmniMem.append("screen", `${o.app ? "[" + o.app + "] " : ""}${o.activity}`, o.topics || [], { app: o.app, title, people: o.people || [] });
         const l = ai.logLine("sys", `[화면] ${OmniMem.screenActivity}${(o.people || []).length ? ` · 보이는 사람: ${o.people.join(", ")}` : ""}`);
         l.classList.add("ignored");
       }
       for (const n of (o.notable || [])) if (n && n.text) OmniMem.append("thought", n.text, n.remember ? ["remember"] : []);
-      const qs = (o.questions || []).filter((q) => q && q.q && q.key && !this.asked[q.key] && (q.priority || 1) >= 2);
-      if (qs.length) this.maybeAsk(qs.sort((a, b) => (b.priority || 0) - (a.priority || 0))[0]);
+      const qs = (o.questions || []).filter((q) => q && q.q && q.key && !this.asked[q.key] && (q.priority || 1) >= 2 && (q.confidence == null || q.confidence >= 0.6));
+      if (qs.length) {
+        const q = qs.sort((a, b) => (b.priority || 0) - (a.priority || 0))[0];
+        const v = await this.verifyQuestion(q, { app: o.app, title, ocr });
+        if (v.ask) this.maybeAsk({ ...q, q: v.q || q.q });
+        else ai.gateNote(`호기심 보류: ${q.q} — ${v.why}`);
+      }
       return o;
     } catch (e) {
       return null;
     } finally {
       this._busy = false;
+    }
+  },
+
+  // OCR 텍스트 유사도(토큰 자카드) — 화면이 실질적으로 바뀌었는지
+  textSim(a, b) {
+    if (!a && !b) return 1;
+    const ta = OmniMem.tokens(a), tb = OmniMem.tokens(b);
+    if (!ta.size || !tb.size) return 0;
+    let both = 0;
+    for (const k of ta) if (tb.has(k)) both++;
+    return both / (ta.size + tb.size - both);
+  },
+
+  // 질문 후보 2차 검증(텍스트만): 기억·프로필·화면 텍스트로 이미 답이 있거나, 스쳐 가는 내용이면 묻지 않는다
+  async verifyQuestion(q, ctx) {
+    try {
+      const rel = OmniMem.search(`${q.q} ${q.key.replace(/_/g, " ")}`, 8).map((e) => OmniMem.fmtEntry(e)).join("\n") || "(없음)";
+      const recent = OmniMem.today.filter((e) => e.kind === "screen").slice(-6).map((e) => OmniMem.fmtEntry(e)).join("\n") || "(없음)";
+      const r = await OmniNative.request("ai.chat", JSON.stringify({
+        model: "claude-sonnet-5", maxTokens: 220,
+        system: "당신은 개인 AI '옴니'가 사용자(건희)에게 먼저 말을 걸어 질문해도 되는지 최종 검토하는 모듈이다. 질문은 건희의 작업을 방해하므로, 정말 가치 있고 답을 다른 데서 알 수 없을 때만 허용한다. JSON만 출력: {\"ask\":true|false,\"why\":\"근거 20자\",\"q\":\"허용 시 다듬은 질문 한 문장(존댓말)\"}. 거절 기준: 프로필·관련 기억·화면 텍스트에 이미 답이 있음 / 뉴스·영상·검색 결과·댓글처럼 스쳐 가는 내용 / OMNI_OS(옴니 OS, Command Bridge 등 이 앱 자체) 관련 / 건희가 직접 관여하지 않는 사람·프로젝트 / 최근 화면 기록상 잠깐 열어본 것.",
+        messages: [{ role: "user", content: `[질문 후보] ${q.q}\n[이유] ${q.why || ""}\n[식별자] ${q.key}\n\n[전면 앱] ${ctx.app || ""} · ${ctx.title || ""}\n\n[건희 프로필]\n${OmniMem.profile || "(없음)"}\n\n[관련 기억]\n${rel}\n\n[최근 화면 기록]\n${recent}\n\n[화면 텍스트(OCR) 일부]\n${String(ctx.ocr || "").slice(0, 2500)}` }],
+      }), 30000);
+      const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
+      const m = /\{[\s\S]*\}/.exec(txt);
+      if (!m) return { ask: false, why: "검증 응답 없음" };
+      const o = JSON.parse(m[0]);
+      return { ask: !!o.ask, why: o.why || "", q: o.q || "" };
+    } catch (e) {
+      return { ask: false, why: "검증 오류" };
     }
   },
 
@@ -904,7 +949,8 @@ OmniOS.register("ai", {
     "  [[ACT:omnia]] — 보조 AI '오미니아' 팝업 열기 (\"오미니아 호출\", \"오미니아 켜줘\" 등). 특정 질문을 전달하려면 [[ACT:omnia:질문내용]], 닫으려면 [[ACT:omnia:close]]",
     "  프로젝트·노트·파일 이름은 [실시간 상태 스냅샷]이나 사용자 발화에서 그대로 가져옵니다. 각 액션은 시스템이 실행 후 검증해 성공/실패를 로그로 보고하므로, 실패 처리를 걱정하지 말고 요청이 명확하면 태그를 붙입니다.",
     "- 현재 시각·날짜 질문은 패널을 열 필요 없이 [실시간 상태 스냅샷]의 현재 시각으로 바로 답합니다. 시스템/보안/프로젝트 현황도 마찬가지로 스냅샷 실측값으로 답합니다.",
-    "- 파일 도구(list_dir/read_file/edit_file/write_file): ~/Desktop 아래 파일을 직접 나열·읽기·수정할 수 있습니다. 파일 개수·내용·코드에 대한 질문은 추측하거나 못 한다고 하지 말고 반드시 도구로 확인해 실측값으로 답합니다. 수정 요청은 read_file로 해당 부분을 먼저 확인하고 edit_file(정확 치환)로 수행한 뒤 무엇을 어떻게 바꿨는지 보고합니다.",
+    "- 파일 도구(list_dir/read_file/edit_file/write_file): 이 맥의 파일 전체를 직접 나열·읽기·수정할 수 있습니다(쓰기는 홈·/tmp·/Volumes 아래). 파일 개수·내용·코드에 대한 질문은 추측하거나 못 한다고 하지 말고 반드시 도구로 확인해 실측값으로 답합니다. 수정 요청은 read_file로 해당 부분을 먼저 확인하고 edit_file(정확 치환)로 수행한 뒤 무엇을 어떻게 바꿨는지 보고합니다.",
+    "- 셸(run_shell): 터미널 명령을 직접 실행할 수 있습니다(zsh, 60초). 파일 찾기·정리·설치·git·스크립트 실행 등 맥에서 명령으로 되는 일은 이걸로 합니다. 되돌릴 수 없는 삭제(rm -rf 등)·디스크 포맷·시스템 설정 변경은 사용자가 명시적으로 요청했을 때만, 실행 전에 무엇을 지울지 말합니다.",
     "- 경로 규칙: 프로젝트 폴더는 ~/Desktop/Important/Omni_OS/Projects/<프로젝트이름>/{3d,arduino,code,notes}, 노트 볼트는 ~/Desktop/Important/Omni_OS/Notes, 스캔 저장은 ~/Desktop/Important/Omni_OS/ARC-SCAN-SAVES. (~는 사용자 홈 — 절대 경로로 쓸 때는 /Users/geonhee)",
     "- 카카오톡·디스코드·앱 알림 확인: \"카톡/디스코드 온 거 확인해줘\" 류 요청은 check_notifications 도구(app:'kakao' 또는 'discord')로 최근 알림을 읽어 보낸 사람과 내용을 간결히 요약 보고합니다. 다른 앱 알림도 app을 비우면 전체 조회됩니다. 알림이 떴던 메시지만 보이는 한계를 알고 있습니다. 메시지 발신은 미지원입니다.",
     "- 지메일 확인: \"메일 확인해줘\" 류 요청은 check_gmail 도구로 받은편지함을 직접 읽어(IMAP, 알림 무관) 보낸 사람·제목·안읽음 여부를 요약 보고합니다. 메일 발송은 미지원입니다.",
@@ -918,11 +964,11 @@ OmniOS.register("ai", {
     "- 컴퓨터 조작: 그 밖에 맥에서 마우스·키보드로 해야 하는 일(사이트 안에서 클릭·입력·스크롤, 앱 조작, 화면 내용 읽기)은 use_computer(task)에 맡깁니다 — 화면을 보고 스스로 조작하는 모듈이며 결과 요약을 돌려줍니다. 수 초~수십 초 걸리니 \"제가 직접 해보겠습니다\" 같은 예고를 먼저 말합니다. 결제·구매 확정·메시지 전송·삭제·로그인 정보 입력은 사용자가 명시적으로 요청했을 때만 합니다.",
     "- 그 외 제어(메일 발송 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
-  // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
+  // 파일 도구 — Claude tool use 정의 (맥 전체 읽기, 쓰기는 홈·/tmp·/Volumes — 네이티브가 경로 검증)
   FS_TOOLS: [
     {
       name: "list_dir",
-      description: "디렉토리 내용을 나열한다 (~/Desktop 아래만 접근 가능). recursive=true면 하위 폴더까지 전부.",
+      description: "디렉토리 내용을 나열한다 (맥 전체 접근 가능, 예: ~/Downloads, ~/Documents, /Applications). recursive=true면 하위 폴더까지 전부.",
       input_schema: {
         type: "object",
         properties: {
@@ -1050,6 +1096,15 @@ OmniOS.register("ai", {
           minutes: { type: "number" }, location: { type: "string" }, notes: { type: "string" },
         },
         required: ["title", "start"],
+      },
+    },
+    {
+      name: "run_shell",
+      description: "맥에서 셸 명령을 실행한다 (zsh -lc, 60초 제한, 출력 최대 20KB). 파일 검색(find/mdfind)·정리·압축·설치(brew)·git·스크립트 실행 등. cwd 생략 시 홈. 되돌릴 수 없는 삭제·포맷·시스템 변경은 사용자 명시 요청 시에만.",
+      input_schema: {
+        type: "object",
+        properties: { cmd: { type: "string" }, cwd: { type: "string" } },
+        required: ["cmd"],
       },
     },
     {
@@ -1717,6 +1772,18 @@ OmniOS.register("ai", {
       }
       if (name === "app_ui") return await this.appUI(input);
       if (name === "use_computer") return await this.computerUse(String(input.task || ""));
+      if (name === "run_shell") {
+        const cmd = String(input.cmd || "").trim();
+        if (!cmd) return "오류: 명령 없음";
+        if (/\brm\s+-[a-z]*r[a-z]*f?\s+(\/|~\/?|\$HOME)\s*$|mkfs|diskutil\s+(erase|reformat)|dd\s+if=.*of=\/dev|:\(\)\s*\{\s*:\|:&\s*\};:/.test(cmd)) {
+          return "오류: 시스템 전체를 지우거나 포맷하는 명령은 실행하지 않습니다";
+        }
+        this.logLine("sys", `셸 · ${cmd.slice(0, 120)}`).classList.add("ignored");
+        const r = await OmniNative.request("ai.shell", JSON.stringify({ cmd, cwd: input.cwd || "" }), 70000);
+        OmniMem.append("action", `셸 실행: ${cmd.slice(0, 200)} → 코드 ${r && r.code}`);
+        if (!r || !r.ok) return `오류: ${(r && r.error) || "실행 실패"}`;
+        return `[exit ${r.code}]\n${(r.output || "").trim() || "(출력 없음)"}`;
+      }
       if (name === "open_web_search") {
         const r = await this.runAction(`web.search:${input.engine || "google"}:${input.query || ""}`);
         return r.msg;
@@ -1970,6 +2037,13 @@ OmniOS.register("ai", {
         if (!task) return { ok: false, msg: "작업 내용 없음" };
         const out = await this.computerUse(task);
         return { ok: !/^실패/.test(out), msg: out };
+      }
+      if (key === "shell") {
+        // 안경·메일박스에서 셸 명령 실행 (run_shell 도구와 같은 경로)
+        const cmd = parts.slice(1).join(":").trim();
+        if (!cmd) return { ok: false, msg: "명령 없음" };
+        const out = await this.execTool("run_shell", { cmd });
+        return { ok: !/^오류/.test(out), msg: out.slice(0, 600) };
       }
       if (key === "ui.read" || key === "ui.click" || key === "ui.type" || key === "ui.select") {
         const out = await this.appUI({ op: key.slice(3), panel: parts[1] || "", target: parts[2] || "", value: parts.slice(3).join(":") });
@@ -2424,7 +2498,7 @@ OmniOS.register("ai", {
     {
       type: "function",
       name: "ask_brain",
-      description: "Delegate to Claude for deep reasoning: web-grade analysis, code, file reading/editing/counting, complex multi-step questions, or anything about the user's project files. Claude has file tools for ~/Desktop. Do NOT use for chitchat, time, or app status (use get_status). Pass the user's request as 'query'. The returned text is what you should say back, naturally.",
+      description: "Delegate to Claude for deep reasoning: web-grade analysis, code, file reading/editing/counting, complex multi-step questions, or anything about the user's files anywhere on the Mac. Claude has file tools (whole Mac) and a shell. Do NOT use for chitchat, time, or app status (use get_status). Pass the user's request as 'query'. The returned text is what you should say back, naturally.",
       parameters: {
         type: "object",
         properties: { query: { type: "string" } },
@@ -2505,6 +2579,16 @@ OmniOS.register("ai", {
         type: "object",
         properties: { engine: { type: "string" }, query: { type: "string" } },
         required: ["engine", "query"],
+      },
+    },
+    {
+      type: "function",
+      name: "run_shell",
+      description: "맥에서 셸 명령 실행 — 파일 찾기·정리·설치·git 등 명령으로 되는 일. 결과를 짧게 요약해 말한다. 되돌릴 수 없는 삭제·포맷은 사용자 명시 요청 시에만.",
+      parameters: {
+        type: "object",
+        properties: { cmd: { type: "string" }, cwd: { type: "string" } },
+        required: ["cmd"],
       },
     },
     {
@@ -2965,6 +3049,7 @@ OmniOS.register("ai", {
     this._lastOmniDoneAt = Date.now();
     this._omniSpeaking = false;
     this._gateMuted = false;
+    if (this._gateLoopback) this.gateCmd({ cmd: "speaking", on: false });   // 게이트도 즉시 일반 청취로
     if (this._rtOmniLine) { this._rtOmniLine.querySelector(".txt").textContent += " …(끼어듦)"; this._rtOmniLine = null; this._rtOmniText = ""; }
     this.gateNote("끼어들기 → 옴니 발화 중단");
   },
@@ -2988,6 +3073,14 @@ OmniOS.register("ai", {
       this._speechStartAt = Date.now();
     } else if (e === "segment") {
       this.micLevel = 0;
+      if (ev.partial) {
+        // 옴니 발화 중 1.2초 부분 판정 — 사용자면 즉시 끊고, 발화 전체는 뒤이어 온다
+        if (ev.user && this._omniSpeaking) {
+          this.gateNote(`끼어들기 감지(${ev.label}) · excess=${ev.excess}s sim=${ev.sim} media=${ev.media} lips=${ev.lips && ev.lips.corr}`);
+          this.bargeIn();
+        }
+        return;
+      }
       if (ev.user) {
         const interrupt = !!this._omniSpeaking;
         if (interrupt) this.bargeIn();
@@ -3011,6 +3104,16 @@ OmniOS.register("ai", {
         }
         this.gateNote(`경청 · ${ev.label} sim=${ev.sim} media=${ev.media} lips=${ev.lips && ev.lips.corr}/${ev.lips && ev.lips.act} dur=${ev.dur}`);
       }
+    } else if (e === "retranscript") {
+      // 프롬프트 없는 재전사 결과 — 원래 항목(오디오는 세션에 남아 있음)으로 다시 판정
+      const p = this._retrans && this._retrans[String(ev.t0)];
+      if (!p) return;
+      delete this._retrans[String(ev.t0)];
+      const text = String(ev.text || "").trim();
+      this.gateNote(`재전사 결과 · t0=${ev.t0}: ${text || "(빈 전사/" + (ev.why || "") + ")"}`);
+      this._pendingSig = p.sig;
+      this._rtUserLine = p.line;
+      this.gateDecide(p.itemId, text);
     } else if (e === "stats") {
       this.gateNote(`신호 · 루프백 ${ev.sys_hz}Hz 레벨 ${ev.sys_level} · 얼굴 ${ev.face_hz}Hz · 세그먼트 ${ev.segments}/15s`);
       this._gateStats = ev;
@@ -3133,6 +3236,24 @@ OmniOS.register("ai", {
     const san = this.sanitizeTranscript(rawText, sig.dur || 0);
     const del = () => { if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId }); };
     if (san.drop) {
+      // 게이트가 사용자 목소리로 확인한 발화인데 전사기가 프롬프트를 되풀이(환각)했거나 비었으면
+      // 실제로 한 말일 가능성이 크다 → 버리지 않고 프롬프트 없이 다시 전사해 본다 (1회)
+      const echo = /환각\((상투구|프롬프트)/.test(san.why) || san.why === "빈 전사";
+      if (echo && !sig.retried && sig.t0 != null && (sig.label === "user" || sig.label === "uncertain")) {
+        this._retrans = this._retrans || {};
+        this._retrans[String(sig.t0)] = { itemId, sig: { ...sig, retried: true }, line, at: Date.now(), raw: rawText };
+        this.gateCmd({ cmd: "retranscribe", t0: sig.t0 });
+        this.gateNote(`전사 재시도(${san.why}) · t0=${sig.t0}: ${rawText}`);
+        setTimeout(() => {
+          const p = this._retrans && this._retrans[String(sig.t0)];
+          if (!p) return;
+          delete this._retrans[String(sig.t0)];
+          if (p.line) p.line.remove();
+          del();
+          this.gateNote(`무시 · 재전사 응답 없음: ${rawText}`);
+        }, 15000);
+        return;
+      }
       if (line) line.remove();
       del();
       if (san.why !== "빈 전사") { this.gateNote(`무시 · ${san.why}: ${rawText}`); const l = this.logLine("sys", `무시 · ${san.why}`); l.classList.add("ignored"); }
@@ -3143,13 +3264,15 @@ OmniOS.register("ai", {
       if (line) { line.querySelector(".txt").textContent = `${text} (듣는 중)`; line.classList.remove("pending"); }
       del();
       this._lastOmniDoneAt = Date.now();
+      this._wakeAt = Date.now();
       this.gateNote(`호출만 감지 → 듣는 중: ${text}`);
       return;
     }
     let dec;
-    const correction = /(너한테|옴니한테|너에게|옴니에게)\s*(말한|한|하는)\s*(거|것|말)|너 ?말하는 ?거|다른 사람한테 (말한|한) ?(게|거) 아니/.test(text);
+    const correction = /(너한테|옴니한테|너에게|옴니에게)\s*(말한|한|하는)\s*(거|것|말)|너 ?말하는 ?거|다른 사람한테 (말한|한) ?(게|거) 아니|환각 ?아니|내가 말(하는|한) ?(거|것|게) 맞/.test(text);
     if (this.WAKE_RE.test(text)) dec = { respond: true, kind: "call", why: "호출어" };
     else if (correction) dec = { respond: true, kind: "reply", why: "정정 — 옴니에게 한 말" };
+    else if (this._wakeAt && Date.now() - this._wakeAt < 15000) { dec = { respond: true, kind: "call", why: "호출 직후 이어진 말" }; this._wakeAt = 0; }
     else if (OmniScreen.pending && Date.now() - OmniScreen.pending.at < OmniScreen.ANSWER_WAIT_MS) dec = { respond: true, kind: "reply", why: "옴니 질문에 대한 답" };
     else dec = await this.judgeAddressed(text, sig);
     if (dec.respond && correction && this._recentIgnored && this._recentIgnored.length) {
@@ -3258,7 +3381,7 @@ OmniOS.register("ai", {
     try {
       for (let i = 0; i < MAX_STEPS; i++) {
         const [shot, apps] = await Promise.all([
-          OmniNative.request("cu.screenshot", JSON.stringify({ maxWidth: 1280 }), 15000).catch(() => null),
+          OmniNative.request("cu.screenshot", JSON.stringify({ maxWidth: 1152 }), 15000).catch(() => null),
           send("cu.apps"),
         ]);
         if (!shot || !shot.ok) { result = `실패: 화면 캡처 불가 (${(shot && shot.error) || "?"})`; break; }
@@ -3278,8 +3401,8 @@ OmniOS.register("ai", {
             ? [{ type: "text", text: `[스크린샷 사용 불가 — 비전 모델이 이 화면 분석을 거부함(화면 속 사람 이미지 등)] 화면을 보지 않고도 가능한 행동(open_app/open_url/key/type/wait)만으로 목표를 진행하세요. 화면 확인이 꼭 필요하면 fail + 이유(예: '재생 중인 영상 창을 최소화하면 진행 가능').\n[목표] ${task}\n[전면 앱] ${(apps && apps.front) || "?"}\n[실행 중인 앱] ${((apps && apps.apps) || []).join(", ") || "?"}\n[지금까지 한 행동]\n${history}\n\n다음 행동을 JSON으로.` }]
             : content;
           const r = await OmniNative.request("ai.chat", JSON.stringify({
-            model: attempt < 2 ? "claude-sonnet-5" : "claude-opus-5", maxTokens: 500,
-            system: "당신은 개인 AI '옴니'의 컴퓨터 조작 모듈이다. 사용자(건희)의 맥 화면 스크린샷을 보고 목표를 달성할 다음 행동을 JSON 한 줄로만 출력한다. 형식: {\"actions\":[{\"action\":\"click|double_click|right_click|move|drag|scroll|type|key|open_url|open_app|zoom|wait\",\"x\":숫자,\"y\":숫자,\"x2\":숫자,\"y2\":숫자,\"w\":숫자,\"h\":숫자,\"dy\":숫자,\"text\":\"입력할 글자\",\"keys\":\"cmd+l 같은 단축키\",\"url\":\"https://…\",\"app\":\"앱 이름\",\"note\":\"한 줄 설명\"}, …],\"done\":false} 또는 목표 달성 시 {\"actions\":[],\"done\":true,\"note\":\"사용자가 원한 결과를 구체적으로(화면에서 읽은 실제 값)\"} 또는 불가능·위험 시 {\"actions\":[],\"fail\":true,\"note\":\"이유\"}.\n원칙(침착하고 확실하게):\n- 확신이 있는 연속 동작은 한 번에 최대 4개까지 묶는다(예: click 입력창 → type → key enter). 결과 확인이 필요하면 거기서 끊고 다음 스크린샷을 본다.\n- 앱을 열거나 전면으로 가져올 땐 독 아이콘 좌표 추정 대신 open_app(app 이름, 예: Chrome, Safari, Claude, Discord, KakaoTalk)을 쓴다. 웹 페이지는 open_url이 가장 빠르다.\n- 작은 글자·아이콘·썸네일 제목처럼 클릭 대상이 확실하지 않으면 먼저 zoom(x,y,w,h — 스크린샷 픽셀 영역)으로 확대해 확인한 뒤 클릭한다. 추측 클릭 금지.\n- 좌표는 스크린샷 픽셀(왼쪽 위 원점). 입력창은 click으로 포커스 후 type, 확정은 key enter. 로딩은 wait.\n- 같은 행동을 2번 반복했는데 화면이 안 바뀌면 다른 방법(단축키·URL·open_app·zoom)을 쓴다.\n- 결제·구매 확정·메시지/메일 전송·삭제·로그인 정보 입력은 사용자가 명시적으로 요청한 게 아니면 절대 하지 말고 그 직전에서 done으로 보고한다.\n- done의 note에는 화면에서 읽은 실제 값(제목·가격·상태)을 넣는다.",
+            model: attempt < 2 ? "claude-sonnet-5" : "claude-opus-5", maxTokens: 400,
+            system: [{ type: "text", cache_control: { type: "ephemeral" }, text: "당신은 개인 AI '옴니'의 컴퓨터 조작 모듈이다. 사용자(건희)의 맥 화면 스크린샷을 보고 목표를 달성할 다음 행동을 JSON 한 줄로만 출력한다. 형식: {\"actions\":[{\"action\":\"click|double_click|right_click|move|drag|scroll|type|key|open_url|open_app|zoom|wait\",\"x\":숫자,\"y\":숫자,\"x2\":숫자,\"y2\":숫자,\"w\":숫자,\"h\":숫자,\"dy\":숫자,\"text\":\"입력할 글자\",\"keys\":\"cmd+l 같은 단축키\",\"url\":\"https://…\",\"app\":\"앱 이름\",\"note\":\"한 줄 설명\"}, …],\"done\":false} 또는 목표 달성 시 {\"actions\":[],\"done\":true,\"note\":\"사용자가 원한 결과를 구체적으로(화면에서 읽은 실제 값)\"} 또는 불가능·위험 시 {\"actions\":[],\"fail\":true,\"note\":\"이유\"}.\n원칙(침착하고 확실하게):\n- 확신이 있는 연속 동작은 한 번에 최대 4개까지 묶는다(예: click 입력창 → type → key enter). 결과 확인이 필요하면 거기서 끊고 다음 스크린샷을 본다.\n- 앱을 열거나 전면으로 가져올 땐 독 아이콘 좌표 추정 대신 open_app(app 이름, 예: Chrome, Safari, Claude, Discord, KakaoTalk)을 쓴다. 웹 페이지는 open_url이 가장 빠르다.\n- 작은 글자·아이콘·썸네일 제목처럼 클릭 대상이 확실하지 않으면 먼저 zoom(x,y,w,h — 스크린샷 픽셀 영역)으로 확대해 확인한 뒤 클릭한다. 추측 클릭 금지.\n- 좌표는 스크린샷 픽셀(왼쪽 위 원점). 입력창은 click으로 포커스 후 type, 확정은 key enter. 로딩은 wait.\n- 같은 행동을 2번 반복했는데 화면이 안 바뀌면 다른 방법(단축키·URL·open_app·zoom)을 쓴다.\n- 결제·구매 확정·메시지/메일 전송·삭제·로그인 정보 입력은 사용자가 명시적으로 요청한 게 아니면 절대 하지 말고 그 직전에서 done으로 보고한다.\n- done의 note에는 화면에서 읽은 실제 값(제목·가격·상태)을 넣는다.\n- 속도: 생각은 짧게, note는 10자 내외. 확실한 동작은 최대 6개까지 한 번에 묶는다.\n- 포기 금지: 한 방법이 안 되면 실패 보고 대신 다른 방법을 순서대로 시도한다 — 앱 전면: open_app → key cmd+space 후 type 앱이름, key return(스포트라이트) → 독 아이콘 zoom 확인 후 click → key cmd+tab. 실행 중인 앱은 반드시 이 중 하나로 전면에 온다. 모든 방법을 써본 뒤에만 fail." }],
             messages: [{ role: "user", content: msgContent }],
           }), 60000);
           const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
@@ -3298,7 +3421,7 @@ OmniOS.register("ai", {
         if (!act) { result = `실패: 조작 모듈 응답 없음 (${lastErr})`; break; }
         if (act.done) { result = act.note || "완료"; log(`done — ${result}`); break; }
         if (act.fail) { result = `실패: ${act.note || ""}`; log(`fail — ${act.note || ""}`); break; }
-        const actions = Array.isArray(act.actions) ? act.actions.slice(0, 4) : (act.action ? [act] : []);
+        const actions = Array.isArray(act.actions) ? act.actions.slice(0, 6) : (act.action ? [act] : []);
         if (!actions.length) { result = "실패: 행동 없음"; break; }
         for (const a of actions) {
           const name = String(a.action || "");
@@ -3316,9 +3439,20 @@ OmniOS.register("ai", {
           else if (name === "type") await send("cu.type", { text: String(a.text || "") });
           else if (name === "key") await send("cu.key", { keys: String(a.keys || "") });
           else if (name === "open_url") OmniNet.openUrl(String(a.url || ""));
-          else if (name === "open_app") { const r2 = await send("cu.openApp", { name: String(a.app || "") }); if (!r2 || !r2.ok) steps.push(`(앱을 찾지 못함: ${a.app})`); }
+          else if (name === "open_app") {
+            const r2 = await send("cu.openApp", { name: String(a.app || "") });
+            if (!r2 || !r2.ok) {
+              // 마지막 수단: 스포트라이트로 연다 (cmd+space → 이름 → return)
+              log(`open_app 실패 → 스포트라이트 폴백: ${a.app}`);
+              await send("cu.key", { keys: "cmd+space" }); await wait(450);
+              await send("cu.type", { text: String(a.app || "") }); await wait(800);
+              await send("cu.key", { keys: "return" }); await wait(1200);
+              const f = await send("cu.apps");
+              if (!f || !String(f.front || "").toLowerCase().includes(String(a.app || "").toLowerCase().split(" ")[0])) steps.push(`(앱을 찾지 못함: ${a.app} — 독·앱 전환기로 시도할 것)`);
+            }
+          }
           else if (name === "zoom") { const z = await send("cu.zoom", { x: a.x, y: a.y, w: a.w || 320, h: a.h || 220 }); if (z && z.ok) zoom = z; }
-          await wait(name === "open_url" || name === "open_app" || name === "wait" ? 1200 : name === "zoom" ? 50 : 350);
+          await wait(name === "open_url" || name === "open_app" || name === "wait" ? 900 : name === "zoom" ? 30 : 220);
         }
       }
     } catch (e) {
@@ -3444,7 +3578,7 @@ OmniOS.register("ai", {
     } else if (name === "calculate") {
       this.logLine("sys", `도구 · calculate ${(args && args.expression) || ""}`);
       output = await this.execTool("calculate", args || {});
-    } else if (["check_markets", "check_calendar", "add_event", "recall_memory", "open_web_search", "app_ui", "use_computer"].includes(name)) {
+    } else if (["check_markets", "check_calendar", "add_event", "recall_memory", "open_web_search", "app_ui", "use_computer", "run_shell"].includes(name)) {
       this.logLine("sys", `도구 · ${name}`);
       output = await this.execTool(name, args || {});
     } else {

@@ -84,12 +84,13 @@ class Lab:
                 time.sleep(0.005)
         segs = None
         for _ in range(60):
-            segs = [d for d in self.events[n0:] if d.get("ev") == "segment"]
+            segs = [d for d in self.events[n0:] if d.get("ev") == "segment" and not d.get("partial")]
             if segs:
                 time.sleep(0.5)
-                segs = [d for d in self.events[n0:] if d.get("ev") == "segment"]
+                segs = [d for d in self.events[n0:] if d.get("ev") == "segment" and not d.get("partial")]
                 break
             time.sleep(0.1)
+        self.partials = [d for d in self.events[n0:] if d.get("ev") == "segment" and d.get("partial")]
         return segs or []
 
     def close(self):
@@ -156,13 +157,34 @@ def main():
     x = other[0]
     mic = np.concatenate([np.zeros(int(0.12 * SR), np.float32), x * 0.5]) + rng.normal(0, 0.003, len(x) + int(0.12 * SR)).astype(np.float32)
     segs = lab.stream(mic=mic, sysout=x)
-    ok = bool(segs) and segs[0]["label"] == "media" and segs[0].get("why") == "omni_voice"
+    # 발화 중엔 1.2초 부분 판정이 먼저 나온다(media) → 최종 세그먼트는 omni_voice 또는 짧은 꼬리
+    media_ok = (any(p.get("label") == "media" for p in lab.partials)
+                or any(d.get("label") == "media" and d.get("why") == "omni_voice" for d in segs))
+    ok = media_ok and all(not d.get("user") for d in segs) and all(not p.get("user") for p in lab.partials)
     results.append(ok)
-    print(f"{'PASS' if ok else 'FAIL'} (h) 옴니 발화 중 옴니 목소리            → {segs[0]['label'] if segs else '(없음)'}/{segs[0].get('why') if segs else ''} (기대 media/omni_voice)")
+    print(f"{'PASS' if ok else 'FAIL'} (h) 옴니 발화 중 옴니 목소리            → 부분 {[(p.get('label'), p.get('excess')) for p in lab.partials]} 최종 {[(d.get('label'), d.get('why')) for d in segs]} (기대 media/omni_voice)")
     # (i) 옴니가 말하는 중 내가 끼어듦 (내 목소리 + 입술, 옴니 목소리 겹침) → user
     mix = me[3] if len(me[3]) >= len(other[1]) else np.concatenate([me[3], np.zeros(len(other[1]) - len(me[3]), np.float32)])
     mic = mix + np.concatenate([np.zeros(int(0.1 * SR), np.float32), other[1] * 0.35])[:len(mix)]
     run("(i) 옴니 발화 중 끼어들기 + 입술", "user", mic=mic, sysout=other[1], mouth=envelope_mouth(me[3]), faces=1, frontal=True)
+    # (j) 옴니 발화 중 끼어들기, 카메라 없음: 옴니 메아리(1.2초 학습)에 1.5초 뒤 내 목소리가 겹침
+    #     → 부분 판정에서 user/uncertain(끼어들기) + 최종 세그먼트도 사용자로 전달
+    x = np.concatenate([other[2], other[2], other[2]])                       # 옴니가 길게 말함
+    echo = np.concatenate([np.zeros(int(0.12 * SR), np.float32), x * 0.5])
+    mic = echo.copy()
+    s = int(1.5 * SR); e = min(len(mic), s + len(me[4]))
+    mic[s:e] += me[4][:e - s]
+    segs = lab.stream(mic=mic, sysout=x)
+    barge = [p for p in lab.partials if p.get("user")]
+    fin = [d for d in segs if d.get("user")]
+    ok = bool(barge) and bool(fin)
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'} (j) 옴니 발화 중 끼어들기 (카메라 없음)   → 부분 {[(p['label'], p.get('excess')) for p in lab.partials]} 최종 {[(d['label'], d.get('why')) for d in segs]}")
+    # (k) 옴니 발화 중 끼어들기 없음: 긴 메아리만 → 부분 판정 전부 media, 최종 omni_voice
+    segs = lab.stream(mic=echo + rng.normal(0, 0.003, len(echo)).astype(np.float32), sysout=x)
+    ok = all(not p.get("user") for p in lab.partials) and bool(segs) and all(not d.get("user") for d in segs)
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'} (k) 옴니 긴 발화, 끼어들기 없음         → 부분 {[(p['label'], p.get('excess')) for p in lab.partials]} 최종 {[(d['label'], d.get('why')) for d in segs]}")
     lab.frame(json.dumps({"cmd": "speaking", "on": False}).encode())
     lab.close()
     print(f"\n{sum(results)}/{len(results)} 통과")

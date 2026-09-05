@@ -93,6 +93,11 @@ class Gate:
         self.omni_speaking = False      # 옴니 발화 중 (루프백 있는 앱에서 mute 대신 사용)
         self.speak_from = 0.0
         self.speak_until = 0.0
+        self.echo_gain = None           # 마이크가 듣는 스피커 메아리 이득 (옴니 발화 중 학습)
+        self.echo_lag = None            # 메아리 지연(20ms 프레임)
+        self._last_aligned = None
+        self.barge_pending = False      # 옴니 발화 중 끼어들기 감지됨 → 이 발화 전체를 사용자로 넘김
+        self.user_pcm = collections.deque(maxlen=8) # 최근 사용자 세그먼트 (t0, pcm) — 전사 재시도용
         self.in_speech = False
         self.seg = []
         self.pre = []                       # 프리롤 링버퍼 (청크 단위)
@@ -372,7 +377,8 @@ class Gate:
         hop = int(0.02 * SR)
         em, es = self._envelope(mic, hop), self._envelope(sysw, hop)
         off = int(round((t0 - base) / 0.02))
-        best = 0.0
+        best, best_lag = 0.0, None
+        aligned = {}
         for lag in range(0, 26):                     # 마이크가 시스템보다 0~500ms 늦게 들음
             # 마이크 프레임 k ↔ 시스템 프레임 off + k - lag  (시스템 버퍼 앞이 부족하면 k를 뒤로 민다)
             ks = max(0, lag - off)
@@ -383,10 +389,51 @@ class Gate:
             if n < max(8, int(len(em) * 0.6)):
                 continue
             a, b = a[:n], b[:n]
+            aligned[lag] = (a, b)
             if a.std() < 1e-4 or b.std() < 1e-4:
                 continue
-            best = max(best, float(np.corrcoef(a, b)[0, 1]))
+            c = float(np.corrcoef(a, b)[0, 1])
+            if c > best:
+                best, best_lag = c, lag
+        # 메아리 초과분: 학습된 지연(없으면 최고 상관 지연)에 정렬해 계산
+        lag = self.echo_lag if self.echo_lag is not None and self.echo_lag in aligned else best_lag
+        self._last_aligned = aligned.get(lag) if lag is not None else None
+        if best >= MEDIA_CORR_MIN and best_lag is not None:
+            self.echo_lag = best_lag if self.echo_lag is None else self.echo_lag
         return best, sys_rms
+
+    def echo_excess(self):
+        """직전 media_corr에서 정렬한 (마이크, 시스템) 포락선으로, 스피커 메아리로는 설명되지 않는
+        마이크 에너지가 연속으로 얼마나(초) 있었는지 — 옴니 발화 중 사용자가 겹쳐 말하면 커진다."""
+        if not self._last_aligned:
+            return 0.0, None
+        a, b = self._last_aligned
+        rm, rs = np.expm1(a) / 60.0, np.expm1(b) / 60.0
+        g = self.echo_gain
+        if g is None:
+            act = rs > max(0.003, 0.3 * float(rs.max()))
+            if int(act.sum()) >= 8:
+                g = float(np.percentile(rm[act] / (rs[act] + 1e-6), 25))   # 낮은 분위 → 겹친 말에 덜 흔들림
+        if g is None:
+            return 0.0, None
+        exc = rm > 2.2 * g * rs + 0.006
+        run = longest = 0
+        for v in exc:
+            run = run + 1 if v else 0
+            longest = max(longest, run)
+        return longest * 0.02, g
+
+    def learn_echo_gain(self):
+        """순수 메아리 세그먼트(옴니 발화 중 media)로 마이크/스피커 이득을 갱신."""
+        if not self._last_aligned:
+            return
+        a, b = self._last_aligned
+        rm, rs = np.expm1(a) / 60.0, np.expm1(b) / 60.0
+        act = rs > max(0.003, 0.3 * float(rs.max()))
+        if int(act.sum()) < 8:
+            return
+        g = float(np.median(rm[act] / (rs[act] + 1e-6)))
+        self.echo_gain = g if self.echo_gain is None else 0.7 * self.echo_gain + 0.3 * g
 
     def lips_signal(self, mic: np.ndarray, t0: float):
         """SP-1 얼굴 텔레메트리와 음성 포락선의 동기 — 화면 앞 사람이 지금 말하는가."""
@@ -433,15 +480,39 @@ class Gate:
                 emit({"ev": "ambient", "label": label, "text": text, "t0": round(t0, 2),
                       "dur": round(len(pcm) / SR, 2), "sig": sig})
 
+    def retranscribe(self, t0: float):
+        """리얼타임 전사가 프롬프트를 되풀이(환각)했을 때 — 보관해 둔 사용자 세그먼트를
+        프롬프트 없이 다시 전사해 돌려준다 (실제로 한 말을 버리지 않기 위해)."""
+        pcm = None
+        for st, p in reversed(self.user_pcm):
+            if abs(st - t0) < 0.06:
+                pcm = p
+                break
+        if pcm is None:
+            emit({"ev": "retranscript", "t0": t0, "text": "", "why": "no_audio"})
+            return
+
+        def work():
+            try:
+                key = open(OPENAI_KEY_PATH).read().strip()
+            except OSError:
+                emit({"ev": "retranscript", "t0": t0, "text": "", "why": "no_key"})
+                return
+            text = self._transcribe(pcm, key, model="gpt-4o-transcribe", prompt="")
+            emit({"ev": "retranscript", "t0": t0, "text": text, "dur": round(len(pcm) / SR, 2)})
+        threading.Thread(target=work, daemon=True).start()
+
     @staticmethod
-    def _transcribe(pcm: np.ndarray, key: str) -> str:
+    def _transcribe(pcm: np.ndarray, key: str, model: str = "gpt-4o-mini-transcribe",
+                    prompt: str = "옴니, 옴니야, OMNI_OS") -> str:
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
             w.writeframes((np.clip(pcm, -1, 1) * 32767).astype("<i2").tobytes())
         boundary = uuid.uuid4().hex
         body = b""
-        for k, v in (("model", "gpt-4o-mini-transcribe"), ("prompt", "옴니, 옴니야, OMNI_OS")):
+        fields = [("model", model)] + ([("prompt", prompt)] if prompt else [])
+        for k, v in fields:
             body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
         body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n"
                  "Content-Type: audio/wav\r\n\r\n").encode() + buf.getvalue() + f"\r\n--{boundary}--\r\n".encode()
@@ -473,12 +544,19 @@ class Gate:
         if r and "start" in r and not self.in_speech:
             self.in_speech = True
             self.seg = list(self.pre)
+            self._partial_at = now
             emit({"ev": "speech_start"})
         elif self.in_speech:
             self.seg.append(chunk)
         if self.in_speech and (r and "end" in r
                                or len(self.seg) * WIN / SR > MAX_SEG):
             self.finish(now)
+        elif (self.in_speech and self.omni_speaking and len(self.seg) * WIN / SR >= 1.2
+              and now - getattr(self, "_partial_at", 0.0) >= 1.2):
+            # 옴니가 말하는 동안은 VAD가 끝을 못 찾는다(옴니 목소리가 계속 들림) →
+            # 1.2초마다 부분 판정해 끼어들기(사용자 발화)를 빨리 잡는다. 오디오는 이어서 모은다.
+            self._partial_at = now
+            self.finish(now, partial=True)
         if self.enroll_until and now > self.enroll_until:
             if self.in_speech:
                 self.finish(now)        # 마감 시점에 말하던 발화도 반영
@@ -488,11 +566,28 @@ class Gate:
             emit({"ev": "enroll", "progress": min(1.0, 1 - (self.enroll_until - now) / self.enroll_target),
                   "segments": len(self.enroll_embs), "secs": round(self.enroll_secs, 1)})
 
-    def finish(self, now):
+    def finish(self, now, partial=False):
         pcm = np.concatenate(self.seg) if self.seg else np.zeros(0, np.float32)
+        seg_list = self.seg
         self.seg = []
         self.in_speech = False
         dur = len(pcm) / SR
+        if partial:
+            # 부분 판정(옴니 발화 중): 라벨만 알리고 오디오는 계속 모은다
+            self.in_speech = True
+            if dur < 1.0:
+                self.seg = seg_list
+                return
+            label = self._classify(pcm, now, dur, partial=True)
+            if label in ("user", "uncertain"):
+                self.barge_pending = True
+                self.seg = seg_list                 # 끼어든 말 전체를 보존
+            else:
+                self.seg = seg_list[-max(1, int(0.3 * SR / WIN)):]   # 0.3초 프리롤만 남김
+            return
+        self._classify(pcm, now, dur, partial=False)
+
+    def _classify(self, pcm, now, dur, partial=False):
         if self.enroll_until:
             # 쉬지 않고 말하면 세그먼트가 하나로 이어지므로 2초 창으로 쪼개 임베딩
             step = int(2.0 * SR)
@@ -505,12 +600,12 @@ class Gate:
                         self.enroll_secs += len(part) / SR
             emit({"ev": "enroll", "progress": min(1.0, 1 - (self.enroll_until - now) / self.enroll_target),
                   "segments": len(self.enroll_embs), "secs": round(self.enroll_secs, 1)})
-            return
+            return None
         if dur < MIN_SEG:
             emit({"ev": "segment", "user": False, "sim": None, "dur": round(dur, 2), "why": "short"})
-            return
+            return None
         t0 = now - dur
-        if getattr(self, "stats", None) is not None:
+        if getattr(self, "stats", None) is not None and not partial:
             self.stats["segments"] += 1
         sim, neg, neg_label = self.verify(pcm)
         if sim is None:
@@ -528,40 +623,75 @@ class Gate:
         # 얼굴이 정면으로 잘 추적되는데(≥0.6초 커버) 입이 전혀 안 움직임 → 이 소리는 화면 앞 사람이 낸 게 아님
         lips_still = (lips["face"] and lips["frontal"] and lips.get("n", 0) >= 9
                       and lips["act"] < LIPS_ACT_MIN * 0.5 and lips["corr"] < 0.1)
+        # 옴니 발화 구간 [speak_from, speak_until(또는 지금)]과 세그먼트의 겹침 비율
+        sp_end = now if self.omni_speaking else self.speak_until
+        overlap = max(0.0, min(now, sp_end + 0.8) - max(t0, self.speak_from))
+        omni_voice = self.speak_from > 0 and overlap >= 0.4 * dur
+        # 끼어들기: 옴니 발화 중, 스피커 메아리로 설명되지 않는 마이크 에너지가 0.35초 이상 이어짐
+        # + (입술 동기 또는 목소리가 어느 정도 비슷함 또는 프로필 없음) + 입이 정지 상태는 아님
+        excess, gain = self.echo_excess() if (self.omni_speaking or omni_voice) else (0.0, None)
+        barge = (excess >= 0.35 and not lips_still
+                 and (self.ref is None or lips_speaking
+                      or (sim is not None and sim >= self.threshold - 0.2)))
         # ---- 융합: 결정적 신호(루프백·입술) > 목소리 유사도
-        if media >= MEDIA_CORR_MIN and not lips_speaking:
-            label = "media"
+        if self.barge_pending and not partial:
+            # 부분 판정에서 이미 끼어들기로 잡힌 발화 — 전체를 사용자로 넘긴다
+            label = "user" if (lips_speaking or band == "user") else "uncertain"
+            why = "barge"
         elif lips_speaking and media < 0.85:
             label = "user"
+            if barge:
+                why = "barge"
+        elif barge:
+            label = "user" if band == "user" else "uncertain"
+            why = "barge"
+        elif media >= MEDIA_CORR_MIN:
+            label = "media"
         elif lips_still:
             label = "media" if media >= 0.35 else "other"   # 내 목소리 녹음 재생·TV·타인 (입 정지가 결정적)
         elif band == "user":
             label = "user"
         elif band == "maybe":
             label = "uncertain"
+        elif (self.omni_speaking and sys_rms > 0.01 and media < 0.45
+              and sim is not None and sim >= self.threshold - 2 * MAYBE_MARGIN):
+            # 옴니 발화 중인데 스피커 출력과 안 맞는 소리 + 목소리가 어느 정도 나와 비슷함 → 끼어들기 후보
+            label = "uncertain"
+            why = "barge_sim"
         else:
             label = "other"
         user = label in ("user", "uncertain")
+        if partial:
+            if not user and label == "media" and self.omni_speaking:
+                self.learn_echo_gain()
+            emit({"ev": "segment", "partial": True, "user": bool(user), "label": label, "band": band,
+                  "sim": None if sim is None else round(sim, 3), "media": round(media, 3),
+                  "excess": round(excess, 2), "gain": None if gain is None else round(gain, 3),
+                  "lips": lips, "dur": round(dur, 2), "t0": round(t0, 2), "why": why or ""})
+            return label
+        if not partial:
+            self.barge_pending = False
         out = {"ev": "segment", "user": bool(user), "label": label, "band": band,
                "sim": None if sim is None else round(sim, 3),
                "neg": None if neg is None else round(neg, 3), "neg_label": neg_label,
                "thr": round(self.threshold, 3), "media": round(media, 3), "sys_rms": round(sys_rms, 4),
+               "excess": round(excess, 2),
                "lips": lips, "dur": round(dur, 2), "t0": round(t0, 2)}
         if why:
             out["why"] = why
-        # 옴니 발화 구간 [speak_from, speak_until(또는 지금)]과 세그먼트의 겹침 비율
-        sp_end = now if self.omni_speaking else self.speak_until
-        overlap = max(0.0, min(now, sp_end + 0.8) - max(t0, self.speak_from))
-        omni_voice = self.speak_from > 0 and overlap >= 0.4 * dur
-        if not user and label == "media" and omni_voice:
+        if not user and omni_voice and (label == "media" or media >= 0.3 or self.omni_speaking):
             out["why"] = "omni_voice"          # 옴니 자신의 목소리 — 전사·기록하지 않음
+            if label == "media":
+                self.learn_echo_gain()
         elif not user:
             self.queue_ambient(pcm, t0, label, {"sim": out["sim"], "media": out["media"],
                                                 "lips": lips.get("corr"), "faces": lips.get("faces")})
         if user:
+            self.user_pcm.append((round(t0, 2), pcm.copy()))
             pcm24 = np.clip(resample_24k(pcm), -1, 1)
             out["pcm24"] = base64.b64encode((pcm24 * 32767).astype("<i2").tobytes()).decode()
         emit(out)
+        return label
 
     # ---------------- 등록
     def start_enroll(self, seconds, kind="user", name=None):
@@ -660,6 +790,8 @@ def handle_cmd(gate: Gate, c: dict):
         gate.omni_speaking = on
     elif cmd == "adapt":
         gate.adapt()
+    elif cmd == "retranscribe":
+        gate.retranscribe(float(c.get("t0", 0)))
     elif cmd == "threshold":
         gate.threshold = float(c.get("value", gate.threshold))
         emit({"ev": "log", "text": f"threshold={gate.threshold:.2f}"})

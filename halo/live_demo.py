@@ -138,6 +138,7 @@ TOOLS = [
                     "(예: notes.open:파일명, proj.editor:프로젝트명, omnia, "
                     "web.search:google:검색어 — 브라우저 검색 바로 열기, "
                     "computer:작업설명 — 맥의 마우스·키보드로 직접 수행, "
+                    "shell:명령 — 맥에서 셸 명령 실행(파일 찾기·정리·설치), "
                     "ui.read:패널키 / ui.click:패널키:버튼글자 — 패널 직접 조작).",
      "parameters": {"type": "object", "properties": {
          "open": {"type": "string", "description": "열 패널 키"},

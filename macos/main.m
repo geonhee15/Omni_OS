@@ -6,6 +6,7 @@
 #import <CoreAudio/AudioHardwareTapping.h>
 #import <CoreAudio/CATapDescription.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <Vision/Vision.h>
 #import <signal.h>
 #import "sp1_status.h"
 #import "sysmon.h"
@@ -1842,24 +1843,28 @@ didCompleteWithError:(NSError *)error {
 }
 
 // ---- OMNI_AI 파일 도구 — 에이전트 루프가 쓰는 파일 시스템 접근 ----
-// 사용자 승인 범위: ~/Desktop 아래 전체 (프로젝트·노트·작업 폴더 포함)
+// 사용자 승인 범위(2026-09): 맥 전체. 읽기는 어디든, 쓰기는 사용자 영역
+// (홈·/tmp·/Volumes·/Users/Shared·/opt/homebrew)에 한정 — 시스템 파일 훼손 방지.
 
-static NSString *OmniAIFsValidate(NSString *path) {
-    NSString *std = path.stringByStandardizingPath;
-    if (std == nil) return nil;
-    NSString *root = [NSHomeDirectory() stringByAppendingPathComponent:@"Desktop"];
-    if ([std isEqualToString:root] || [std hasPrefix:[root stringByAppendingString:@"/"]]) {
-        return std;
+static NSString *OmniAIFsValidate(NSString *path, BOOL forWrite) {
+    NSString *std = [path stringByExpandingTildeInPath].stringByStandardizingPath;
+    if (std == nil || ![std hasPrefix:@"/"]) return nil;
+    if (!forWrite) return std;
+    NSArray *writable = @[ NSHomeDirectory(), @"/tmp", @"/private/tmp", @"/Volumes", @"/Users/Shared", @"/opt/homebrew" ];
+    for (NSString *root in writable) {
+        if ([std isEqualToString:root] || [std hasPrefix:[root stringByAppendingString:@"/"]]) return std;
     }
     return nil;
 }
 
 - (void)handleAIFs:(NSString *)cmd a:(NSDictionary *)a msgId:(NSNumber *)msgId {
     NSString *reqPath = [a[@"path"] isKindOfClass:[NSString class]] ? a[@"path"] : nil;
-    NSString *path = reqPath ? OmniAIFsValidate(reqPath) : nil;
+    BOOL forWrite = [cmd isEqualToString:@"ai.fsWrite"] || [cmd isEqualToString:@"ai.fsEdit"];
+    NSString *path = reqPath ? OmniAIFsValidate(reqPath, forWrite) : nil;
     if (path == nil) {
         [self deliverPayload:@{ @"ok" : @NO,
-            @"error" : @"path outside allowed root (~/Desktop)" } forId:msgId];
+            @"error" : forWrite ? @"write not allowed here (system path) — 홈·/tmp·/Volumes 아래만 쓸 수 있음"
+                                : @"invalid path" } forId:msgId];
         return;
     }
     NSFileManager *fm = NSFileManager.defaultManager;
@@ -2004,6 +2009,77 @@ static void OmniCuPostMouse(CGEventType type, CGPoint p, CGMouseButton btn, int 
 
 static void OmniCuSleep(double sec) { usleep((useconds_t)(sec * 1e6)); }
 
+// 화면 텍스트 인식(Vision OCR, 한국어+영어) — 줄 단위로 위→아래, 같은 줄은 왼→오른쪽 순서
+static NSString *OmniCuOCR(CGImageRef img) {
+    VNRecognizeTextRequest *req = [[VNRecognizeTextRequest alloc] init];
+    req.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+    req.usesLanguageCorrection = YES;
+    req.recognitionLanguages = @[ @"ko-KR", @"en-US" ];
+    VNImageRequestHandler *h = [[VNImageRequestHandler alloc] initWithCGImage:img options:@{}];
+    NSError *err = nil;
+    if (![h performRequests:@[ req ] error:&err]) return @"";
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    for (VNRecognizedTextObservation *o in req.results) {
+        VNRecognizedText *t = [o topCandidates:1].firstObject;
+        if (t == nil || t.string.length == 0) continue;
+        CGRect b = o.boundingBox;   // 정규화 좌표, 원점 왼쪽 아래
+        [items addObject:@{ @"y" : @(1.0 - CGRectGetMidY(b)), @"x" : @(CGRectGetMinX(b)),
+                            @"h" : @(b.size.height), @"text" : t.string }];
+    }
+    [items sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        double ya = [a[@"y"] doubleValue], yb = [b[@"y"] doubleValue];
+        return ya < yb ? NSOrderedAscending : ya > yb ? NSOrderedDescending : NSOrderedSame;
+    }];
+    NSMutableArray<NSMutableArray *> *lines = [NSMutableArray array];
+    NSMutableArray *cur = nil;
+    double rowY = -1, rowH = 0;
+    for (NSDictionary *it in items) {
+        double y = [it[@"y"] doubleValue];
+        if (cur == nil || y - rowY > MAX(0.006, rowH * 0.6)) {
+            cur = [NSMutableArray array];
+            [lines addObject:cur];
+            rowY = y; rowH = [it[@"h"] doubleValue];
+        }
+        [cur addObject:it];
+    }
+    NSMutableString *out = [NSMutableString string];
+    for (NSMutableArray *line in lines) {
+        [line sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            double xa = [a[@"x"] doubleValue], xb = [b[@"x"] doubleValue];
+            return xa < xb ? NSOrderedAscending : xa > xb ? NSOrderedDescending : NSOrderedSame;
+        }];
+        NSMutableArray *texts = [NSMutableArray array];
+        for (NSDictionary *it in line) [texts addObject:it[@"text"]];
+        if (out.length) [out appendString:@"\n"];
+        [out appendString:[texts componentsJoinedByString:@"   "]];
+        if (out.length > 9000) break;
+    }
+    return out;
+}
+
+// CGImage → (필요하면 축소한) JPEG
+static NSData *OmniCuJPEG(CGImageRef img, NSUInteger ow, NSUInteger oh) {
+    size_t w = CGImageGetWidth(img);
+    CGImageRef use = img;
+    CGContextRef ctx = NULL;
+    if (ow > 0 && ow < w) {
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        ctx = CGBitmapContextCreate(NULL, ow, oh, 8, 0, cs, kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
+        CGColorSpaceRelease(cs);
+        if (ctx) {
+            CGContextSetInterpolationQuality(ctx, kCGInterpolationHigh);
+            CGContextDrawImage(ctx, CGRectMake(0, 0, ow, oh), img);
+            use = CGBitmapContextCreateImage(ctx);
+        }
+    }
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:use];
+    NSData *jpg = [rep representationUsingType:NSBitmapImageFileTypeJPEG
+                                    properties:@{ NSImageCompressionFactor : @0.8 }];
+    if (use != img) CGImageRelease(use);
+    if (ctx) CGContextRelease(ctx);
+    return jpg;
+}
+
 // 현재 커서에서 목표까지 부드럽게 미끄러져 이동 (ease-out, ~120ms) — 급한 순간이동 대신 자연스러운 조작
 static void OmniCuGlide(CGPoint to) {
     CGEventRef e = CGEventCreate(NULL);
@@ -2021,27 +2097,84 @@ static void OmniCuGlide(CGPoint to) {
     OmniCuPostMouse(kCGEventMouseMoved, to, kCGMouseButtonLeft, 1);
 }
 
-// 앱 이름으로 실행/전면 (NSWorkspace) — 독 아이콘 좌표 추정보다 훨씬 확실
+// 이름이 맞는 실행 중 앱 — 정확히 일치 → 앞부분 일치 → 포함 순 (대소문자 무시)
+static NSRunningApplication *OmniCuFindRunning(NSString *name) {
+    NSString *n = name.lowercaseString;
+    NSRunningApplication *prefix = nil, *contains = nil;
+    for (NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications) {
+        if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+        NSString *ln = app.localizedName.lowercaseString ?: @"";
+        NSString *bn = [app.bundleURL.lastPathComponent.stringByDeletingPathExtension lowercaseString] ?: @"";
+        if ([ln isEqualToString:n] || [bn isEqualToString:n]) return app;
+        if (prefix == nil && ([ln hasPrefix:n] || [bn hasPrefix:n])) prefix = app;
+        if (contains == nil && ([ln containsString:n] || [bn containsString:n])) contains = app;
+    }
+    return prefix ?: contains;
+}
+
+static BOOL OmniCuIsFront(NSRunningApplication *app, NSString *name) {
+    NSRunningApplication *f = NSWorkspace.sharedWorkspace.frontmostApplication;
+    if (f == nil) return NO;
+    if (app != nil) return f.processIdentifier == app.processIdentifier;
+    return [f.localizedName.lowercaseString ?: @"" containsString:name.lowercaseString];
+}
+
+static BOOL OmniCuWaitFront(NSRunningApplication *app, NSString *name, double secs) {
+    for (int i = 0; i < (int)(secs / 0.1); i++) {
+        if (OmniCuIsFront(app, name)) return YES;
+        OmniCuSleep(0.1);
+    }
+    return NO;
+}
+
+// 앱 이름으로 실행/전면 — 실행 중이면 활성화, 안 되면 LaunchServices(open), 그래도 안 되면 앱 폴더 검색.
+// 각 단계마다 실제로 전면에 왔는지 확인한다 (다른 앱이 전면일 때 activate가 거부되는 경우 대비).
 static BOOL OmniCuOpenApp(NSString *name) {
     NSWorkspace *ws = NSWorkspace.sharedWorkspace;
-    for (NSRunningApplication *app in ws.runningApplications) {
-        if (app.localizedName && [app.localizedName caseInsensitiveCompare:name] == NSOrderedSame) {
-            return [app activateWithOptions:NSApplicationActivateAllWindows];
-        }
-    }
-    NSArray *dirs = @[ @"/Applications", [NSHomeDirectory() stringByAppendingPathComponent:@"Applications"],
-                       @"/System/Applications", @"/System/Applications/Utilities" ];
-    for (NSString *d in dirs) {
-        NSString *p = [d stringByAppendingPathComponent:[name stringByAppendingString:@".app"]];
-        if ([NSFileManager.defaultManager fileExistsAtPath:p]) {
-            NSURL *u = [NSURL fileURLWithPath:p];
+    NSRunningApplication *run = OmniCuFindRunning(name);
+    if (run != nil) {
+        [run unhide];
+        [run activateWithOptions:NSApplicationActivateAllWindows];
+        if (OmniCuWaitFront(run, name, 0.8)) return YES;
+        if (run.bundleURL != nil) {
             NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration];
             cfg.activates = YES;
-            [ws openApplicationAtURL:u configuration:cfg completionHandler:nil];
-            return YES;
+            [ws openApplicationAtURL:run.bundleURL configuration:cfg completionHandler:nil];
+            if (OmniCuWaitFront(run, name, 1.5)) return YES;
+        }
+        NSTask *t = [[NSTask alloc] init];
+        t.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"];
+        t.arguments = run.bundleIdentifier.length ? @[ @"-b", run.bundleIdentifier ] : @[ @"-a", name ];
+        [t launchAndReturnError:nil];
+        [t waitUntilExit];
+        return OmniCuWaitFront(run, name, 2.0);
+    }
+    // 실행 중이 아님: LaunchServices가 이름을 해석(대소문자·한글 표시명 포함)
+    NSTask *t = [[NSTask alloc] init];
+    t.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"];
+    t.arguments = @[ @"-a", name ];
+    t.standardError = [NSPipe pipe];
+    [t launchAndReturnError:nil];
+    [t waitUntilExit];
+    if (t.terminationStatus == 0 && OmniCuWaitFront(nil, name, 4.0)) return YES;
+    // 앱 폴더에서 이름 일부 일치로 검색
+    NSArray *dirs = @[ @"/Applications", [NSHomeDirectory() stringByAppendingPathComponent:@"Applications"],
+                       @"/System/Applications", @"/System/Applications/Utilities" ];
+    NSString *n = name.lowercaseString;
+    for (NSString *d in dirs) {
+        for (NSString *f in [NSFileManager.defaultManager contentsOfDirectoryAtPath:d error:nil]) {
+            if (![f.pathExtension isEqualToString:@"app"]) continue;
+            NSString *base = f.stringByDeletingPathExtension.lowercaseString;
+            if ([base isEqualToString:n] || [base hasPrefix:n] || [base containsString:n]) {
+                NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration];
+                cfg.activates = YES;
+                [ws openApplicationAtURL:[NSURL fileURLWithPath:[d stringByAppendingPathComponent:f]]
+                           configuration:cfg completionHandler:nil];
+                return OmniCuWaitFront(nil, base, 4.0);
+            }
         }
     }
-    return [ws launchApplication:name];
+    return NO;
 }
 
 - (void)handleCU:(NSString *)cmd a:(NSDictionary *)a msgId:(NSString *)msgId {
@@ -2074,8 +2207,10 @@ static BOOL OmniCuOpenApp(NSString *name) {
     }
     if ([cmd isEqualToString:@"cu.openApp"]) {
         NSString *name = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : @"";
-        BOOL ok = name.length > 0 && OmniCuOpenApp(name);
-        [self deliverPayload:@{ @"ok" : @(ok), @"error" : ok ? @"" : @"APP_NOT_FOUND" } forId:msgId];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            BOOL ok = name.length > 0 && OmniCuOpenApp(name);   // 전면 확인까지 최대 수 초 대기 → 메인 스레드 밖
+            [self deliverPayload:@{ @"ok" : @(ok), @"error" : ok ? @"" : @"APP_NOT_FOUND" } forId:msgId];
+        });
         return;
     }
     if ([cmd isEqualToString:@"cu.zoom"]) {
@@ -2118,9 +2253,38 @@ static BOOL OmniCuOpenApp(NSString *name) {
         }];
         return;
     }
+    if ([cmd isEqualToString:@"cu.front"]) {
+        // 전면 앱 + 포커스 창 제목/문서 — 화면 관찰의 사실 근거 (추측 대신)
+        NSRunningApplication *app = NSWorkspace.sharedWorkspace.frontmostApplication;
+        NSString *title = @"", *doc = @"";
+        if (app != nil && AXIsProcessTrusted()) {
+            AXUIElementRef ax = AXUIElementCreateApplication(app.processIdentifier);
+            CFTypeRef win = NULL;
+            if (AXUIElementCopyAttributeValue(ax, kAXFocusedWindowAttribute, &win) == kAXErrorSuccess && win != NULL) {
+                CFTypeRef t = NULL;
+                if (AXUIElementCopyAttributeValue((AXUIElementRef)win, kAXTitleAttribute, &t) == kAXErrorSuccess && t != NULL) {
+                    if (CFGetTypeID(t) == CFStringGetTypeID()) title = [(__bridge NSString *)t copy];
+                    CFRelease(t);
+                }
+                CFTypeRef d = NULL;
+                if (AXUIElementCopyAttributeValue((AXUIElementRef)win, kAXDocumentAttribute, &d) == kAXErrorSuccess && d != NULL) {
+                    if (CFGetTypeID(d) == CFStringGetTypeID()) doc = [(__bridge NSString *)d copy];
+                    CFRelease(d);
+                }
+                CFRelease(win);
+            }
+            CFRelease(ax);
+        }
+        [self deliverPayload:@{ @"ok" : @YES, @"app" : app.localizedName ?: @"",
+                                @"bundle" : app.bundleIdentifier ?: @"",
+                                @"title" : title, @"doc" : doc } forId:msgId];
+        return;
+    }
     if ([cmd isEqualToString:@"cu.screenshot"]) {
         // ScreenCaptureKit (macOS 14+): 메인 디스플레이를 축소 캡처 → JPEG base64
+        // ocr=true면 원본 해상도로 잡아 Vision OCR 텍스트를 함께 돌려준다 (화면 관찰용)
         double maxW = [a[@"maxWidth"] isKindOfClass:[NSNumber class]] ? [a[@"maxWidth"] doubleValue] : 1280;
+        BOOL wantOcr = [a[@"ocr"] respondsToSelector:@selector(boolValue)] && [a[@"ocr"] boolValue];
         [SCShareableContent getShareableContentExcludingDesktopWindows:NO onScreenWindowsOnly:YES
             completionHandler:^(SCShareableContent *content, NSError *error) {
             SCDisplay *display = nil;
@@ -2139,7 +2303,8 @@ static BOOL OmniCuOpenApp(NSString *name) {
             NSUInteger oh = (NSUInteger)(ptH * NSScreen.mainScreen.backingScaleFactor * scaleDown);
             SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
             SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
-            cfg.width = ow; cfg.height = oh;
+            if (wantOcr) { cfg.width = (NSUInteger)pxW; cfg.height = (NSUInteger)(ptH * NSScreen.mainScreen.backingScaleFactor); }
+            else { cfg.width = ow; cfg.height = oh; }
             cfg.showsCursor = YES;
             cfg.captureResolution = SCCaptureResolutionAutomatic;
             [SCScreenshotManager captureImageWithFilter:filter configuration:cfg
@@ -2149,14 +2314,19 @@ static BOOL OmniCuOpenApp(NSString *name) {
                         @"error" : err2.localizedDescription ?: @"SCREEN_DENIED" } forId:msgId];
                     return;
                 }
-                NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:img];
-                NSData *jpg = [rep representationUsingType:NSBitmapImageFileTypeJPEG
-                                                properties:@{ NSImageCompressionFactor : @0.8 }];
-                size_t w = CGImageGetWidth(img), h = CGImageGetHeight(img);
-                gCuScale = (double)w / ptW;    // 스크린샷 px / 포인트
-                [self deliverPayload:@{ @"ok" : @YES, @"jpeg" : [jpg base64EncodedStringWithOptions:0],
-                                        @"w" : @(w), @"h" : @(h), @"scale" : @(gCuScale),
-                                        @"screenW" : @(ptW), @"screenH" : @(ptH) } forId:msgId];
+                CGImageRef held = CGImageRetain(img);
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                    NSString *text = wantOcr ? OmniCuOCR(held) : @"";
+                    NSData *jpg = OmniCuJPEG(held, wantOcr ? ow : 0, oh);
+                    size_t w = wantOcr ? ow : CGImageGetWidth(held);
+                    size_t h = wantOcr ? oh : CGImageGetHeight(held);
+                    CGImageRelease(held);
+                    gCuScale = (double)w / ptW;    // 스크린샷 px / 포인트
+                    [self deliverPayload:@{ @"ok" : @YES, @"jpeg" : [jpg base64EncodedStringWithOptions:0],
+                                            @"w" : @(w), @"h" : @(h), @"scale" : @(gCuScale),
+                                            @"text" : text ?: @"",
+                                            @"screenW" : @(ptW), @"screenH" : @(ptH) } forId:msgId];
+                });
             }];
         }];
         return;
@@ -3233,6 +3403,41 @@ static NSAlert *OmniMakeAlert(NSString *message, NSString *okTitle, BOOL cancel)
                 [self deliverPayload:@{ @"ok" : @NO, @"error" : @"helper output" }
                                forId:msgId];
             }
+        });
+
+    } else if ([cmd isEqualToString:@"ai.shell"]) {
+        // 옴니 셸 실행 — 사용자가 맥 전체 접근을 허용함 (zsh -lc, 60초 타임아웃, 출력 20KB)
+        NSString *script = [a[@"cmd"] isKindOfClass:[NSString class]] ? a[@"cmd"] : @"";
+        if (script.length == 0) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"empty" } forId:msgId];
+            return;
+        }
+        NSString *cwd = [a[@"cwd"] isKindOfClass:[NSString class]] && [a[@"cwd"] length]
+            ? [a[@"cwd"] stringByExpandingTildeInPath] : NSHomeDirectory();
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSTask *task = [[NSTask alloc] init];
+            task.executableURL = [NSURL fileURLWithPath:@"/bin/zsh"];
+            task.arguments = @[ @"-lc", script ];
+            task.currentDirectoryURL = [NSURL fileURLWithPath:cwd];
+            NSPipe *outPipe = [NSPipe pipe];
+            task.standardOutput = outPipe;
+            task.standardError = outPipe;
+            NSError *err = nil;
+            if (![task launchAndReturnError:&err]) {
+                [self deliverPayload:@{ @"ok" : @NO,
+                    @"error" : err.localizedDescription ?: @"launch failed" } forId:msgId];
+                return;
+            }
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC),
+                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                if (task.isRunning) [task terminate];
+            });
+            NSData *outData = [outPipe.fileHandleForReading readDataToEndOfFile];
+            [task waitUntilExit];
+            NSString *out = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding] ?: @"";
+            if (out.length > 20000) out = [[out substringToIndex:20000] stringByAppendingString:@"\n…(잘림)"];
+            [self deliverPayload:@{ @"ok" : @YES, @"output" : out,
+                                    @"code" : @(task.terminationStatus) } forId:msgId];
         });
 
     } else if ([cmd isEqualToString:@"ai.calc"]) {
