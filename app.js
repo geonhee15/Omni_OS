@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.66.0",
+  version: "0.67.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -563,6 +563,177 @@ OmniOS.register("cmd", {
 });
 
 // ---------- module: OMNI_AI (한국어 음성 인터페이스 // 레트로 로봇 보이스) ----------
+
+// ---------- OMNI MEMORY (~/.omni/memory — 프로필·일지·주변 관찰·다이제스트) ----------
+// 옴니의 기억. 프로필(오래가는 사실)·일지(대화/관찰/생각을 시간순으로)·주변음 원문·
+// 하루 다이제스트로 나뉘고, 관찰 모듈이 주변음 전사를 읽어 "지금 무슨 상황인지"를
+// 스스로 추정해 일지에 남긴다. 텍스트·LIVE·안경 브리지가 같은 파일을 쓴다.
+const OmniMem = {
+  profile: "",
+  situation: "",
+  people: [],
+  today: [],
+  recent: [],
+  ambientBuf: [],
+  _ambientSinceObs: 0,
+  _lastObsAt: 0,
+  _obsBusy: false,
+
+  async req(cmd, obj) {
+    if (!OmniNative.available) return null;
+    try { return await OmniNative.request(cmd, JSON.stringify(obj || {}), 30000); }
+    catch (e) { return null; }
+  },
+
+  localDate(ts) {
+    const d = ts ? new Date(ts * 1000) : new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  },
+
+  fmtTime(ts) {
+    const d = new Date(ts * 1000);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  },
+
+  async load() {
+    const p = await this.req("mem.profile");
+    this.profile = ((p && p.text) || "").slice(0, 4000);
+    const t = await this.req("mem.read", { days: 1, limit: 400 });
+    this.today = (t && t.items) || [];
+    const r = await this.req("mem.read", { days: 7, limit: 900 });
+    this.recent = (r && r.items) || [];
+    const d = await this.req("mem.dates");
+    for (const x of ((d && d.dates) || []).filter((x) => x.digest).slice(-7)) {
+      const g = await this.req("mem.digest", { date: x.date });
+      if (g && g.text) this.recent.push({ ts: new Date(`${x.date}T12:00:00`).getTime() / 1000, kind: "digest", text: g.text.slice(0, 1500) });
+    }
+    const last = [...this.today].reverse().find((e) => e.kind === "observe");
+    if (last) { this.situation = last.text; this.people = (last.meta && last.meta.people) || []; }
+    setInterval(() => this.observe(), 60000);
+    setTimeout(() => this.dailyDigests(), 25000);
+  },
+
+  async append(kind, text, tags, meta) {
+    const entry = { ts: Date.now() / 1000, kind, text: String(text || "").slice(0, 800), tags: tags || [], meta: meta || {} };
+    if (kind !== "ambient") {
+      this.today.push(entry); this.recent.push(entry);
+      if (this.today.length > 800) this.today.shift();
+      if (this.recent.length > 1500) this.recent.shift();
+    }
+    await this.req("mem.append", entry);
+  },
+
+  conv(role, text) {
+    if (!text || typeof text !== "string") return;
+    this.append("conv", `${role === "user" ? "나" : "옴니"}: ${text.slice(0, 500)}`);
+  },
+
+  // 사이드카 주변음 전사 (미디어·타인) 또는 건희가 남에게 한 말
+  ambient(label, text, t0, sig) {
+    if (!text) return;
+    this.ambientBuf.push({ ts: t0 || Date.now() / 1000, label, text });
+    if (this.ambientBuf.length > 80) this.ambientBuf.shift();
+    this._ambientSinceObs++;
+    this.req("mem.append", { kind: "ambient", text: `[${label}] ${text}`, meta: sig || {} });
+    if (this._ambientSinceObs >= 12) this.observe();
+  },
+
+  // 관찰자: 주변음과 대화를 보고 상황을 추정하고 기억할 만한 것을 남긴다
+  async observe() {
+    if (this._obsBusy || !OmniNative.available || !this.ambientBuf.length) return;
+    if (this._ambientSinceObs < 3 && Date.now() - this._lastObsAt < 300000) return;
+    this._obsBusy = true;
+    try {
+      const LAB = { media: "노트북 재생음", other: "주변 사람", user_other: "건희→타인", uncertain: "불확실 화자" };
+      const amb = this.ambientBuf.slice(-25).map((l) => `${this.fmtTime(l.ts)} [${LAB[l.label] || l.label}] ${l.text}`).join("\n");
+      const conv = this.today.filter((e) => e.kind === "conv").slice(-6).map((e) => `${this.fmtTime(e.ts)} ${e.text}`).join("\n");
+      const r = await OmniNative.request("ai.chat", JSON.stringify({
+        model: "claude-haiku-4-5-20251001", maxTokens: 500,
+        system: "당신은 개인 AI '옴니'의 관찰 모듈이다. 사용자 이름은 건희. 주변에서 들린 소리(노트북 재생음, 주변 사람의 말, 건희가 남에게 한 말)와 최근 대화를 보고 지금 상황을 추정한다. 반드시 JSON만 출력: {\"situation\":\"지금 상황 한 문장(예: 건희는 유튜브로 아이언맨 영상을 보는 중)\",\"watching\":\"보고/듣고 있는 것 또는 빈 문자열\",\"people\":[\"주변 인물 추정(이름·관계)\"],\"topics\":[\"핵심 주제 2~4개\"],\"notable\":[{\"text\":\"기억할 가치 있는 사실·사건 한 문장\",\"remember\":true}]}. notable은 확실한 것만(없으면 빈 배열), remember는 앞으로도 유효한 사실일 때만 true. 추측은 '~인 듯'으로 표시.",
+        messages: [{ role: "user", content: `[직전 상황] ${this.situation || "(없음)"}\n\n[주변음 전사 (최근)]\n${amb || "(없음)"}\n\n[최근 대화]\n${conv || "(없음)"}` }],
+      }), 40000);
+      const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
+      const m = /\{[\s\S]*\}/.exec(txt);
+      if (!m) return;
+      const o = JSON.parse(m[0]);
+      this._ambientSinceObs = 0; this._lastObsAt = Date.now();
+      if (o.situation && o.situation !== this.situation) {
+        this.situation = o.situation; this.people = o.people || [];
+        this.append("observe", o.situation, o.topics || [], { watching: o.watching || "", people: o.people || [] });
+        const ai = OmniOS.modules.ai; if (ai && ai.onSituation) ai.onSituation(o.situation);
+      }
+      for (const n of (o.notable || [])) if (n && n.text) this.append("thought", n.text, n.remember ? ["remember"] : []);
+    } catch (e) { /* 배경 작업 */ } finally { this._obsBusy = false; }
+  },
+
+  tokens(str) {
+    const out = new Set();
+    const clean = String(str || "").toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ");
+    for (const w of clean.split(/\s+/)) {
+      if (w.length >= 2) out.add(w);
+      if (w.length > 2) for (let i = 0; i + 2 <= w.length; i++) out.add(w.slice(i, i + 2));
+    }
+    return out;
+  },
+
+  search(query, limit) {
+    const toks = this.tokens(query);
+    if (!toks.size) return [];
+    const scored = this.recent.filter((e) => e.kind !== "ambient").map((e) => {
+      const t = this.tokens(e.text); let sc = 0;
+      for (const k of toks) if (t.has(k)) sc++;
+      return [sc + ((e.tags || []).includes("remember") ? 0.5 : 0), e];
+    }).filter((x) => x[0] > 0.5);
+    scored.sort((a, b) => b[0] - a[0] || b[1].ts - a[1].ts);
+    return scored.slice(0, limit || 8).map((x) => x[1]);
+  },
+
+  fmtEntry(e) {
+    const d = new Date(e.ts * 1000);
+    const K = { conv: "", observe: "[상황] ", thought: "[생각] ", action: "[행동] ", user_other: "[건희→타인] ", note: "[메모] ", digest: "[하루 요약] " };
+    return `${d.getMonth() + 1}/${d.getDate()} ${this.fmtTime(e.ts)} ${K[e.kind] ?? `[${e.kind}] `}${e.text}`;
+  },
+
+  // 프롬프트용 기억 컨텍스트 — 프로필 + 현재 상황 + 오늘 일지 + 관련 기억
+  context(query) {
+    const todayLines = this.today.filter((e) => e.kind !== "ambient").slice(-14).map((e) => this.fmtEntry(e));
+    const rel = query ? this.search(query, 6).filter((e) => !this.today.includes(e)).map((e) => this.fmtEntry(e)) : [];
+    return `[프로필 — 오래가는 사실·선호]\n${this.profile || "(비어 있음)"}`
+      + `\n\n[현재 상황 — 주변음을 듣고 옴니가 추정]\n${this.situation || "(아직 관찰 없음)"}${this.people.length ? `\n주변: ${this.people.join(", ")}` : ""}`
+      + `\n\n[오늘 일지 최근]\n${todayLines.join("\n") || "(없음)"}`
+      + (rel.length ? `\n\n[관련 기억]\n${rel.join("\n")}` : "");
+  },
+
+  async setProfile(text) {
+    this.profile = String(text || "").slice(0, 4000);
+    await this.req("mem.profileWrite", { text: this.profile });
+  },
+
+  // 다이제스트가 없는 지난 날 요약 (최근 3일치)
+  async dailyDigests() {
+    const d = await this.req("mem.dates");
+    if (!d || !d.dates) return;
+    const today = this.localDate();
+    for (const x of d.dates.filter((x) => !x.digest && x.date < today).slice(-3)) {
+      const days = Math.min(30, Math.round((new Date(today) - new Date(x.date)) / 86400000) + 1);
+      const r = await this.req("mem.read", { days, limit: 2000 });
+      const es = ((r && r.items) || []).filter((e) => this.localDate(e.ts) === x.date && e.kind !== "ambient");
+      if (es.length < 3) continue;
+      const body = es.slice(-150).map((e) => `${this.fmtTime(e.ts)} [${e.kind}] ${e.text}`).join("\n");
+      const g = await OmniNative.request("ai.chat", JSON.stringify({
+        model: "claude-haiku-4-5-20251001", maxTokens: 700,
+        system: "개인 AI '옴니'의 하루 일지를 다이제스트로 요약한다. 사용자는 건희. 무엇을 했고, 무엇을 보고 들었고, 누구와 있었고, 옴니와 무엇을 이야기했는지, 기억할 사실을 한국어 불릿 8개 이내로. 텍스트만 출력.",
+        messages: [{ role: "user", content: `[${x.date} 일지]\n${body}` }],
+      }), 60000).catch(() => null);
+      const txt = (g && g.ok && (g.text || (g.content || []).map((b) => b.text || "").join(""))) || "";
+      if (txt.trim()) {
+        await this.req("mem.digestWrite", { date: x.date, text: txt.trim() });
+        this.recent.push({ ts: new Date(`${x.date}T12:00:00`).getTime() / 1000, kind: "digest", text: txt.trim() });
+      }
+    }
+  },
+};
+
 OmniOS.register("ai", {
   PERSONA: [
     "당신은 OMNI_OS의 중앙 관제 인공지능 '옴니'입니다.",
@@ -573,7 +744,7 @@ OmniOS.register("ai", {
     "- 답은 음성으로 낭독됩니다. 목록, 마크다운, 코드블록 없이 평문 문장 1~3개로 간결하게 답합니다.",
     "- 당신의 정체: 이 컴퓨터에서 실행 중인 개인 HUD 시스템 OMNI_OS의 관제 AI입니다. 아래 [실시간 상태 스냅샷]으로 모든 패널의 현재 상태를 파악하고 있으며, 앱·시스템에 대한 질문에는 그 실측값으로 답합니다.",
     "- 언어: 한국어·영어·일본어·중국어·스페인어·프랑스어·독일어·이탈리아어·포르투갈어·네덜란드어·터키어·힌디어·인도네시아어 총 13개 언어를 구사합니다. 어떤 언어로 답할지는 [인터페이스 언어] 지시를 그대로 따릅니다 (AUTO = 기본 한국어 + 요구 시 전환 / LOCK = 해당 언어만, 다른 언어 요구 시 안내 후 lang.auto 실행). 존댓말·호칭 금지 규칙은 모든 언어에서 동일하게 적용합니다(정중한 어조, 호칭 없음).",
-    "- 장기 메모리: [장기 메모리] 블록은 이전 세션들에서 축적된 사실입니다. 대화에 자연스럽게 활용합니다. 사용자에 대한 새로운 사실·선호·진행 중인 작업을 알게 되거나 \"기억해\"라는 요청을 받으면 save_memory 도구로 저장합니다 — content에는 기존 메모리와 병합한 최신 통합본 전체(한국어 불릿, 2000자 이내)를 넣습니다.",
+    "- 기억: [프로필]은 오래가는 사실·선호, [현재 상황]은 옴니가 주변음을 듣고 스스로 추정한 것(건희가 무엇을 보고 듣는지, 누가 곁에 있는지), [오늘 일지]와 [관련 기억]은 시간순 기록입니다. 이 기억을 자기 경험처럼 자연스럽게 씁니다(\"아까 보시던 영상\"처럼). 더 오래된 일이 필요하면 recall_memory 도구로 일지를 검색합니다. 사용자에 대한 새 사실·선호·진행 중인 작업을 알게 되거나 \"기억해\" 요청을 받으면 save_memory로 프로필을 갱신합니다 — content에는 기존 프로필과 병합한 최신 통합본 전체(한국어 불릿, 2000자 이내).",
     "- 앱 조작: 실행 요청이 명확할 때 짧은 확인 문장 뒤에 아래 태그를 붙입니다. 태그는 내부 명령이라 낭독되지 않으며, 여러 개 이어 붙일 수 있습니다.",
     "  [[OPEN:키]] — 패널 열기. 키: cmd(커맨드 브리지/홈), ai(옴니 AI), notif(알림), clock(시계), proj(프로젝트), sys(시스템 모니터), sp1(보안 프로토콜), r3d(3D 뷰어), ino(아두이노), ce(코드 에디터), notes(노트), voice(보이스 체인저), arc(아크스캔)",
     "  [[ACT:proj.editor:프로젝트이름:도구]] — 프로젝트 전용 에디터 열기 + 도구 장착. 도구: r3d(3D)/ino(아두이노)/ce(코드)/notes(노트), 생략 가능. 예: \"아크스캔 3D 에디터 열어줘\" → [[ACT:proj.editor:ARC-SCAN:r3d]]",
@@ -730,6 +901,15 @@ OmniOS.register("ai", {
           minutes: { type: "number" }, location: { type: "string" }, notes: { type: "string" },
         },
         required: ["title", "start"],
+      },
+    },
+    {
+      name: "recall_memory",
+      description: "옴니의 기억(일지·관찰·하루 요약)을 검색한다 — \"어제 내가 뭐 봤지\", \"아까 누가 왔었지\", \"지난주에 뭐 얘기했지\" 류. query는 키워드/문장, days는 최근 N일(기본 7).",
+      input_schema: {
+        type: "object",
+        properties: { query: { type: "string" }, days: { type: "number" } },
+        required: ["query"],
       },
     },
     {
@@ -1023,22 +1203,23 @@ OmniOS.register("ai", {
 
   async loadMemory() {
     if (!OmniNative.available) return;
-    try {
-      const r = await OmniNative.request("store.read",
-        JSON.stringify({ name: "ai_memory" }), 8000);
-      if (r && r.data) this._memory = (JSON.parse(r.data).text || "").slice(0, 4000);
-    } catch (e) { /* 첫 실행 — 메모리 없음 */ }
+    await OmniMem.load();
+    this._memory = OmniMem.profile;
   },
 
   async saveMemory(text, silent) {
-    this._memory = String(text || "").slice(0, 4000);
-    try {
-      await OmniNative.request("store.write", JSON.stringify({
-        name: "ai_memory",
-        data: JSON.stringify({ text: this._memory, updated: Date.now() }),
-      }), 8000);
-      if (!silent) this.logLine("sys", "장기 메모리 갱신됨");
-    } catch (e) { /* 무시 */ }
+    await OmniMem.setProfile(text);
+    this._memory = OmniMem.profile;
+    if (!silent) this.logLine("sys", "프로필 기억 갱신됨");
+  },
+
+  // 관찰 모듈이 상황 추정을 갱신했을 때 — LIVE 세션 지시문도 갱신 (2분 스로틀)
+  onSituation(text) {
+    const l = this.logLine("sys", `[상황] ${text}`); l.classList.add("ignored");
+    if (this.live && Date.now() - (this._lastSitUpdate || 0) > 120000) {
+      this._lastSitUpdate = Date.now();
+      this.rtSessionUpdate();
+    }
   },
 
   // 대화가 쌓이면 배경에서 메모리 자동 통합 (사용자 개입 없음)
@@ -1058,13 +1239,15 @@ OmniOS.register("ai", {
         .filter((m) => typeof m.content === "string")
         .map((m) => `${m.role === "user" ? "사용자" : "옴니"}: ${m.content}`)
         .join("\n");
-      if (!convo) return;
+      const thoughts = OmniMem.today.filter((e) => e.kind === "thought" && (e.tags || []).includes("remember"))
+        .slice(-10).map((e) => `- ${e.text}`).join("\n");
+      if (!convo && !thoughts) return;
       const r = await OmniNative.request("ai.chat", JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         system: "당신은 개인 비서의 장기 기억 관리자다. 기존 메모리와 최근 대화를 병합해, 앞으로도 유효할 내용만 남긴 간결한 최신 메모리를 만든다: 사용자에 대한 사실·선호·진행 중인 작업·중요한 결정. 일회성 잡담과 이미 끝난 요청은 버린다. 한국어 불릿 목록, 2000자 이내, 메모리 텍스트만 출력.",
         messages: [{
           role: "user",
-          content: `[기존 메모리]\n${this._memory || "(없음)"}\n\n[최근 대화]\n${convo}`,
+          content: `[기존 프로필]\n${this._memory || "(없음)"}\n\n[옴니가 주변을 관찰하며 기억하기로 한 것]\n${thoughts || "(없음)"}\n\n[최근 대화]\n${convo || "(없음)"}`,
         }],
         maxTokens: 1000,
       }), 60000);
@@ -1267,7 +1450,7 @@ OmniOS.register("ai", {
       {
         type: "text",
         text: `[실시간 상태 스냅샷 — 방금 수집된 실측값]\n${snapshot}`
-          + `\n\n[장기 메모리]\n${this._memory || "(비어 있음)"}`
+          + `\n\n${OmniMem.context(typeof messages[messages.length - 1]?.content === "string" ? messages[messages.length - 1].content : "")}`
           + `\n\n[인터페이스 언어]\n${this.langDirective()}`,
       },
     ];
@@ -1351,7 +1534,20 @@ OmniOS.register("ai", {
       }
       if (name === "save_memory") {
         await this.saveMemory(String(input.content || ""));
-        return "장기 메모리 저장 완료";
+        return "프로필 기억 저장 완료";
+      }
+      if (name === "recall_memory") {
+        const days = Math.max(1, Math.min(60, input.days || 7));
+        let pool = OmniMem.recent;
+        if (days > 7) {
+          const r = await OmniMem.req("mem.read", { days, limit: 3000 });
+          pool = ((r && r.items) || []).filter((e) => e.kind !== "ambient");
+        }
+        const saved = OmniMem.recent; OmniMem.recent = pool;
+        const hits = OmniMem.search(String(input.query || ""), 12);
+        OmniMem.recent = saved;
+        if (!hits.length) return "(관련 기억 없음)";
+        return hits.map((e) => OmniMem.fmtEntry(e)).join("\n");
       }
       if (name === "check_weather") {
         const wx = OmniOS.modules.weather;
@@ -1773,7 +1969,7 @@ OmniOS.register("ai", {
   // ---- LLM 대화 ----
   async send(text) {
     this.logLine("you", text);
-    this.history.push({ role: "user", content: text });
+    this.history.push({ role: "user", content: text }); OmniMem.conv("user", text);
     while (this.history.length > 16) this.history.shift();
     if (this.history[0] && this.history[0].role !== "user") this.history.shift();
     this.setState("thinking", "THINKING", "busy");
@@ -1781,7 +1977,7 @@ OmniOS.register("ai", {
     if (!OmniNative.available) {
       // 브라우저 테스트 모드: 즉석 응답
       const reply = "네, 알겠습니다. 현재는 브라우저 테스트 모드로 동작 중입니다.";
-      this.history.push({ role: "assistant", content: reply });
+      this.history.push({ role: "assistant", content: reply }); OmniMem.conv("assistant", reply);
       this.logLine("omni", reply);
       this.setInd(this.els.indLlm, "STUB", "busy");
       this.setState("idle", "STANDBY", "");
@@ -1816,7 +2012,7 @@ OmniOS.register("ai", {
         })
         .replace(/\s{2,}/g, " ").trim();
       if (!reply) reply = "완료했습니다.";
-      this.history.push({ role: "assistant", content: reply });
+      this.history.push({ role: "assistant", content: reply }); OmniMem.conv("assistant", reply);
       this.logLine("omni", reply);
       this.setInd(this.els.indLlm, "READY", "ok");
       for (const k of [...new Set(opens)]) {
@@ -2080,6 +2276,16 @@ OmniOS.register("ai", {
     },
     {
       type: "function",
+      name: "recall_memory",
+      description: "옴니의 기억(일지·관찰·하루 요약) 검색 — \"어제 뭐 봤지\", \"아까 누가 왔었지\"에 사용. query 키워드, days 기본 7.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" }, days: { type: "number" } },
+        required: ["query"],
+      },
+    },
+    {
+      type: "function",
       name: "check_markets",
       description: "환율·주식·코인 시세 — \"달러 환율/삼성전자 주가/비트코인\"에 사용. symbol을 주면 그 종목만. 핵심 수치와 등락만 짧게 말한다.",
       parameters: {
@@ -2174,7 +2380,7 @@ OmniOS.register("ai", {
       + (this.alwaysOn ? "- 상시 대기 모드: 사용자는 \"옴니야\"처럼 이름을 불러 말을 겁니다. 호출어는 되풀이하지 말고 본론에만 답합니다. 들리는 발화는 이미 사용자 본인이 옴니에게 한 말로 확인된 것입니다.\n" : "")
       + `- 언어 규칙: ${this.langDirective()}\n`
       + "- 다국어 발음 규칙 (매우 중요): 어떤 언어를 말하든 반드시 그 언어의 원어민 발음과 억양으로 발화합니다. 한 응답 안에서 여러 언어를 오갈 때는 언어 전환 지점마다 아주 짧게 멈춘 뒤 완전히 새 언어의 원어민 모드로 전환합니다 — 직전 언어(특히 한국어)의 억양·리듬을 절대 다음 언어로 끌고 가지 않습니다. 프랑스어는 프랑스인처럼, 힌디어는 인도인처럼, 각 구간을 독립적으로 발음합니다. 여러 언어 시연을 요청받으면 언어당 한 문장으로 짧게 말합니다.\n\n"
-      + `[장기 메모리 — 이전 세션 축적]\n${this._memory || "(비어 있음)"}`;
+      + OmniMem.context();
     this.rtSend({
       type: "session.update",
       session: {
@@ -2346,7 +2552,7 @@ OmniOS.register("ai", {
         this.logLine("you", text);
       }
       if (text) {
-        this.history.push({ role: "user", content: text });
+        this.history.push({ role: "user", content: text }); OmniMem.conv("user", text);
         this.trimHistory();
       }
     } else if (t === "response.output_audio.delta" || t === "response.audio.delta") {
@@ -2389,7 +2595,7 @@ OmniOS.register("ai", {
         }
       }
       if (this._rtOmniText) {
-        this.history.push({ role: "assistant", content: this._rtOmniText });
+        this.history.push({ role: "assistant", content: this._rtOmniText }); OmniMem.conv("assistant", this._rtOmniText);
         this.trimHistory();
         this.bumpMemoTurn(); // 라이브 대화도 주기 통합에 포함
       }
@@ -2469,7 +2675,10 @@ OmniOS.register("ai", {
       .replace(/[^\p{L}\p{N}\s.,!?%'\-]/gu, " ")
       .replace(/\s+/g, " ").trim();
     if (!t) return { drop: true, why: "빈 전사" };
-    if (this.HALLU_RE.test(t)) return { drop: true, why: "전사 환각(상투구·프롬프트)" };
+    if (this.HALLU_RE.test(t) || this.HALLU_RE.test(String(text || ""))) return { drop: true, why: "전사 환각(상투구·프롬프트)" };
+    // 프롬프트 어휘("옴니, 옴니야, 오미니아, OMNI_OS")만 나열된 전사 = 되풀이 환각
+    const leftover = t.replace(/옴니야|옴니|오미니아|omni[_ ]?os|omni/gi, "").replace(/[\s.,!?'\-]/g, "");
+    if (leftover.length === 0 && /오미니아|omni[_ ]?os/i.test(t)) return { drop: true, why: "전사 환각(프롬프트 되풀이)" };
     if (dur && dur < 0.7 && t.length > 12) return { drop: true, why: "전사 환각(길이 불일치)" };
     const rest = t.replace(this.WAKE_RE, "").replace(/[\s.,!?'\-0-9]/g, "");
     if (this.WAKE_RE.test(t) && rest.length <= 2) return { wakeOnly: true, text: t };
@@ -2505,22 +2714,33 @@ OmniOS.register("ai", {
     } else if (e === "segment") {
       this.micLevel = 0;
       if (ev.user) {
-        this._pendingBand = ev.band || "user";
-        this._pendingSim = ev.sim;
-        this._pendingThr = ev.thr || 0;
-        this._pendingStart = this._speechStartAt || Date.now();
-        this._pendingDur = ev.dur || 0;
-        this.gateNote(`통과(${this._pendingBand}) · sim=${ev.sim} thr=${ev.thr} dur=${ev.dur} sent=${ev.sent}`);
-        if (this.alwaysOn && !this._rtUserLine) this._rtUserLine = this.logLine("you", "…", true);
+        this._pendingSig = { label: ev.label || "user", band: ev.band, sim: ev.sim, thr: ev.thr, media: ev.media,
+          lips: ev.lips, dur: ev.dur || 0, t0: ev.t0 };
+        this.gateNote(`통과(${ev.label}) · sim=${ev.sim} media=${ev.media} lips=${ev.lips && ev.lips.corr} faces=${ev.lips && ev.lips.faces} dur=${ev.dur}`);
+        if (this.alwaysOn && !this._rtUserLine) {
+          this._rtUserLine = this.logLine("you", `… (${ev.label === "user" ? "내 목소리" : "불확실"}${ev.lips && ev.lips.face ? ` · 입술 ${ev.lips.corr}` : ""})`, true);
+        }
       } else if (ev.why !== "short") {
         const now = Date.now();
-        if (now - (this._lastIgnoreLogAt || 0) > 4000) {
+        if (now - (this._lastIgnoreLogAt || 0) > 6000) {
           this._lastIgnoreLogAt = now;
-          const who = ev.why && ev.why.startsWith("closer_to:") ? ` — 등록된 타인 [${ev.why.slice(10)}]에 더 가까움 (${ev.neg})` : "";
-          const l = this.logLine("sys", `무시 · 내 목소리 아님 (유사도 ${ev.sim == null ? "?" : ev.sim})${who}`);
-          l.classList.add("ignored");
+          const why = ev.label === "media" ? `노트북 재생음 (상관 ${ev.media})`
+            : ev.why && ev.why.startsWith("closer_to:") ? `등록된 타인 [${ev.why.slice(10)}] 목소리 (${ev.neg})`
+            : ev.lips && ev.lips.face && ev.lips.act < 0.006 ? `내 입은 안 움직임 (유사도 ${ev.sim})`
+            : `내 목소리 아님 (유사도 ${ev.sim == null ? "?" : ev.sim})`;
+          const l = this.logLine("sys", `경청 · ${why}`); l.classList.add("ignored");
         }
-        this.gateNote(`무시 · 화자 불일치 sim=${ev.sim} dur=${ev.dur}`);
+        this.gateNote(`경청 · ${ev.label} sim=${ev.sim} media=${ev.media} lips=${ev.lips && ev.lips.corr}/${ev.lips && ev.lips.act} dur=${ev.dur}`);
+      }
+    } else if (e === "stats") {
+      this.gateNote(`신호 · 루프백 ${ev.sys_hz}Hz 레벨 ${ev.sys_level} · 얼굴 ${ev.face_hz}Hz · 세그먼트 ${ev.segments}/15s`);
+      this._gateStats = ev;
+    } else if (e === "ambient") {
+      OmniMem.ambient(ev.label, ev.text, ev.t0, ev.sig);
+      const now = Date.now();
+      if (now - (this._lastAmbientLogAt || 0) > 8000) {
+        this._lastAmbientLogAt = now;
+        const l = this.logLine("sys", `[주변·${ev.label === "media" ? "재생음" : "사람"}] ${String(ev.text).slice(0, 70)}`); l.classList.add("ignored");
       }
     } else if (e === "enroll") {
       this._lastAnalysis = null;
@@ -2580,89 +2800,84 @@ OmniOS.register("ai", {
     }
   },
 
-  // 3단 게이트: 이 발화가 옴니에게 한 말인가 (순수 판정 — 분류기 필요 여부 반환)
-  addressReason(text, followUp) {
-    if (this.WAKE_RE.test(text)) return { addressed: true, reason: "호출어" };
-    if (followUp) return { addressed: null, reason: "이어지는 대화?" };
-    return { addressed: false, reason: "호출어 없음" };
+  // 3단: 이 발화가 옴니에게 한 말인가 — 옴니 스스로 판단 (신호 + 대화 맥락 + 상황)
+  async judgeAddressed(text, sig) {
+    const secs = this._lastOmniDoneAt ? Math.round((Date.now() - this._lastOmniDoneAt) / 1000) : null;
+    const lastOmni = [...this.history].reverse().find((m) => m.role === "assistant");
+    const lastUser = [...this.history].reverse().find((m) => m.role === "user");
+    const lips = sig.lips || {};
+    const facts = [
+      `화자 판정: ${sig.label === "user" ? "건희 본인(확실)" : sig.label === "uncertain" ? "건희일 가능성 있음(불확실)" : sig.label || "?"}`,
+      lips.face ? `카메라: 얼굴 ${lips.faces}명${lips.faces > 1 ? " (다른 사람이 곁에 있음)" : ""}, 입 움직임과 음성 동기 ${lips.corr} (0.3 이상이면 화면 앞 사람이 말하는 중)` : "카메라: 얼굴 미검출(자리 비움/가려짐)",
+      `목소리 유사도 ${sig.sim ?? "?"} (임계 ${sig.thr ?? "?"}), 노트북 재생음 상관 ${sig.media ?? 0}`,
+      secs == null ? "옴니가 이 세션에서 아직 말한 적 없음" : `옴니가 마지막으로 말을 마친 지 ${secs}초`,
+      `현재 상황 추정: ${OmniMem.situation || "모름"}${OmniMem.people.length ? ` / 주변: ${OmniMem.people.join(", ")}` : ""}`,
+    ].join("\n");
+    try {
+      const r = await OmniNative.request("ai.chat", JSON.stringify({
+        model: "claude-haiku-4-5-20251001", maxTokens: 200,
+        system: "당신은 상시 대기 중인 음성 비서 '옴니'의 판단 모듈이다. 사용자 이름은 건희. 방금 들린 발화가 \"옴니에게 한 말\"인지 판단해 JSON만 출력한다: {\"respond\":true|false,\"kind\":\"command|question|chat|reply|self_talk|to_others|media|noise\",\"why\":\"근거 20자 이내\"}. 다른 텍스트 없이 JSON 한 줄만.\nrespond=true: 옴니에게 직접 하는 명령·질문·요청·잡담(이름을 안 불러도), 옴니의 직전 말에 대한 답·반응·이어지는 질문(시간이 지났어도 내용이 이어지면), 옴니를 부르는 말.\nrespond=false: 혼잣말·생각 소리(\"아 배고프다\", \"어디 뒀지\"), 다른 사람에게 하는 말(상대 이름을 부르거나 남과 주고받는 대화체, 전화 통화), 소리 내어 읽기, 영상·노래 내용, 의미 없는 조각, 옴니가 답할 필요가 없는 말.\n판단 기준: 비서에게 시킬 만한 일/질문인가, 옴니의 직전 말과 이어지는가, 화자가 건희 본인인가(불확실하면 보수적으로), 곁에 다른 사람이 있어 그에게 한 말일 가능성. 확신이 없으면 false.",
+        messages: [{ role: "user", content: `[신호]\n${facts}\n\n[옴니의 직전 말] ${lastOmni ? String(lastOmni.content).slice(0, 200) : "(없음)"}\n[건희의 직전 말] ${lastUser ? String(lastUser.content).slice(0, 200) : "(없음)"}\n\n[지금 들린 발화] ${text}` }],
+      }), 15000);
+      const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
+      let o = null;
+      const m = /\{[\s\S]*\}/.exec(txt);
+      if (m) { try { o = JSON.parse(m[0]); } catch (e) { o = null; } }
+      if (!o) {
+        // 잘린 출력 복구: respond/kind만이라도 정규식으로
+        const r1 = /"respond"\s*:\s*(true|false)/.exec(txt);
+        const k1 = /"kind"\s*:\s*"([a-z_]+)"/.exec(txt);
+        if (!r1) return { respond: false, kind: "noise", why: "판정 불가" };
+        o = { respond: r1[1] === "true", kind: k1 ? k1[1] : "", why: "(근거 잘림)" };
+      }
+      return { respond: !!o.respond, kind: String(o.kind || ""), why: String(o.why || "") };
+    } catch (e) {
+      return { respond: false, kind: "noise", why: "판정 실패" };
+    }
   },
 
   async gateDecide(itemId, rawText) {
     const line = this._rtUserLine;
     this._rtUserLine = null;
-    const san = this.sanitizeTranscript(rawText, this._pendingDur);
-    this._pendingDur = 0;
+    const sig = this._pendingSig || { label: "user" };
+    this._pendingSig = null;
+    const san = this.sanitizeTranscript(rawText, sig.dur || 0);
+    const del = () => { if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId }); };
     if (san.drop) {
       if (line) line.remove();
-      if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId });
-      if (san.why !== "빈 전사") {
-        this.gateNote(`무시 · ${san.why}: ${rawText}`);
-        const l = this.logLine("sys", `무시 · ${san.why}`); l.classList.add("ignored");
-      }
+      del();
+      if (san.why !== "빈 전사") { this.gateNote(`무시 · ${san.why}: ${rawText}`); const l = this.logLine("sys", `무시 · ${san.why}`); l.classList.add("ignored"); }
       return;
     }
     const text = san.text;
     if (san.wakeOnly) {
-      // "옴니야," 만 들림 — 답하지 않고 15초 듣는 창만 연다 (환각·부름만 한 경우 모두 안전)
       if (line) { line.querySelector(".txt").textContent = `${text} (듣는 중)`; line.classList.remove("pending"); }
-      if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId });
+      del();
       this._lastOmniDoneAt = Date.now();
-      this.gateNote(`호출만 감지 → 듣는 창 15초: ${text}`);
+      this.gateNote(`호출만 감지 → 듣는 중: ${text}`);
       return;
     }
-    // 이어가기 창은 발화 *시작* 시각 기준 (긴 문장을 말하면 끝날 땐 창 밖이 되던 문제)
-    const startedAt = this._pendingStart || Date.now();
-    const followUp = startedAt - this._lastOmniDoneAt < this.FOLLOWUP_MS;
-    const band = this._pendingBand || "user";
-    const sim = this._pendingSim;
-    this._pendingBand = "user"; this._pendingSim = null; this._pendingStart = 0;
-    let { addressed, reason } = this.addressReason(text, followUp);
-    if (addressed === null) {
-      // 목소리가 애매(maybe)한 발화는 호출어 없이는 임계 바로 아래(0.04 안)일 때만 분류기에 맡긴다
-      if (band === "maybe" && sim != null && sim < this._pendingThr - 0.04) {
-        addressed = false;
-        reason = `목소리 불확실(${sim})`;
-      } else {
-        const yes = await this.classifyAddressed(text);
-        addressed = yes;
-        reason = yes ? "이어지는 대화" : "이어지는 대화 아님";
-      }
-    }
-    if (addressed && band === "maybe") reason += ` · 목소리 ${sim}`;
-    if (addressed) {
+    let dec;
+    if (this.WAKE_RE.test(text)) dec = { respond: true, kind: "call", why: "호출어" };
+    else dec = await this.judgeAddressed(text, sig);
+    const sigTxt = `${sig.label || "?"}${sig.lips && sig.lips.face ? ` 입술${sig.lips.corr}` : ""} 목소리${sig.sim ?? "?"}`;
+    if (dec.respond) {
       if (line) { line.querySelector(".txt").textContent = text; line.classList.remove("pending"); }
       else this.logLine("you", text);
-      this.history.push({ role: "user", content: text });
+      this.history.push({ role: "user", content: text }); OmniMem.conv("user", text);
       this.trimHistory();
       this.rtCreateResponse();
-      this.gateNote(`응답 · ${reason}: ${text}`);
-      if (reason === "호출어") this.gateCmd({ cmd: "adapt" }); // 본인 확실 → 프로필 적응
+      this.gateNote(`응답 · ${dec.kind}/${dec.why} [${sigTxt}]: ${text}`);
+      if (dec.why === "호출어" || (sig.lips && sig.lips.corr >= 0.5)) this.gateCmd({ cmd: "adapt" });
     } else {
       if (line) {
-        line.querySelector(".txt").textContent = `(무시 · ${reason}) ${text}`;
-        line.classList.remove("pending");
-        line.classList.add("ignored");
+        line.querySelector(".txt").textContent = `(경청 · ${dec.kind}${dec.why ? " — " + dec.why : ""}) ${text}`;
+        line.classList.remove("pending"); line.classList.add("ignored");
       }
-      if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId });
-      this.gateNote(`무시 · ${reason}: ${text}`);
-    }
-  },
-
-  // 대화 이어가기 창 안의 호출어 없는 발화 — Haiku가 "옴니에게 이어서 하는 말"인지 판정
-  async classifyAddressed(text) {
-    const lastOmni = [...this.history].reverse().find((m) => m.role === "assistant");
-    try {
-      const r = await OmniNative.request("ai.chat", JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        maxTokens: 5,
-        system: "당신은 음성 비서 '옴니'의 발화 게이트입니다. 사용자는 몇 초 전 옴니의 답을 들었습니다. 지금 들린 발화가 옴니에게 이어서 하는 말(질문·요청·응답·확인·감사)이면 YES, 다른 사람에게 하는 말·혼잣말·TV/영상 소리·무관한 잡담이면 NO. 반드시 YES 또는 NO 한 단어만 출력합니다.",
-        messages: [{ role: "user", content: `[옴니의 직전 답] ${lastOmni ? lastOmni.content.slice(0, 300) : "(없음)"}
-[지금 들린 발화] ${text}` }],
-      }), 15000);
-      const out = (r && r.ok && r.content ? r.content.map((b) => b.text || "").join("") : (r && r.text) || "").trim().toUpperCase();
-      return out.startsWith("YES");
-    } catch (e) {
-      return false; // 판정 불가 → 안전하게 무시
+      del();
+      // 응답은 안 해도 기억은 한다 — 건희가 남에게 한 말/혼잣말은 관찰 재료
+      OmniMem.ambient(sig.label === "user" ? "user_other" : (sig.label || "uncertain"), text, sig.t0, { kind: dec.kind, sim: sig.sim, lips: sig.lips && sig.lips.corr });
+      this.gateNote(`경청 · ${dec.kind}/${dec.why} [${sigTxt}]: ${text}`);
     }
   },
 
@@ -2750,7 +2965,7 @@ OmniOS.register("ai", {
     } else if (name === "calculate") {
       this.logLine("sys", `도구 · calculate ${(args && args.expression) || ""}`);
       output = await this.execTool("calculate", args || {});
-    } else if (name === "check_markets" || name === "check_calendar" || name === "add_event") {
+    } else if (name === "check_markets" || name === "check_calendar" || name === "add_event" || name === "recall_memory") {
       this.logLine("sys", `도구 · ${name}`);
       output = await this.execTool(name, args || {});
     } else {

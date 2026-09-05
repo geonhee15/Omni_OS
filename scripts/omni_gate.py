@@ -22,13 +22,20 @@ I/O 규약 (앱 네이티브가 NSTask로 띄운다):
 테스트용:  omni_gate.py enroll-files a.wav b.wav ...   /   omni_gate.py test-file x.wav
 """
 import base64
+import collections
+import io
 import json
 import os
 import queue
+import socket
+import struct
 import sys
 import threading
 import time
+import urllib.request
+import uuid
 import warnings
+import wave
 
 import numpy as np
 
@@ -36,12 +43,18 @@ warnings.filterwarnings("ignore")
 
 SR = 16000
 WIN = 512                       # silero VAD 프레임 (32ms @16k)
-PROFILE = os.path.expanduser("~/.omni/voice_profile.json")   # 구버전 (이전용)
-VOICE_DIR = os.path.expanduser("~/.omni/voice")
+PROFILE = os.path.join(os.environ.get("OMNI_VOICE_DIR", os.path.expanduser("~/.omni")), "voice_profile.json") if os.environ.get("OMNI_VOICE_DIR") else os.path.expanduser("~/.omni/voice_profile.json")
+VOICE_DIR = os.environ.get("OMNI_VOICE_DIR", os.path.expanduser("~/.omni/voice"))  # 테스트용 격리 가능
 STORE = os.path.join(VOICE_DIR, "profiles.json")
 DEFAULT_THRESHOLD = 0.76
 MAYBE_MARGIN = 0.08             # 임계 바로 아래 구간 — 버리지 않고 호출어/분류기 게이트에 맡김
 MAX_PROFILE_EMBS = 40           # 프로필당 임베딩 집합 상한 (등록 누적 + 적응)
+FACE_PORT = 47831               # SP-1이 얼굴 텔레메트리(입 움직임·얼굴 수)를 쏘는 UDP 포트
+MEDIA_CORR_MIN = 0.55           # 마이크↔시스템 출력 포락선 상관 ≥ → 노트북 재생음(미디어)
+LIPS_CORR_MIN = 0.30            # 입 움직임↔음성 포락선 상관 ≥ → 화면 앞 사람이 말하는 중
+LIPS_ACT_MIN = 0.012            # 입 움직임 표준편차 ≥ → 입이 움직이고 있음
+AMBIENT_MIN_SEC = 1.0           # 주변음 전사 최소 길이
+OPENAI_KEY_PATH = os.path.expanduser("~/.omni/openai.key")
 MIN_SEG = 0.4                   # 이보다 짧으면 판정 불가 → 버림
 MIN_ENROLL_SEG = 0.7
 MAX_SEG = 12.0
@@ -89,6 +102,11 @@ class Gate:
         self.enroll_kind = "user"
         self.enroll_name = None
         self.last_user_emb = None       # 마지막으로 통과한 발화 임베딩 (적응용)
+        # ---- 다신호 융합용 버퍼 (벽시계 기준 — 다른 프로세스와 정렬)
+        self.sys_ring = collections.deque()          # (도착시각, float32 16k 청크) — 시스템 출력
+        self.face_ring = collections.deque(maxlen=900)  # (t, mouth, faces, frontal) — SP-1 텔레메트리
+        self.ambient_q: "queue.Queue[tuple]" = queue.Queue()
+        self.live = False
 
     # ---------------- 프로필 저장소 (~/.omni/voice/profiles.json)
     #
@@ -273,6 +291,168 @@ class Gate:
         self._rebuild_sets()
         emit({"ev": "log", "text": f"profile adapted x{prof['adapted']} (set={len(self.ref_set)})"})
 
+    # ---------------- 다신호: 시스템 출력 루프백 / 얼굴 텔레메트리 / 주변음 전사
+    def start_live_threads(self):
+        """파이프·마이크 모드에서만: UDP 얼굴 텔레메트리 수신 + 주변음 전사 워커 + 진단 통계."""
+        self.live = True
+        self.stats = {"segments": 0, "face_pkts": 0, "sys_chunks": 0, "sys_level": 0.0}
+        threading.Thread(target=self._face_listener, daemon=True).start()
+        threading.Thread(target=self._ambient_worker, daemon=True).start()
+        threading.Thread(target=self._stats_loop, daemon=True).start()
+
+    def _stats_loop(self):
+        """15초마다 신호 상태 — 루프백 레벨·얼굴 패킷·세그먼트 수 (진단용)."""
+        while True:
+            time.sleep(15)
+            st = dict(self.stats)
+            st["ev"] = "stats"
+            st["face_hz"] = round(st.pop("face_pkts") / 15.0, 1)
+            st["sys_hz"] = round(st.pop("sys_chunks") / 15.0, 1)
+            st["sys_level"] = round(st["sys_level"], 4)
+            st["profile"] = self.store.get("active")
+            emit(st)
+            self.stats.update({"segments": 0, "face_pkts": 0, "sys_chunks": 0})
+
+    def _face_listener(self):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", FACE_PORT))
+        except OSError as e:
+            emit({"ev": "log", "text": f"face telemetry port busy: {e}"})
+            return
+        while True:
+            try:
+                data, _ = sock.recvfrom(512)
+                d = json.loads(data)
+                self.face_ring.append((float(d.get("t", time.time())), float(d.get("mouth", 0)),
+                                       int(d.get("faces", 0)), bool(d.get("frontal", False))))
+                if getattr(self, "stats", None) is not None:
+                    self.stats["face_pkts"] += 1
+            except (ValueError, OSError):
+                continue
+
+    def feed_system(self, pcm: np.ndarray, now: float):
+        """네이티브가 보낸 시스템 출력(16k float32) — 도착 시각 기준 링버퍼(약 12초)."""
+        self.sys_ring.append((now, pcm))
+        while self.sys_ring and now - self.sys_ring[0][0] > 12.0:
+            self.sys_ring.popleft()
+        if getattr(self, "stats", None) is not None:
+            self.stats["sys_chunks"] += 1
+            self.stats["sys_level"] = 0.9 * self.stats["sys_level"] + 0.1 * float(np.sqrt(np.mean(pcm ** 2)))
+
+    @staticmethod
+    def _envelope(x: np.ndarray, hop: int) -> np.ndarray:
+        n = len(x) // hop
+        if n <= 0:
+            return np.zeros(0, np.float32)
+        r = np.sqrt(np.mean(x[:n * hop].reshape(n, hop) ** 2, axis=1))
+        return np.log1p(r * 60.0).astype(np.float32)
+
+    def media_corr(self, mic: np.ndarray, t0: float):
+        """마이크 세그먼트가 노트북 스피커 출력의 메아리인가 — 20ms 포락선 상관, 0~500ms 지연 탐색."""
+        t1 = t0 + len(mic) / SR
+        parts = []
+        for t_end, c in self.sys_ring:
+            t_start = t_end - len(c) / SR
+            if t_end < t0 - 0.6 or t_start > t1 + 0.1:
+                continue
+            parts.append((t_start, c))
+        if not parts:
+            return 0.0, 0.0
+        parts.sort(key=lambda x: x[0])
+        base = parts[0][0]
+        sysw = np.concatenate([c for _, c in parts])
+        sys_rms = float(np.sqrt(np.mean(sysw ** 2))) if len(sysw) else 0.0
+        if sys_rms < 0.002 or len(sysw) < SR * 0.4:
+            return 0.0, sys_rms                       # 재생 중이 아님
+        hop = int(0.02 * SR)
+        em, es = self._envelope(mic, hop), self._envelope(sysw, hop)
+        off = int(round((t0 - base) / 0.02))
+        best = 0.0
+        for lag in range(0, 26):                     # 마이크가 시스템보다 0~500ms 늦게 들음
+            # 마이크 프레임 k ↔ 시스템 프레임 off + k - lag  (시스템 버퍼 앞이 부족하면 k를 뒤로 민다)
+            ks = max(0, lag - off)
+            a = em[ks:]
+            j0 = off + ks - lag
+            b = es[j0:j0 + len(a)]
+            n = min(len(a), len(b))
+            if n < max(8, int(len(em) * 0.6)):
+                continue
+            a, b = a[:n], b[:n]
+            if a.std() < 1e-4 or b.std() < 1e-4:
+                continue
+            best = max(best, float(np.corrcoef(a, b)[0, 1]))
+        return best, sys_rms
+
+    def lips_signal(self, mic: np.ndarray, t0: float):
+        """SP-1 얼굴 텔레메트리와 음성 포락선의 동기 — 화면 앞 사람이 지금 말하는가."""
+        t1 = t0 + len(mic) / SR
+        pts = [p for p in self.face_ring if t0 - 0.15 <= p[0] <= t1 + 0.15]
+        if len(pts) < 4:
+            return {"face": False, "faces": 0, "frontal": False, "corr": 0.0, "act": 0.0, "n": len(pts)}
+        faces = max(p[2] for p in pts)
+        frontal = sum(1 for p in pts if p[3]) / len(pts) >= 0.5
+        if faces == 0:
+            return {"face": False, "faces": 0, "frontal": False, "corr": 0.0, "act": 0.0, "n": len(pts)}
+        grid = np.arange(t0, t1, 0.05)
+        ts = np.array([p[0] for p in pts]); ms = np.array([p[1] for p in pts])
+        mouth = np.interp(grid, ts, ms)
+        env = self._envelope(mic, int(0.05 * SR))
+        n = min(len(env), len(mouth))
+        act = float(mouth[:n].std()) if n else 0.0
+        corr = 0.0
+        if n >= 6 and act > 1e-4 and env[:n].std() > 1e-4:
+            for lag in (-2, -1, 0, 1, 2):            # 입이 소리보다 ±100ms 앞설 수 있음
+                a = env[max(0, lag):n + min(0, lag)]
+                b = mouth[max(0, -lag):n + min(0, -lag)]
+                m = min(len(a), len(b))
+                if m >= 6 and a[:m].std() > 1e-4 and b[:m].std() > 1e-4:
+                    corr = max(corr, float(np.corrcoef(a[:m], b[:m])[0, 1]))
+        return {"face": True, "faces": faces, "frontal": frontal, "corr": round(corr, 3),
+                "act": round(act, 4), "n": len(pts)}
+
+    def queue_ambient(self, pcm: np.ndarray, t0: float, label: str, sig: dict):
+        if not self.live or len(pcm) / SR < AMBIENT_MIN_SEC or self.ambient_q.qsize() > 3:
+            return
+        self.ambient_q.put((pcm.copy(), t0, label, sig))
+
+    def _ambient_worker(self):
+        try:
+            key = open(OPENAI_KEY_PATH).read().strip()
+        except OSError:
+            emit({"ev": "log", "text": "ambient transcription off: no openai key"})
+            return
+        while True:
+            pcm, t0, label, sig = self.ambient_q.get()
+            text = self._transcribe(pcm, key)
+            if text:
+                emit({"ev": "ambient", "label": label, "text": text, "t0": round(t0, 2),
+                      "dur": round(len(pcm) / SR, 2), "sig": sig})
+
+    @staticmethod
+    def _transcribe(pcm: np.ndarray, key: str) -> str:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
+            w.writeframes((np.clip(pcm, -1, 1) * 32767).astype("<i2").tobytes())
+        boundary = uuid.uuid4().hex
+        body = b""
+        for k, v in (("model", "gpt-4o-mini-transcribe"), ("prompt", "옴니, 옴니야, OMNI_OS")):
+            body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\n"
+                 "Content-Type: audio/wav\r\n\r\n").encode() + buf.getvalue() + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request("https://api.openai.com/v1/audio/transcriptions", data=body, headers={
+            "Authorization": f"Bearer {key}", "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        try:
+            import ssl, certifi
+            ctx = ssl.create_default_context(cafile=certifi.where())
+            with urllib.request.urlopen(req, timeout=25, context=ctx) as r:
+                return (json.load(r).get("text") or "").strip()
+        except Exception as e:  # noqa: BLE001
+            emit({"ev": "log", "text": f"ambient transcribe failed: {e}"})
+            return ""
+
     # ---------------- 오디오 스트림
     def on_chunk(self, chunk: np.ndarray, now: float):
         """512샘플 float32 청크 하나 처리."""
@@ -326,24 +506,49 @@ class Gate:
         if dur < MIN_SEG:
             emit({"ev": "segment", "user": False, "sim": None, "dur": round(dur, 2), "why": "short"})
             return
+        t0 = now - dur
+        if getattr(self, "stats", None) is not None:
+            self.stats["segments"] += 1
         sim, neg, neg_label = self.verify(pcm)
         if sim is None:
-            user = self.ref is None      # 프로필 없으면 통과(등록 전 폴백) — JS가 안내
-            band = "user" if user else "other"
+            band = "user" if self.ref is None else "other"   # 프로필 없으면 목소리 게이트 통과
             why = "no_profile" if self.ref is None else "unverifiable"
         elif neg is not None and neg >= 0.5 and neg >= sim - 0.02:
-            band, user, why = "other", False, f"closer_to:{neg_label}"   # 타인 집합에 더 가까움
+            band, why = "other", f"closer_to:{neg_label}"      # 타인 집합에 더 가까움
         else:
             band = ("user" if sim >= self.threshold
                     else "maybe" if sim >= self.threshold - MAYBE_MARGIN else "other")
-            user = band != "other"       # maybe도 전달 — 호출어/분류기가 최종 판정
             why = ""
-        out = {"ev": "segment", "user": bool(user), "band": band,
+        media, sys_rms = self.media_corr(pcm, t0)
+        lips = self.lips_signal(pcm, t0)
+        lips_speaking = lips["face"] and lips["corr"] >= LIPS_CORR_MIN and lips["act"] >= LIPS_ACT_MIN
+        # 얼굴이 정면으로 잘 추적되는데(≥0.6초 커버) 입이 전혀 안 움직임 → 이 소리는 화면 앞 사람이 낸 게 아님
+        lips_still = (lips["face"] and lips["frontal"] and lips.get("n", 0) >= 9
+                      and lips["act"] < LIPS_ACT_MIN * 0.5 and lips["corr"] < 0.1)
+        # ---- 융합: 결정적 신호(루프백·입술) > 목소리 유사도
+        if media >= MEDIA_CORR_MIN and not lips_speaking:
+            label = "media"
+        elif lips_speaking and media < 0.85:
+            label = "user"
+        elif lips_still:
+            label = "media" if media >= 0.35 else "other"   # 내 목소리 녹음 재생·TV·타인 (입 정지가 결정적)
+        elif band == "user":
+            label = "user"
+        elif band == "maybe":
+            label = "uncertain"
+        else:
+            label = "other"
+        user = label in ("user", "uncertain")
+        out = {"ev": "segment", "user": bool(user), "label": label, "band": band,
                "sim": None if sim is None else round(sim, 3),
                "neg": None if neg is None else round(neg, 3), "neg_label": neg_label,
-               "thr": round(self.threshold, 3), "dur": round(dur, 2)}
+               "thr": round(self.threshold, 3), "media": round(media, 3), "sys_rms": round(sys_rms, 4),
+               "lips": lips, "dur": round(dur, 2), "t0": round(t0, 2)}
         if why:
             out["why"] = why
+        if not user:
+            self.queue_ambient(pcm, t0, label, {"sim": out["sim"], "media": out["media"],
+                                                "lips": lips.get("corr"), "faces": lips.get("faces")})
         if user:
             pcm24 = np.clip(resample_24k(pcm), -1, 1)
             out["pcm24"] = base64.b64encode((pcm24 * 32767).astype("<i2").tobytes()).decode()
@@ -362,10 +567,10 @@ class Gate:
             name = self.new_profile(name or "other", "other")
         self.enroll_name = name
         self.enroll_target = float(seconds)
-        self.enroll_until = time.monotonic() + float(seconds)
+        self.enroll_until = time.time() + float(seconds)
         self.enroll_embs = []
         self.enroll_secs = 0.0
-        self._enroll_tick = time.monotonic()
+        self._enroll_tick = time.time()
         self.muted = False
         emit({"ev": "enroll", "progress": 0.0, "segments": 0, "secs": 0})
 
@@ -463,19 +668,20 @@ def run_mic(threshold=None):
                 continue
 
     threading.Thread(target=stdin_loop, daemon=True).start()
+    gate.start_live_threads()
     with sd.InputStream(samplerate=SR, blocksize=WIN, channels=1, dtype="float32", callback=cb):
         while True:
             chunk = q.get()
-            gate.on_chunk(chunk, time.monotonic())
+            gate.on_chunk(chunk, time.time())
 
 
 def run_pipe(threshold=None):
     """외부 스트림 모드 (안경 BLE 등): stdin 프레임 = <u32 길이><페이로드>.
     페이로드가 '{'로 시작하면 JSON 명령, 아니면 PCM16 16kHz 모노."""
-    import struct
     gate = Gate(threshold)
+    gate.start_live_threads()
     emit({"ev": "ready", "profile": gate.ref is not None, "threshold": round(gate.threshold, 3),
-          "active": gate.store.get("active"), "negatives": list(gate.neg_sets.keys())})
+          "active": gate.store.get("active"), "negatives": list(gate.neg_sets.keys()), "mode": "pipe"})
     emit(gate.profiles_event())
     stdin = sys.stdin.buffer
     buf = np.zeros(0, np.float32)
@@ -493,10 +699,23 @@ def run_pipe(threshold=None):
             except ValueError:
                 pass
             continue
-        pcm = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768
+        tag = data[:1]
+        if tag == b"S":                                   # 시스템 출력 (루프백)
+            gate.feed_system(np.frombuffer(data[1:], dtype="<i2").astype(np.float32) / 32768, time.time())
+            continue
+        if tag == b"V":                                   # 얼굴 텔레메트리 (UDP 대신 파이프로도 가능)
+            try:
+                d = json.loads(data[1:])
+                gate.face_ring.append((float(d.get("t", time.time())), float(d.get("mouth", 0)),
+                                       int(d.get("faces", 0)), bool(d.get("frontal", False))))
+            except ValueError:
+                pass
+            continue
+        raw = data[1:] if tag == b"M" else data
+        pcm = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768
         buf = np.concatenate([buf, pcm])
         while len(buf) >= WIN:
-            gate.on_chunk(buf[:WIN].copy(), time.monotonic())
+            gate.on_chunk(buf[:WIN].copy(), time.time())
             buf = buf[WIN:]
 
 

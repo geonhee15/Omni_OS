@@ -58,8 +58,11 @@ def sanitize_transcript(text: str):
     t = re.sub(r"\s+", " ", t).strip()
     if not t:
         return {"drop": True, "why": "빈 전사"}
-    if HALLU_RE.search(t):
+    if HALLU_RE.search(t) or HALLU_RE.search(text or ""):
         return {"drop": True, "why": "전사 환각"}
+    leftover = re.sub(r"[\s.,!?'\-]", "", re.sub(r"옴니야|옴니|오미니아|omni[_ ]?os|omni", "", t, flags=re.I))
+    if not leftover and re.search(r"오미니아|omni[_ ]?os", t, re.I):
+        return {"drop": True, "why": "전사 환각(프롬프트 되풀이)"}
     rest = re.sub(r"[\s.,!?'\-0-9]", "", WAKE_RE.sub("", t))
     if WAKE_RE.search(t) and len(rest) <= 2:
         return {"wake_only": True, "text": t}
@@ -72,7 +75,6 @@ PANELS = ("cmd", "ai", "notif", "clock", "proj", "sys", "sp1", "r3d",
 
 
 def build_instructions() -> str:
-    memory = link.load_memory()
     return (
         "당신은 OMNI_OS의 관제 AI '옴니'입니다. 지금은 스마트 글래스(Halo)를 "
         "통한 실시간 음성 대화입니다. 반드시 한국어 존댓말(합니다체)로만 "
@@ -87,7 +89,7 @@ def build_instructions() -> str:
         "calculate에 수식으로 넘깁니다. 도구 결과에 있는 수치·시각만 말하고 "
         "없는 것은 추정하지 말고 '기록에 없다'고 합니다. 도구 결과는 그대로 "
         "읽지 말고 요약합니다."
-        + (f"\n\n[장기 메모리 — 앱과 공유]\n{memory}" if memory else ""))
+        + "\n\n" + link.mem_context())
 
 
 TOOLS = [
@@ -493,6 +495,7 @@ async def bridge():
                         if addressed:
                             print(f"YOU ({why}):", ut)
                             link.mailbox_push({"type": "transcript", "who": "you", "text": ut})
+                            link.mem_append("conv", f"나(안경): {ut}")
                             await ws.send(json.dumps({"type": "response.create"}))
                             if why == "호출어":
                                 gate_cmd({"cmd": "adapt"})
@@ -548,6 +551,8 @@ async def bridge():
                     ft = ev.get("transcript", "") or omni_txt
                     gate_state["last_omni"] = ft
                     print("OMNI:", ft)
+                    if ft.strip():
+                        link.mem_append("conv", f"옴니(안경): {ft.strip()}")
                     emu.inject_bluetooth_data(caption_packet(ft))
                     if ft.strip():
                         link.mailbox_push({"type": "transcript",

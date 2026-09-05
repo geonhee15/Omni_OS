@@ -1,6 +1,10 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #import <EventKit/EventKit.h>
+#import <AVFoundation/AVFoundation.h>
+#import <CoreAudio/CoreAudio.h>
+#import <CoreAudio/AudioHardwareTapping.h>
+#import <CoreAudio/CATapDescription.h>
 #import <signal.h>
 #import "sp1_status.h"
 #import "sysmon.h"
@@ -212,6 +216,15 @@ static NSString *ArcSavesDir(void) {
 @property (strong) NSTask *gateTask;          // 음성 게이트 사이드카 (scripts/omni_gate.py)
 @property (strong) NSFileHandle *gateIn;
 @property (strong) NSMutableData *gateBuf;
+@property (strong) dispatch_queue_t gateWriteQ;      // 사이드카 stdin 직렬화
+@property (strong) AVAudioEngine *gateEngine;        // 마이크 캡처 (16k mono int16)
+@property (strong) AVAudioConverter *gateMicConv;
+@property (strong) AVAudioFormat *gateMicOut;
+@property AudioObjectID gateTapID;                   // 시스템 출력 루프백 (Core Audio process tap)
+@property AudioObjectID gateAggID;
+@property AudioDeviceIOProcID gateIOProc;
+@property double gateTapRate;
+@property BOOL gateTapOK;
 @property (strong) NSNumber *omniaTurn;
 @property (strong) NSMutableString *omniaBuf;
 // OMNI_AI 외국어 음색 데몬 (seed_serve.py — Seed-VC 상주)
@@ -1241,6 +1254,14 @@ static NSString *ArcSavesDir(void) {
         [self.arcTask cancel];
         self.arcTask = nil;
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd hasPrefix:@"mem."]) {
+        NSDictionary *ma = @{};
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) ma = parsed;
+        }
+        [self handleMem:cmd a:ma msgId:msgId];
     } else if ([cmd hasPrefix:@"cal."]) {
         [self handleCal:cmd arg:arg msgId:msgId];
     } else if ([cmd hasPrefix:@"ai."] || [cmd hasPrefix:@"omnia."]) {
@@ -1933,6 +1954,134 @@ static NSString *OmniAIFsValidate(NSString *path) {
     }
 }
 
+#pragma mark - MEMORY (~/.omni/memory — 프로필·일지·다이제스트)
+
+// 옴니의 기억 저장소. 앱(JS)·안경 브리지(파이썬)가 같은 파일을 쓴다.
+//   profile.md                 오래가는 사실·선호 (통합본)
+//   journal/YYYY-MM-DD.jsonl   시간순 일지: 대화·관찰·생각·행동
+//   ambient/YYYY-MM-DD.jsonl   주변음 전사 원문 (분석 재료, 일지와 분리)
+//   digests/YYYY-MM-DD.md      하루 요약
+static NSString *OmniMemDir(void) {
+    NSString *d = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/memory"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    for (NSString *sub in @[ @"", @"journal", @"ambient", @"digests" ]) {
+        [fm createDirectoryAtPath:[d stringByAppendingPathComponent:sub]
+      withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    return d;
+}
+
+static NSString *OmniMemToday(void) {
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    df.dateFormat = @"yyyy-MM-dd";
+    return [df stringFromDate:NSDate.date];
+}
+
+static BOOL OmniMemValidDate(NSString *d) {
+    if (d.length != 10) return NO;
+    NSCharacterSet *ok = [NSCharacterSet characterSetWithCharactersInString:@"0123456789-"];
+    return [d rangeOfCharacterFromSet:ok.invertedSet].location == NSNotFound;
+}
+
+- (void)handleMem:(NSString *)cmd a:(NSDictionary *)a msgId:(NSString *)msgId {
+    NSString *dir = OmniMemDir();
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if ([cmd isEqualToString:@"mem.append"]) {
+        NSString *kind = [a[@"kind"] isKindOfClass:[NSString class]] ? a[@"kind"] : @"note";
+        NSString *text = [a[@"text"] isKindOfClass:[NSString class]] ? a[@"text"] : @"";
+        if (text.length == 0) { [self deliverPayload:@{ @"ok" : @NO } forId:msgId]; return; }
+        NSMutableDictionary *entry = [@{ @"ts" : @([NSDate.date timeIntervalSince1970]),
+                                         @"kind" : kind, @"text" : text } mutableCopy];
+        if ([a[@"tags"] isKindOfClass:[NSArray class]]) entry[@"tags"] = a[@"tags"];
+        if ([a[@"meta"] isKindOfClass:[NSDictionary class]]) entry[@"meta"] = a[@"meta"];
+        NSData *jd = [NSJSONSerialization dataWithJSONObject:entry options:0 error:nil];
+        NSString *sub = [kind isEqualToString:@"ambient"] ? @"ambient" : @"journal";
+        NSString *path = [[dir stringByAppendingPathComponent:sub]
+            stringByAppendingPathComponent:[OmniMemToday() stringByAppendingString:@".jsonl"]];
+        NSMutableData *line = [jd mutableCopy];
+        [line appendBytes:"\n" length:1];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (fh == nil) { [line writeToFile:path atomically:YES]; }
+        else { [fh seekToEndOfFile]; [fh writeData:line]; [fh closeFile]; }
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"mem.read"]) {
+        // 최근 N일 일지(+선택: 주변음) 항목 — 날짜순, 각 파일 끝에서 limit
+        NSInteger days = [a[@"days"] isKindOfClass:[NSNumber class]] ? [a[@"days"] integerValue] : 1;
+        NSInteger limit = [a[@"limit"] isKindOfClass:[NSNumber class]] ? [a[@"limit"] integerValue] : 400;
+        NSString *sub = [a[@"ambient"] boolValue] ? @"ambient" : @"journal";
+        NSMutableArray *out = [NSMutableArray array];
+        NSDateFormatter *df = [[NSDateFormatter alloc] init];
+        df.dateFormat = @"yyyy-MM-dd";
+        for (NSInteger i = MAX(0, days - 1); i >= 0; i--) {
+            NSString *date = [df stringFromDate:[NSDate dateWithTimeIntervalSinceNow:-86400.0 * i]];
+            NSString *path = [[dir stringByAppendingPathComponent:sub]
+                stringByAppendingPathComponent:[date stringByAppendingString:@".jsonl"]];
+            NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+            if (content.length == 0) continue;
+            for (NSString *ln in [content componentsSeparatedByString:@"\n"]) {
+                if (ln.length == 0) continue;
+                id parsed = [NSJSONSerialization JSONObjectWithData:[ln dataUsingEncoding:NSUTF8StringEncoding]
+                                                            options:0 error:nil];
+                if ([parsed isKindOfClass:[NSDictionary class]]) [out addObject:parsed];
+            }
+        }
+        if ((NSInteger)out.count > limit) {
+            out = [[out subarrayWithRange:NSMakeRange(out.count - limit, limit)] mutableCopy];
+        }
+        [self deliverPayload:@{ @"ok" : @YES, @"items" : out } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"mem.profile"]) {
+        NSString *path = [dir stringByAppendingPathComponent:@"profile.md"];
+        NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+        if (text == nil) {
+            // 구버전 ai_memory.json → profile.md 이전
+            NSString *old = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/store/ai_memory.json"];
+            NSData *od = [NSData dataWithContentsOfFile:old];
+            id parsed = od ? [NSJSONSerialization JSONObjectWithData:od options:0 error:nil] : nil;
+            text = ([parsed isKindOfClass:[NSDictionary class]] && [parsed[@"text"] isKindOfClass:[NSString class]])
+                ? parsed[@"text"] : @"";
+            if (text.length) [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+        [self deliverPayload:@{ @"ok" : @YES, @"text" : text ?: @"" } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"mem.profileWrite"]) {
+        NSString *text = [a[@"text"] isKindOfClass:[NSString class]] ? a[@"text"] : @"";
+        NSString *path = [dir stringByAppendingPathComponent:@"profile.md"];
+        BOOL ok = [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+
+    } else if ([cmd isEqualToString:@"mem.digest"] || [cmd isEqualToString:@"mem.digestWrite"]) {
+        NSString *date = [a[@"date"] isKindOfClass:[NSString class]] ? a[@"date"] : @"";
+        if (!OmniMemValidDate(date)) { [self deliverPayload:@{ @"ok" : @NO, @"error" : @"BAD_DATE" } forId:msgId]; return; }
+        NSString *path = [[dir stringByAppendingPathComponent:@"digests"]
+            stringByAppendingPathComponent:[date stringByAppendingString:@".md"]];
+        if ([cmd isEqualToString:@"mem.digest"]) {
+            NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+            [self deliverPayload:@{ @"ok" : @YES, @"text" : text ?: @"", @"exists" : @(text != nil) } forId:msgId];
+        } else {
+            NSString *text = [a[@"text"] isKindOfClass:[NSString class]] ? a[@"text"] : @"";
+            BOOL ok = [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            [self deliverPayload:@{ @"ok" : @(ok) } forId:msgId];
+        }
+
+    } else if ([cmd isEqualToString:@"mem.dates"]) {
+        // 일지가 있는 날짜 목록 + 다이제스트 유무
+        NSArray *files = [fm contentsOfDirectoryAtPath:[dir stringByAppendingPathComponent:@"journal"] error:nil];
+        NSMutableArray *out = [NSMutableArray array];
+        for (NSString *f in [files sortedArrayUsingSelector:@selector(compare:)]) {
+            if (![f hasSuffix:@".jsonl"]) continue;
+            NSString *date = [f stringByDeletingPathExtension];
+            NSString *dg = [[dir stringByAppendingPathComponent:@"digests"]
+                stringByAppendingPathComponent:[date stringByAppendingString:@".md"]];
+            [out addObject:@{ @"date" : date, @"digest" : @([fm fileExistsAtPath:dg]) }];
+        }
+        [self deliverPayload:@{ @"ok" : @YES, @"dates" : out } forId:msgId];
+    } else {
+        [self deliverPayload:@{ @"ok" : @NO, @"error" : @"UNKNOWN_CMD" } forId:msgId];
+    }
+}
+
 #pragma mark - JS 다이얼로그 (WKUIDelegate) — prompt/confirm/alert를 네이티브 NSAlert로
 
 // WKWebView는 이 핸들러가 없으면 prompt()가 null, confirm()이 false를 즉시 돌려준다.
@@ -1980,7 +2129,175 @@ static NSAlert *OmniMakeAlert(NSString *message, NSString *okTitle, BOOL cancel)
 
 #pragma mark - VOICE GATE (상시 대기 — 사용자 목소리만 통과시키는 사이드카)
 
+// 파이프 프레임: <u32 길이><페이로드>. 페이로드 첫 바이트 '{' JSON 명령, 'M' 마이크 PCM16 16k,
+// 'S' 시스템 출력 PCM16 16k (루프백), 'V' 얼굴 텔레메트리 JSON.
+- (void)gateWriteFrame:(NSData *)payload {
+    NSFileHandle *fh = self.gateIn;
+    if (fh == nil || payload.length == 0) return;
+    dispatch_async(self.gateWriteQ, ^{
+        uint32_t n = (uint32_t)payload.length;
+        NSMutableData *d = [NSMutableData dataWithCapacity:payload.length + 4];
+        [d appendBytes:&n length:4];
+        [d appendData:payload];
+        @try { [fh writeData:d]; } @catch (NSException *e) { (void)e; }
+    });
+}
+
+- (void)gateWriteJSON:(NSString *)json {
+    [self gateWriteFrame:[json dataUsingEncoding:NSUTF8StringEncoding]];
+}
+
+// float32 (임의 샘플레이트, 모노) → int16 16k 프레임 (선형 보간 다운샘플)
+- (NSData *)gateResampleToPipe:(const float *)src count:(NSUInteger)n rate:(double)rate tag:(char)tag {
+    NSUInteger m = (NSUInteger)(n * 16000.0 / rate);
+    if (m == 0) return nil;
+    NSMutableData *out = [NSMutableData dataWithLength:1 + m * 2];
+    uint8_t *bytes = out.mutableBytes;
+    bytes[0] = (uint8_t)tag;
+    int16_t *dst = (int16_t *)(bytes + 1);
+    double step = (double)n / (double)m;
+    for (NSUInteger i = 0; i < m; i++) {
+        double pos = i * step;
+        NSUInteger k = (NSUInteger)pos;
+        float a = src[k], b = src[MIN(k + 1, n - 1)];
+        float v = a + (b - a) * (float)(pos - k);
+        dst[i] = (int16_t)(MAX(-1.f, MIN(1.f, v)) * 32767.f);
+    }
+    return out;
+}
+
+// ---- 마이크: AVAudioEngine 입력 탭 → 16k 모노 → 'M' 프레임
+- (BOOL)gateStartMic {
+    AVAudioEngine *eng = [[AVAudioEngine alloc] init];
+    AVAudioInputNode *input = eng.inputNode;
+    AVAudioFormat *inFmt = [input outputFormatForBus:0];
+    if (inFmt.sampleRate <= 0) return NO;
+    __weak AppDelegate *weakSelf = self;
+    [input installTapOnBus:0 bufferSize:2048 format:inFmt
+                     block:^(AVAudioPCMBuffer *buf, AVAudioTime *when) {
+        AppDelegate *s = weakSelf;
+        if (s == nil || buf.frameLength == 0) return;
+        // 채널 평균 → 모노 float
+        NSUInteger n = buf.frameLength;
+        float *mono = malloc(sizeof(float) * n);
+        AVAudioChannelCount ch = buf.format.channelCount;
+        for (NSUInteger i = 0; i < n; i++) {
+            float acc = 0;
+            for (AVAudioChannelCount c = 0; c < ch; c++) acc += buf.floatChannelData[c][i];
+            mono[i] = acc / (float)ch;
+        }
+        NSData *frame = [s gateResampleToPipe:mono count:n rate:buf.format.sampleRate tag:'M'];
+        free(mono);
+        if (frame != nil) [s gateWriteFrame:frame];
+    }];
+    NSError *err = nil;
+    if (![eng startAndReturnError:&err]) {
+        NSLog(@"gate mic start failed: %@", err);
+        return NO;
+    }
+    self.gateEngine = eng;
+    return YES;
+}
+
+// ---- 시스템 출력 루프백: 전 프로세스 출력을 모노 탭으로 → 'S' 프레임
+- (BOOL)gateStartSystemTap {
+    if (@available(macOS 14.2, *)) {
+        CATapDescription *desc = [[CATapDescription alloc] initMonoGlobalTapButExcludeProcesses:@[]];
+        desc.name = @"OmniGateTap";
+        desc.privateTap = YES;
+        desc.muteBehavior = CATapUnmuted;
+        AudioObjectID tapID = kAudioObjectUnknown;
+        OSStatus st = AudioHardwareCreateProcessTap(desc, &tapID);
+        if (st != noErr || tapID == kAudioObjectUnknown) {
+            NSLog(@"gate tap create failed: %d", (int)st);
+            return NO;
+        }
+        AudioStreamBasicDescription fmt = {0};
+        UInt32 sz = sizeof(fmt);
+        AudioObjectPropertyAddress addr = { kAudioTapPropertyFormat,
+            kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+        AudioObjectGetPropertyData(tapID, &addr, 0, NULL, &sz, &fmt);
+        double rate = fmt.mSampleRate > 0 ? fmt.mSampleRate : 48000.0;
+        NSDictionary *agg = @{
+            @kAudioAggregateDeviceNameKey : @"OmniGateAgg",
+            @kAudioAggregateDeviceUIDKey : [NSUUID UUID].UUIDString,
+            @kAudioAggregateDeviceIsPrivateKey : @YES,
+            @kAudioAggregateDeviceTapAutoStartKey : @YES,
+            @kAudioAggregateDeviceTapListKey : @[ @{
+                @kAudioSubTapUIDKey : desc.UUID.UUIDString,
+                @kAudioSubTapDriftCompensationKey : @YES } ],
+        };
+        AudioObjectID aggID = kAudioObjectUnknown;
+        st = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)agg, &aggID);
+        if (st != noErr || aggID == kAudioObjectUnknown) {
+            NSLog(@"gate aggregate failed: %d", (int)st);
+            AudioHardwareDestroyProcessTap(tapID);
+            return NO;
+        }
+        __weak AppDelegate *weakSelf = self;
+        AudioDeviceIOProcID procID = NULL;
+        st = AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, NULL,
+            ^(const AudioTimeStamp *inNow, const AudioBufferList *inInputData,
+              const AudioTimeStamp *inInputTime, AudioBufferList *outOutputData,
+              const AudioTimeStamp *inOutputTime) {
+            AppDelegate *s = weakSelf;
+            if (s == nil || inInputData == NULL || inInputData->mNumberBuffers == 0) return;
+            const AudioBuffer *b = &inInputData->mBuffers[0];
+            NSUInteger ch = MAX(1u, b->mNumberChannels);
+            NSUInteger n = b->mDataByteSize / sizeof(float) / ch;
+            if (n == 0) return;
+            const float *src = (const float *)b->mData;
+            float *mono = malloc(sizeof(float) * n);
+            for (NSUInteger i = 0; i < n; i++) {
+                float acc = 0;
+                for (NSUInteger c = 0; c < ch; c++) acc += src[i * ch + c];
+                mono[i] = acc / (float)ch;
+            }
+            NSData *frame = [s gateResampleToPipe:mono count:n rate:s.gateTapRate tag:'S'];
+            free(mono);
+            if (frame != nil) [s gateWriteFrame:frame];
+        });
+        if (st != noErr) {
+            AudioHardwareDestroyAggregateDevice(aggID);
+            AudioHardwareDestroyProcessTap(tapID);
+            return NO;
+        }
+        self.gateTapID = tapID;
+        self.gateAggID = aggID;
+        self.gateIOProc = procID;
+        self.gateTapRate = rate;
+        st = AudioDeviceStart(aggID, procID);
+        if (st != noErr) {
+            NSLog(@"gate tap start failed: %d", (int)st);
+            [self gateStopSystemTap];
+            return NO;
+        }
+        return YES;
+    }
+    return NO;
+}
+
+- (void)gateStopSystemTap {
+    if (self.gateAggID != kAudioObjectUnknown && self.gateAggID != 0) {
+        if (self.gateIOProc != NULL) {
+            AudioDeviceStop(self.gateAggID, self.gateIOProc);
+            AudioDeviceDestroyIOProcID(self.gateAggID, self.gateIOProc);
+        }
+        AudioHardwareDestroyAggregateDevice(self.gateAggID);
+    }
+    if (self.gateTapID != kAudioObjectUnknown && self.gateTapID != 0) {
+        if (@available(macOS 14.2, *)) AudioHardwareDestroyProcessTap(self.gateTapID);
+    }
+    self.gateAggID = 0; self.gateTapID = 0; self.gateIOProc = NULL;
+}
+
 - (void)gateStop {
+    if (self.gateEngine != nil) {
+        [self.gateEngine.inputNode removeTapOnBus:0];
+        [self.gateEngine stop];
+        self.gateEngine = nil;
+    }
+    [self gateStopSystemTap];
     if (self.gateTask != nil) {
         @try { [self.gateTask terminate]; } @catch (NSException *e) { (void)e; }
     }
@@ -2054,7 +2371,7 @@ static NSAlert *OmniMakeAlert(NSString *message, NSString *okTitle, BOOL cancel)
         }
         NSTask *task = [[NSTask alloc] init];
         task.executableURL = [NSURL fileURLWithPath:py];
-        task.arguments = @[ script, @"run" ];
+        task.arguments = @[ script, @"pipe" ];
         task.currentDirectoryURL = [NSURL fileURLWithPath:OmniBaseDir()];
         NSPipe *outPipe = [NSPipe pipe], *inPipe = [NSPipe pipe], *errPipe = [NSPipe pipe];
         task.standardOutput = outPipe;
@@ -2086,15 +2403,21 @@ static NSAlert *OmniMakeAlert(NSString *message, NSString *okTitle, BOOL cancel)
         }
         self.gateTask = task;
         self.gateIn = inPipe.fileHandleForWriting;
-        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+        if (self.gateWriteQ == nil) {
+            self.gateWriteQ = dispatch_queue_create("omni.gate.write", DISPATCH_QUEUE_SERIAL);
+        }
+        BOOL mic = [self gateStartMic];
+        BOOL tap = [self gateStartSystemTap];   // 실패해도 계속 (루프백 신호만 없어짐)
+        self.gateTapOK = tap;
+        [self deliverPayload:@{ @"ok" : @(mic), @"mic" : @(mic), @"loopback" : @(tap),
+                                @"error" : mic ? @"" : @"MIC_FAILED" } forId:msgId];
 
     } else if ([cmd isEqualToString:@"ai.gateCmd"]) {
         if (self.gateIn == nil || arg == nil) {
             [self deliverPayload:@{ @"ok" : @NO } forId:msgId];
             return;
         }
-        NSData *d = [[arg stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
-        @try { [self.gateIn writeData:d]; } @catch (NSException *e) { (void)e; }
+        [self gateWriteJSON:arg];
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
 
     } else if ([cmd isEqualToString:@"ai.gateStop"]) {
@@ -2108,6 +2431,7 @@ static NSAlert *OmniMakeAlert(NSString *message, NSString *okTitle, BOOL cancel)
                 || [NSFileManager.defaultManager fileExistsAtPath:store];
         [self deliverPayload:@{ @"ok" : @YES,
                                 @"running" : @(self.gateTask != nil && self.gateTask.isRunning),
+                                @"loopback" : @(self.gateTapOK),
                                 @"profile" : @(has) }
                        forId:msgId];
 

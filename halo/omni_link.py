@@ -46,6 +46,66 @@ def load_memory() -> str:
     return ""
 
 
+# ---------------------------------------------------------------- 기억 (~/.omni/memory — 앱과 공유)
+
+MEM_DIR = os.path.join(HOME, ".omni/memory")
+
+
+def _mem_day(ts=None):
+    return time.strftime("%Y-%m-%d", time.localtime(ts or time.time()))
+
+
+def mem_profile() -> str:
+    try:
+        with open(os.path.join(MEM_DIR, "profile.md")) as f:
+            return f.read()[:4000]
+    except OSError:
+        return load_memory()   # 구버전 폴백
+
+
+def mem_append(kind: str, text: str, tags=None, meta=None):
+    """앱과 같은 일지 파일에 한 줄 추가 (대화·행동·관찰)."""
+    sub = "ambient" if kind == "ambient" else "journal"
+    d = os.path.join(MEM_DIR, sub)
+    try:
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, _mem_day() + ".jsonl"), "a") as f:
+            f.write(json.dumps({"ts": time.time(), "kind": kind, "text": str(text)[:800],
+                                "tags": tags or [], "meta": meta or {}}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def mem_recent(days: int = 1, limit: int = 40):
+    out = []
+    for i in range(days - 1, -1, -1):
+        p = os.path.join(MEM_DIR, "journal", _mem_day(time.time() - 86400 * i) + ".jsonl")
+        try:
+            with open(p) as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                        if e.get("kind") != "ambient":
+                            out.append(e)
+                    except ValueError:
+                        pass
+        except OSError:
+            continue
+    return out[-limit:]
+
+
+def mem_context() -> str:
+    """프롬프트용 기억 블록 — 프로필 + 현재 상황(마지막 관찰) + 오늘 일지 최근."""
+    entries = mem_recent(1, 14)
+    sit = next((e["text"] for e in reversed(entries) if e.get("kind") == "observe"), "")
+    K = {"conv": "", "observe": "[상황] ", "thought": "[생각] ", "action": "[행동] ", "user_other": "[건희→타인] "}
+    lines = [f"{time.strftime('%H:%M', time.localtime(e['ts']))} {K.get(e.get('kind'), '')}{e.get('text', '')}"
+             for e in entries]
+    return (f"[프로필 — 오래가는 사실·선호]\n{mem_profile() or '(비어 있음)'}\n\n"
+            f"[현재 상황 — 주변음을 듣고 옴니가 추정]\n{sit or '(아직 관찰 없음)'}\n\n"
+            f"[오늘 일지 최근]\n" + ("\n".join(lines) or "(없음)"))
+
+
 # ---------------------------------------------------------------- 두뇌 (Claude)
 
 _DEEP_HINTS = ("왜", "어떻게", "분석", "설계", "비교", "조사", "정리해",
@@ -60,12 +120,11 @@ def ask_brain(question: str, extra_context: str = "") -> str:
         return "두뇌 키가 없습니다 (~/.omni/anthropic.key)."
     deep = len(question) > 60 or any(h in question for h in _DEEP_HINTS)
     model = "claude-opus-5" if deep else "claude-haiku-4-5-20251001"
-    memory = load_memory()
     system = (
         "당신은 OMNI_OS의 관제 AI '옴니'의 추론 두뇌입니다. 사용자는 지금 "
         "스마트 글래스(Halo)로 음성 대화 중이며, 이 답은 음성 AI가 그대로 "
         "읽어줍니다. 한국어 존댓말(합니다체), 호칭 금지, 핵심만 3문장 이내."
-        + (f"\n\n[장기 메모리]\n{memory}" if memory else "")
+        + "\n\n" + mem_context()
         + (f"\n\n[상황]\n{extra_context}" if extra_context else ""))
     body = json.dumps({
         "model": model, "max_tokens": 700,
