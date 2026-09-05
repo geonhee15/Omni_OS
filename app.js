@@ -2463,7 +2463,7 @@ OmniOS.register("ai", {
         this.gateNote(`무시 · 화자 불일치 sim=${ev.sim} dur=${ev.dur}`);
       }
     } else if (e === "enroll") {
-      this.els.voiceId.textContent = `RECORDING ${Math.round((ev.progress || 0) * 100)}% · ${ev.segments || 0} SEG`;
+      this.els.voiceId.textContent = `RECORDING ${Math.round((ev.progress || 0) * 100)}% · 발화 ${ev.secs || 0}s`;
       this.els.voiceId.className = "ai-voiceid rec";
     } else if (e === "enrolled") {
       this._gateProfile = true;

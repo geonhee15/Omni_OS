@@ -78,6 +78,8 @@ class Gate:
         self.enroll_until = 0.0
         self.enroll_embs = []
         self.enroll_target = 0
+        self.enroll_secs = 0.0
+        self._enroll_tick = 0.0
         self.last_user_emb = None       # 마지막으로 통과한 발화 임베딩 (적응용)
 
     # ---------------- 프로필
@@ -170,7 +172,13 @@ class Gate:
                                or len(self.seg) * WIN / SR > MAX_SEG):
             self.finish(now)
         if self.enroll_until and now > self.enroll_until:
+            if self.in_speech:
+                self.finish(now)        # 마감 시점에 말하던 발화도 반영
             self.finish_enroll()
+        elif self.enroll_until and now - self._enroll_tick > 1.0:
+            self._enroll_tick = now
+            emit({"ev": "enroll", "progress": min(1.0, 1 - (self.enroll_until - now) / self.enroll_target),
+                  "segments": len(self.enroll_embs), "secs": round(self.enroll_secs, 1)})
 
     def finish(self, now):
         pcm = np.concatenate(self.seg) if self.seg else np.zeros(0, np.float32)
@@ -178,12 +186,17 @@ class Gate:
         self.in_speech = False
         dur = len(pcm) / SR
         if self.enroll_until:
-            if dur >= MIN_ENROLL_SEG:
-                e = self.embed(pcm)
-                if e is not None:
-                    self.enroll_embs.append(e)
+            # 쉬지 않고 말하면 세그먼트가 하나로 이어지므로 2초 창으로 쪼개 임베딩
+            step = int(2.0 * SR)
+            for i in range(0, len(pcm), step):
+                part = pcm[i:i + step]
+                if len(part) / SR >= MIN_ENROLL_SEG:
+                    e = self.embed(part)
+                    if e is not None:
+                        self.enroll_embs.append(e)
+                        self.enroll_secs += len(part) / SR
             emit({"ev": "enroll", "progress": min(1.0, 1 - (self.enroll_until - now) / self.enroll_target),
-                  "segments": len(self.enroll_embs)})
+                  "segments": len(self.enroll_embs), "secs": round(self.enroll_secs, 1)})
             return
         if dur < MIN_SEG:
             emit({"ev": "segment", "user": False, "sim": None, "dur": round(dur, 2), "why": "short"})
@@ -209,13 +222,17 @@ class Gate:
         self.enroll_target = float(seconds)
         self.enroll_until = time.monotonic() + float(seconds)
         self.enroll_embs = []
-        emit({"ev": "enroll", "progress": 0.0, "segments": 0})
+        self.enroll_secs = 0.0
+        self._enroll_tick = time.monotonic()
+        self.muted = False
+        emit({"ev": "enroll", "progress": 0.0, "segments": 0, "secs": 0})
 
     def finish_enroll(self):
         self.enroll_until = 0.0
-        if len(self.enroll_embs) < 3:
+        if len(self.enroll_embs) < 3 and self.enroll_secs < 4.0:
             emit({"ev": "enroll_failed", "segments": len(self.enroll_embs),
-                  "text": "말소리가 충분하지 않습니다 — 15초 동안 여러 문장을 또렷하게 말해 주세요"})
+                  "secs": round(self.enroll_secs, 1),
+                  "text": f"말소리가 충분하지 않습니다 (인식된 발화 {self.enroll_secs:.1f}초) — 마이크 가까이에서 15초 동안 또렷하게 말해 주세요"})
             return
         mean_self, thr = self.save_profile(self.enroll_embs)
         emit({"ev": "enrolled", "segments": len(self.enroll_embs),
