@@ -3014,9 +3014,10 @@ OmniOS.register("ai", {
     };
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const op = String(input.op || "read").toLowerCase();
+    // 어떤 조작이든 그 패널이 화면에 떠 있어야 요소가 보인다 — 먼저 연다
+    const navBtn = document.querySelector(`.nav-item[data-panel="${key}"]`);
+    if (navBtn && !root.classList.contains("active")) { navBtn.click(); await wait(400); }
     if (op === "read") {
-      const btn = document.querySelector(`.nav-item[data-panel="${key}"]`);
-      if (btn && !root.classList.contains("active")) { btn.click(); await wait(400); }
       const heads = [...root.querySelectorAll("h1,h2,h3,.nf-title,.ai-title,.sp1-title,.nf-sec-h,.ai-side-h")].filter(visible).map(label).filter(Boolean);
       const buttons = [...new Set([...root.querySelectorAll("button,[role=button],.ig-tab")].filter(visible).map(label).filter(Boolean))];
       const inputs = [...root.querySelectorAll("input,textarea,select")].filter(visible).map((el) =>
