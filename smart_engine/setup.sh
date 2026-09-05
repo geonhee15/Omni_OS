@@ -3,5 +3,5 @@
 set -e
 cd "$(dirname "$0")"
 python3 -m venv venv
-venv/bin/python -m pip install -q -r requirements.txt
+venv/bin/python -m pip install -q -r requirements.txt   # TPAP 지원 브랜치 커밋 고정 (Tapo 새 펌웨어)
 echo "smart_engine 준비 완료"

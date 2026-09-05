@@ -499,7 +499,12 @@
             <button class="nf-btn" id="sc-save">SAVE ACCOUNT</button>
             <span class="sc-setup-state" id="sc-setup-state"></span>
           </div>
-          <div class="sc-note">계정은 이 맥의 ~/.omni/tapo.json 에만 저장되고 플러그와 직접(로컬) 통신하는 데만 쓰입니다. 안 되면: Tapo 앱 &rarr; 나 &rarr; Tapo Lab &rarr; 서드파티 호환 켜기</div>
+          <div class="sc-creds">
+            <input class="wx-search sc-ip" id="sc-ip" placeholder="기기 IP로 직접 추가 (예: 192.168.0.31)" autocomplete="off" spellcheck="false">
+            <button class="nf-btn" id="sc-addip">ADD BY IP</button>
+            <span class="sc-note">SCAN에 안 잡힐 때 — IP는 Tapo 앱 &rarr; 기기 &rarr; 설정 &rarr; 기기 정보</span>
+          </div>
+          <div class="sc-note">계정은 이 맥의 ~/.omni/tapo.json 에만 저장되고 플러그와 직접(로컬) 통신하는 데만 쓰입니다. 인증 실패 시: Tapo 앱 &rarr; 나 &rarr; Tapo Lab &rarr; 서드파티 호환 켜기</div>
         </div>
         <div class="nf-body">
           <div class="wx-err" id="sc-err" hidden></div>
@@ -1376,7 +1381,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.74.0</span>
+      <span>v0.74.1</span>
     </footer>
   </div>
 

@@ -119,36 +119,146 @@ def find_entry(cache, target):
     return None
 
 
-async def cmd_discover(creds):
-    from kasa import Discover, Credentials
-    from kasa.exceptions import AuthenticationError
-    cache = load_cache()
-    found = await Discover.discover(credentials=Credentials(*creds), discovery_timeout=6, timeout=8)
-    devices, errors = [], []
-    for host, dev in found.items():
+TPAP_HINT = ("이 기기의 새 펌웨어는 새 암호화(TPAP)만 열어 두어 아직 로컬 접속이 안 됩니다 — "
+             "Tapo 앱 > 나(Me) > Tapo Lab > 서드파티 호환(Third-Party Compatibility)을 켜면 예전 방식 접속이 허용됩니다. 켠 뒤 다시 SCAN")
+
+
+def local_subnet_hosts():
+    """기본 인터페이스의 /24 호스트 목록 (자기 IP 제외)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 53))
+        ip = s.getsockname()[0]
+    except OSError:
+        return None, []
+    finally:
+        s.close()
+    base = ip.rsplit(".", 1)[0]
+    return ip, [f"{base}.{i}" for i in range(1, 255) if f"{base}.{i}" != ip]
+
+
+def unsupported_info(host, e):
+    dr = getattr(e, "discovery_result", None) or {}
+    if hasattr(dr, "to_dict"):
         try:
-            await dev.update()
-            info = await describe(dev)
-            cache[host] = {"host": host, "alias": info["alias"], "model": info["model"], "type": info["type"],
-                           "id": info["id"], "config": dev.config.to_dict(), "seen": time.time()}
-            devices.append(info)
-        except AuthenticationError as e:
-            errors.append({"host": host, "model": getattr(dev, "model", ""), "error": "AUTH_FAILED"})
-        except Exception as e:
-            errors.append({"host": host, "model": getattr(dev, "model", ""), "error": f"{type(e).__name__}: {e}"[:160]})
-        finally:
-            try:
-                await dev.disconnect()
-            except Exception:
-                pass
-    save_cache(cache)
-    res = {"ok": True, "devices": devices, "errors": errors}
-    if not devices and not errors:
-        res["hint"] = ("기기를 찾지 못했습니다 — 플러그가 이 맥과 같은 공유기(와이파이)에 연결돼 있는지, "
-                       "맥의 로컬 네트워크 권한(시스템 설정 > 개인정보 보호 및 보안 > 로컬 네트워크 > Omni OS)이 켜져 있는지 확인")
-    elif errors and any(e["error"] == "AUTH_FAILED" for e in errors):
+            dr = dr.to_dict()
+        except Exception:
+            dr = {}
+    if not isinstance(dr, dict):
+        dr = {}
+    enc = (dr.get("mgt_encrypt_schm") or {}).get("encrypt_type") or ""
+    return {"host": host, "model": dr.get("device_model") or "", "type": dr.get("device_type") or "",
+            "error": "UNSUPPORTED_TPAP" if "TPAP" in (enc + str(e)) else "UNSUPPORTED",
+            "detail": str(e)[:160]}
+
+
+async def probe_one(ip, creds, sem, discovery_timeout=2):
+    """한 IP에 유니캐스트 검색 → (Device | None, 오류 dict | None)."""
+    from kasa import Discover, Credentials
+    from kasa.exceptions import UnsupportedDeviceError
+    async with sem:
+        try:
+            dev = await Discover.discover_single(ip, credentials=Credentials(*creds),
+                                                 discovery_timeout=discovery_timeout, timeout=8)
+            return dev, None
+        except UnsupportedDeviceError as e:
+            return None, unsupported_info(ip, e)
+        except Exception:
+            return None, None
+
+
+async def collect(dev, cache, devices, errors):
+    from kasa.exceptions import AuthenticationError
+    host = dev.host
+    try:
+        await dev.update()
+        info = await describe(dev)
+        cache[host] = {"host": host, "alias": info["alias"], "model": info["model"], "type": info["type"],
+                       "id": info["id"], "config": dev.config.to_dict(), "seen": time.time()}
+        devices.append(info)
+    except AuthenticationError:
+        errors.append({"host": host, "model": getattr(dev, "model", "") or "", "error": "AUTH_FAILED"})
+    except Exception as e:
+        errors.append({"host": host, "model": getattr(dev, "model", "") or "", "error": f"{type(e).__name__}: {e}"[:160]})
+    finally:
+        try:
+            await dev.disconnect()
+        except Exception:
+            pass
+
+
+def finish_discover(devices, errors, swept):
+    res = {"ok": True, "devices": devices, "errors": errors, "swept": swept}
+    if any(e["error"] == "UNSUPPORTED_TPAP" for e in errors):
+        res["hint"] = TPAP_HINT
+    elif any(e["error"] == "AUTH_FAILED" for e in errors):
         res["hint"] = ("기기는 보이는데 인증 실패 — Tapo 계정 이메일·비밀번호가 Tapo 앱 로그인과 같은지 확인. "
                        "그래도 안 되면 Tapo 앱 > 나 > Tapo Lab > 서드파티 호환 켜기")
+    elif not devices and not errors:
+        res["hint"] = ("기기를 찾지 못했습니다 — 플러그가 이 맥과 같은 공유기(와이파이)에 연결돼 있는지, "
+                       "맥의 로컬 네트워크 권한(시스템 설정 > 개인정보 보호 및 보안 > 로컬 네트워크 > Omni OS)이 켜져 있는지 확인. "
+                       "IP를 알면 SETUP의 'IP로 추가'로 직접 추가")
+    return res
+
+
+async def cmd_discover(creds):
+    """브로드캐스트 검색 + 같은 /24 전체 유니캐스트 훑기(브로드캐스트에 응답 안 하는 기기 대비)."""
+    from kasa import Discover, Credentials
+    from kasa.exceptions import UnsupportedDeviceError
+    cache = load_cache()
+    devices, errors, seen = [], [], set()
+    unsupported = []
+
+    async def on_unsupported(e):          # 라이브러리가 코루틴을 요구
+        unsupported.append(e)
+    try:
+        found = await Discover.discover(credentials=Credentials(*creds), discovery_timeout=5, timeout=8,
+                                        on_unsupported=on_unsupported)
+    except Exception:
+        found = {}
+    for host, dev in found.items():
+        seen.add(host)
+        await collect(dev, cache, devices, errors)
+    for e in unsupported:
+        info = unsupported_info(getattr(e, "host", "") or "", e)
+        if info["host"]:
+            seen.add(info["host"])
+        errors.append(info)
+    # 유니캐스트 훑기
+    my_ip, hosts = local_subnet_hosts()
+    swept = 0
+    if hosts:
+        sem = asyncio.Semaphore(64)
+        results = await asyncio.gather(*(probe_one(ip, creds, sem) for ip in hosts if ip not in seen))
+        swept = len(results)
+        for dev, err in results:
+            if dev is not None:
+                await collect(dev, cache, devices, errors)
+            elif err is not None and err["host"] not in seen:
+                errors.append(err)
+    save_cache(cache)
+    return finish_discover(devices, errors, swept)
+
+
+async def cmd_add(args, creds):
+    """IP로 직접 추가 (브로드캐스트·훑기에 안 잡히는 경우)."""
+    host = str(args.get("host") or "").strip()
+    if not host:
+        return {"ok": False, "error": "NO_HOST", "hint": "IP 주소가 필요합니다"}
+    cache = load_cache()
+    devices, errors = [], []
+    dev, err = await probe_one(host, creds, asyncio.Semaphore(1), discovery_timeout=4)
+    if dev is not None:
+        await collect(dev, cache, devices, errors)
+    elif err is not None:
+        errors.append(err)
+    else:
+        errors.append({"host": host, "model": "", "error": "NO_RESPONSE"})
+    save_cache(cache)
+    res = finish_discover(devices, errors, 1)
+    if not devices and not res.get("hint"):
+        res["hint"] = f"{host}에서 Tapo 응답이 없습니다 — IP가 맞는지(Tapo 앱 > 기기 > 설정 > 기기 정보) 확인"
     return res
 
 
@@ -224,6 +334,8 @@ async def main():
     try:
         if cmd == "discover":
             out(await cmd_discover(creds))
+        elif cmd == "add":
+            out(await cmd_add(args, creds))
         elif cmd == "states":
             out(await cmd_states(creds))
         elif cmd in ("state", "on", "off", "toggle", "set"):

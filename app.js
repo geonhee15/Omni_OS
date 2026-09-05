@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.74.0",
+  version: "0.74.1",
   bootTime: Date.now(),
   modules: {},
 
@@ -13630,10 +13630,12 @@ OmniOS.register("smart", {
     const $ = (id) => document.getElementById(id);
     this.els = { sub: $("sc-sub"), updated: $("sc-updated"), refresh: $("sc-refresh"), scan: $("sc-scan"), err: $("sc-err"),
       hint: $("sc-hint"), setup: $("sc-setup"), setupToggle: $("sc-setup-toggle"), user: $("sc-user"), pass: $("sc-pass"),
-      save: $("sc-save"), setupState: $("sc-setup-state"), grid: $("sc-grid") };
+      save: $("sc-save"), setupState: $("sc-setup-state"), grid: $("sc-grid"), ip: $("sc-ip"), addip: $("sc-addip") };
     this.els.refresh.addEventListener("click", () => this.refresh());
     this.els.scan.addEventListener("click", () => this.scan());
     this.els.save.addEventListener("click", () => this.saveCreds());
+    this.els.addip.addEventListener("click", () => this.addByIp());
+    this.els.ip.addEventListener("keydown", (e) => { if (e.key === "Enter") this.addByIp(); });
     this.els.pass.addEventListener("keydown", (e) => { if (e.key === "Enter") this.saveCreds(); });
     this.els.setupToggle.addEventListener("click", () => { this.els.setup.hidden = !this.els.setup.hidden; });
     this.els.grid.addEventListener("click", (e) => this.onGridClick(e));
@@ -13675,6 +13677,24 @@ OmniOS.register("smart", {
     this.devices = [];
     await this.status();
     this.scan();
+  },
+
+  async addByIp() {
+    const host = this.els.ip.value.trim();
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) { this.setErr("IP 형식이 아닙니다 (예: 192.168.0.31)"); return; }
+    if (this._busy) return;
+    this._busy = true;
+    this.els.addip.textContent = "ADDING…";
+    try {
+      const r = await this.run("add", { host });
+      if (r.ok && r.devices && r.devices.length) {
+        // 기존 목록에 합치기
+        for (const d of r.devices) { const i = this.devices.findIndex((x) => x.host === d.host); if (i >= 0) this.devices[i] = d; else this.devices.push(d); }
+        r.devices = this.devices;
+        this.els.ip.value = "";
+      }
+      this.apply(r, true);
+    } finally { this._busy = false; this.els.addip.textContent = "ADD BY IP"; }
   },
 
   setErr(msg) { this.els.err.hidden = !msg; this.els.err.textContent = msg || ""; },
