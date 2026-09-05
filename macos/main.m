@@ -1933,6 +1933,51 @@ static NSString *OmniAIFsValidate(NSString *path) {
     }
 }
 
+#pragma mark - JS 다이얼로그 (WKUIDelegate) — prompt/confirm/alert를 네이티브 NSAlert로
+
+// WKWebView는 이 핸들러가 없으면 prompt()가 null, confirm()이 false를 즉시 돌려준다.
+// HUD 톤에 맞춘 최소한의 NSAlert로 구현 (메인 스레드 콜백, 동기 runModal).
+static NSAlert *OmniMakeAlert(NSString *message, NSString *okTitle, BOOL cancel) {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"OMNI_OS";
+    alert.informativeText = message ?: @"";
+    alert.alertStyle = NSAlertStyleInformational;
+    [alert addButtonWithTitle:okTitle ?: @"OK"];
+    if (cancel) [alert addButtonWithTitle:@"CANCEL"];
+    return alert;
+}
+
+- (void)webView:(WKWebView *)webView runJavaScriptAlertPanelWithMessage:(NSString *)message
+        initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler {
+    (void)webView; (void)frame;
+    NSAlert *alert = OmniMakeAlert(message, @"OK", NO);
+    [alert runModal];
+    completionHandler();
+}
+
+- (void)webView:(WKWebView *)webView runJavaScriptConfirmPanelWithMessage:(NSString *)message
+        initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(BOOL))completionHandler {
+    (void)webView; (void)frame;
+    NSAlert *alert = OmniMakeAlert(message, @"OK", YES);
+    completionHandler([alert runModal] == NSAlertFirstButtonReturn);
+}
+
+- (void)webView:(WKWebView *)webView runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt
+        defaultText:(NSString *)defaultText initiatedByFrame:(WKFrameInfo *)frame
+        completionHandler:(void (^)(NSString *))completionHandler {
+    (void)webView; (void)frame;
+    NSAlert *alert = OmniMakeAlert(prompt, @"OK", YES);
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)];
+    field.stringValue = defaultText ?: @"";
+    alert.accessoryView = field;
+    alert.window.initialFirstResponder = field;
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        completionHandler(field.stringValue);
+    } else {
+        completionHandler(nil);
+    }
+}
+
 #pragma mark - VOICE GATE (상시 대기 — 사용자 목소리만 통과시키는 사이드카)
 
 - (void)gateStop {
