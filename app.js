@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.71.0",
+  version: "0.72.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -797,7 +797,7 @@ const OmniScreen = {
       const askedList = Object.values(this.asked).slice(-12).map((a) => `- ${a.q}${a.answered ? " (답 들음)" : ""}`).join("\n") || "(없음)";
       const r = await OmniNative.request("ai.chat", JSON.stringify({
         model: "claude-haiku-4-5-20251001", maxTokens: 600,
-        system: "당신은 개인 AI '옴니'의 화면 관찰 모듈이다. 사용자 이름은 건희. 건희의 맥 화면 스크린샷을 보고 JSON만 출력한다: {\"app\":\"앱/사이트\",\"activity\":\"지금 하는 일 한 문장\",\"people\":[\"화면에 보이는 사람·닉네임\"],\"topics\":[\"주제 2~4개\"],\"changed\":true|false,\"notable\":[{\"text\":\"앞으로도 유효한 사실 한 문장\",\"remember\":true}],\"questions\":[{\"key\":\"짧은 식별자(예: nick_YOHA)\",\"q\":\"건희에게 물어볼 질문 한 문장(존댓말)\",\"why\":\"왜 궁금한지\",\"priority\":1|2|3}]}.\nchanged는 직전 관찰과 활동이 달라졌는지. questions는 옴니가 정말 궁금하고 건희만 답할 수 있는 것(모르는 사람·닉네임이 누구인지, 처음 보는 프로젝트가 뭔지, 반복해서 보는 것의 이유 등). 프로필에 이미 있는 사람·이미 물어본 것은 묻지 않는다. priority 3=지금 물어볼 만함, 1=굳이 안 물어도 됨. 없으면 빈 배열. 비밀번호·카드번호·인증코드·주민번호 같은 민감 정보는 절대 적지 않는다.",
+        system: "당신은 개인 AI '옴니'의 화면 관찰 모듈이다. 사용자 이름은 건희. 건희의 맥 화면 스크린샷을 보고 JSON만 출력한다: {\"app\":\"앱/사이트\",\"activity\":\"지금 하는 일 한 문장\",\"people\":[\"화면에 보이는 사람·닉네임\"],\"topics\":[\"주제 2~4개\"],\"changed\":true|false,\"notable\":[{\"text\":\"앞으로도 유효한 사실 한 문장\",\"remember\":true}],\"questions\":[{\"key\":\"짧은 식별자(예: nick_YOHA)\",\"q\":\"건희에게 물어볼 질문 한 문장(존댓말)\",\"why\":\"왜 궁금한지\",\"priority\":1|2|3}]}.\nchanged는 직전 관찰과 활동이 달라졌는지. questions는 옴니가 정말 궁금하고 건희만 답할 수 있는 것(모르는 사람·닉네임이 누구인지, 처음 보는 프로젝트가 뭔지, 반복해서 보는 것의 이유 등). 프로필에 이미 있는 사람·이미 물어본 것은 묻지 않는다. OMNI_OS/옴니 OS 자체(Command Bridge 등 이 앱의 패널·기능 — 건희가 개발 중인 옴니 자신의 몸)에 대해서는 묻지 않는다. priority 3=지금 물어볼 만함, 1=굳이 안 물어도 됨. 없으면 빈 배열. 비밀번호·카드번호·인증코드·주민번호 같은 민감 정보는 절대 적지 않는다.",
         messages: [{ role: "user", content: [
           { type: "image", source: { type: "base64", media_type: "image/jpeg", data: shot.jpeg } },
           { type: "text", text: `[건희 프로필(아는 사람·사실)]\n${OmniMem.profile.slice(0, 1500) || "(없음)"}\n\n[직전 관찰] ${this.activity || "(없음)"}\n[이미 물어본 질문]\n${askedList}\n\n지금 화면을 관찰해 JSON으로.` },
@@ -2823,7 +2823,7 @@ OmniOS.register("ai", {
         this._unmuteTimer = setTimeout(() => {
           this._lastOmniDoneAt = Date.now();
           this.gateMute(false);
-          this.gateNote("옴니 발화 종료 → 청취 재개 (이어가기 창 8초)");
+          this.gateNote("옴니 발화 종료 → 청취 재개 (이어가기 창 15초)");
         }, wait);
       }
     } else if (t === "response.output_audio_transcript.delta"
@@ -3015,7 +3015,9 @@ OmniOS.register("ai", {
       this.gateNote(`신호 · 루프백 ${ev.sys_hz}Hz 레벨 ${ev.sys_level} · 얼굴 ${ev.face_hz}Hz · 세그먼트 ${ev.segments}/15s`);
       this._gateStats = ev;
     } else if (e === "ambient") {
-      OmniMem.ambient(ev.label, ev.text, ev.t0, ev.sig);
+      const san = this.sanitizeTranscript(ev.text, ev.dur || 0);
+      if (san.drop) return;                       // 주변음 전사 환각(프롬프트 되풀이 등) 버림
+      OmniMem.ambient(ev.label, san.text || ev.text, ev.t0, ev.sig);
       const now = Date.now();
       if (now - (this._lastAmbientLogAt || 0) > 8000) {
         this._lastAmbientLogAt = now;
@@ -3085,8 +3087,13 @@ OmniOS.register("ai", {
     const lastOmni = [...this.history].reverse().find((m) => m.role === "assistant");
     const lastUser = [...this.history].reverse().find((m) => m.role === "user");
     const lips = sig.lips || {};
+    const nowS = Date.now() / 1000;
+    const otherVoice = OmniMem.ambientBuf.slice(-8).some((l) => nowS - l.ts < 45 && l.label === "other");
+    const faces = (sig.lips && sig.lips.faces) || 0;
+    const evidence = [faces > 1 ? `카메라에 얼굴 ${faces}명` : "", otherVoice ? "최근 45초 안에 다른 사람 목소리 감지" : ""].filter(Boolean);
     const facts = [
       `화자 판정: ${sig.label === "user" ? "건희 본인(확실)" : sig.label === "uncertain" ? "건희일 가능성 있음(불확실)" : sig.label || "?"}`,
+      `다른 사람 존재 증거: ${evidence.length ? evidence.join(", ") : "없음 — 건희 혼자 있는 것으로 본다"}`,
       lips.face ? `카메라: 얼굴 ${lips.faces}명${lips.faces > 1 ? " (다른 사람이 곁에 있음)" : ""}, 입 움직임과 음성 동기 ${lips.corr} (0.3 이상이면 화면 앞 사람이 말하는 중)` : "카메라: 얼굴 미검출(자리 비움/가려짐)",
       `목소리 유사도 ${sig.sim ?? "?"} (임계 ${sig.thr ?? "?"}), 노트북 재생음 상관 ${sig.media ?? 0}`,
       secs == null ? "옴니가 이 세션에서 아직 말한 적 없음" : `옴니가 마지막으로 말을 마친 지 ${secs}초`,
@@ -3098,7 +3105,7 @@ OmniOS.register("ai", {
     try {
       const r = await OmniNative.request("ai.chat", JSON.stringify({
         model: "claude-haiku-4-5-20251001", maxTokens: 200,
-        system: "당신은 상시 대기 중인 음성 비서 '옴니'의 판단 모듈이다. 사용자 이름은 건희. 방금 들린 발화가 \"옴니에게 한 말\"인지 판단해 JSON만 출력한다: {\"respond\":true|false,\"kind\":\"command|question|chat|reply|self_talk|to_others|media|noise\",\"why\":\"근거 20자 이내\"}. 다른 텍스트 없이 JSON 한 줄만.\nrespond=true: 옴니에게 직접 하는 명령·질문·요청·잡담(이름을 안 불러도), 옴니의 직전 말에 대한 답·반응·짧은 수긍·감사(\"응 알겠어\", \"고마워\", \"아니 그거 말고\")·이어지는 질문(시간이 지났어도 내용이 이어지면), 옴니를 부르는 말.\nrespond=false: 혼잣말·생각 소리(\"아 배고프다\", \"어디 뒀지\"), 다른 사람에게 하는 말(상대 이름을 부르거나 남과 주고받는 대화체, 전화 통화), 소리 내어 읽기, 영상·노래 내용, 의미 없는 조각, 옴니가 답할 필요가 없는 말.\n판단 기준: 비서에게 시킬 만한 일/질문인가, 옴니의 직전 말과 이어지는가, 화자가 건희 본인인가(불확실하면 보수적으로), 곁에 다른 사람이 있어 그에게 한 말일 가능성. 확신이 없으면 false.",
+        system: "당신은 상시 대기 중인 음성 비서 '옴니'의 판단 모듈이다. 사용자 이름은 건희. 방금 들린 발화가 \"옴니에게 한 말\"인지 판단해 JSON만 출력한다: {\"respond\":true|false,\"kind\":\"command|question|chat|reply|self_talk|to_others|media|noise\",\"why\":\"근거 20자 이내\"}. 다른 텍스트 없이 JSON 한 줄만.\nrespond=true: 옴니에게 직접 하는 명령·질문·요청·잡담(이름을 안 불러도), 옴니의 직전 말에 대한 답·반응·짧은 수긍·감사(\"응 알겠어\", \"고마워\", \"아니 그거 말고\")·이어지는 질문(시간이 지났어도 내용이 이어지면), 옴니를 부르는 말.\nrespond=false: 혼잣말·생각 소리(\"아 배고프다\", \"어디 뒀지\"), 다른 사람에게 하는 말(상대 이름을 부르거나 남과 주고받는 대화체, 전화 통화), 소리 내어 읽기, 영상·노래 내용, 의미 없는 조각, 옴니가 답할 필요가 없는 말.\n중요: to_others는 [다른 사람 존재 증거]가 있을 때만 고른다. 증거가 없으면 건희는 혼자이고, \"너/네가/얘/네 앱\" 같은 2·3인칭은 옴니를 가리킨다. 옴니가 방금 말하거나 질문한 직후의 반문·확인(\"뭐라고?\", \"얘 말하는 거야?\", \"너한테 말한 거 맞아\", \"네 앱에서 말하는 거야?\")은 respond=true, kind=reply. 자기 앱(OMNI_OS)에 대한 질문도 옴니에게 하는 말이다.\n판단 기준: 비서에게 시킬 만한 일/질문인가, 옴니의 직전 말과 이어지는가, 화자가 건희 본인인가(불확실하면 보수적으로), 곁에 다른 사람이 있다는 증거가 있는가. 확신이 없으면 false.",
         messages: [{ role: "user", content: `[신호]\n${facts}\n\n[옴니의 직전 말] ${lastOmni ? String(lastOmni.content).slice(0, 200) : "(없음)"}\n[건희의 직전 말] ${lastUser ? String(lastUser.content).slice(0, 200) : "(없음)"}\n\n[지금 들린 발화] ${text}` }],
       }), 15000);
       const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
@@ -3140,8 +3147,21 @@ OmniOS.register("ai", {
       return;
     }
     let dec;
+    const correction = /(너한테|옴니한테|너에게|옴니에게)\s*(말한|한|하는)\s*(거|것|말)|너 ?말하는 ?거|다른 사람한테 (말한|한) ?(게|거) 아니/.test(text);
     if (this.WAKE_RE.test(text)) dec = { respond: true, kind: "call", why: "호출어" };
+    else if (correction) dec = { respond: true, kind: "reply", why: "정정 — 옴니에게 한 말" };
+    else if (OmniScreen.pending && Date.now() - OmniScreen.pending.at < OmniScreen.ANSWER_WAIT_MS) dec = { respond: true, kind: "reply", why: "옴니 질문에 대한 답" };
     else dec = await this.judgeAddressed(text, sig);
+    if (dec.respond && correction && this._recentIgnored && this._recentIgnored.length) {
+      // "너한테 한 말이야" 정정 → 방금 무시했던 말들을 되살려 함께 전달
+      const missed = this._recentIgnored.filter((x) => Date.now() - x.at < 120000).map((x) => x.text);
+      if (missed.length) {
+        this.rtSend({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text",
+          text: `[방금 전에 옴니에게 했던 말인데 잘못 무시됨] ${missed.join(" / ")}` }] } });
+        this.gateNote(`정정으로 되살린 발화: ${missed.join(" / ")}`);
+      }
+      this._recentIgnored = [];
+    }
     const sigTxt = `${sig.label || "?"}${sig.lips && sig.lips.face ? ` 입술${sig.lips.corr}` : ""} 목소리${sig.sim ?? "?"}`;
     if (dec.respond) {
       if (line) { line.querySelector(".txt").textContent = text; line.classList.remove("pending"); }
@@ -3160,6 +3180,7 @@ OmniOS.register("ai", {
       del();
       // 응답은 안 해도 기억은 한다 — 건희가 남에게 한 말/혼잣말은 관찰 재료
       OmniMem.ambient(sig.label === "user" ? "user_other" : (sig.label || "uncertain"), text, sig.t0, { kind: dec.kind, sim: sig.sim, lips: sig.lips && sig.lips.corr });
+      if (sig.label === "user") { (this._recentIgnored = this._recentIgnored || []).push({ text, at: Date.now() }); this._recentIgnored = this._recentIgnored.slice(-4); }
       this.gateNote(`경청 · ${dec.kind}/${dec.why} [${sigTxt}]: ${text}`);
     }
   },
@@ -3225,44 +3246,80 @@ OmniOS.register("ai", {
     }
     this._cuBusy = true;
     const steps = [];
-    const MAX = 25;
+    const MAX_STEPS = 30;
     const log = (t) => { const l = this.logLine("sys", `컴퓨터 · ${t}`); l.classList.add("ignored"); this.gateNote(`컴퓨터 · ${t}`); };
+    const send = (cmd, obj) => OmniNative.request(cmd, JSON.stringify(obj || {}), 12000).catch(() => null);
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
     log(`작업 시작: ${task}`);
     OmniMem.append("action", `컴퓨터 조작 시작: ${task}`);
     let result = "실패: 단계 초과";
+    let zoom = null;          // 직전 단계에서 요청한 확대 이미지
+    let lastActKey = "", repeat = 0;
     try {
-      for (let i = 0; i < MAX; i++) {
-        const shot = await OmniNative.request("cu.screenshot", JSON.stringify({ maxWidth: 1280 }), 15000);
+      for (let i = 0; i < MAX_STEPS; i++) {
+        const [shot, apps] = await Promise.all([
+          OmniNative.request("cu.screenshot", JSON.stringify({ maxWidth: 1280 }), 15000).catch(() => null),
+          send("cu.apps"),
+        ]);
         if (!shot || !shot.ok) { result = `실패: 화면 캡처 불가 (${(shot && shot.error) || "?"})`; break; }
-        const history = steps.slice(-8).map((s, k) => `${k + 1}. ${s}`).join("\n") || "(없음)";
-        const r = await OmniNative.request("ai.chat", JSON.stringify({
-          model: "claude-sonnet-5", maxTokens: 300,
-          system: "당신은 개인 AI '옴니'의 컴퓨터 조작 모듈이다. 사용자(건희)의 맥 화면 스크린샷을 보고 목표를 달성할 다음 행동 하나를 JSON 한 줄로만 출력한다: {\"action\":\"click|double_click|right_click|move|drag|scroll|type|key|open_url|wait|done|fail\",\"x\":숫자,\"y\":숫자,\"x2\":숫자,\"y2\":숫자,\"dy\":숫자,\"text\":\"입력할 글자\",\"keys\":\"cmd+l 같은 단축키\",\"url\":\"https://…\",\"note\":\"한 줄 설명(진행 상황이나 최종 결과)\"}.\n규칙: 좌표는 스크린샷 픽셀(왼쪽 위 원점). 웹 페이지는 open_url로 바로 여는 게 가장 빠르다(브라우저 주소창 cmd+l 후 type도 가능). 입력창은 먼저 click으로 포커스한 뒤 type, 확정은 key enter. 페이지 로딩이 필요하면 wait. 목표가 이뤄졌으면 action done + note에 사용자가 원한 정보/결과를 구체적으로(상품명·가격·제목 등 화면에서 읽은 실제 값). 불가능하거나 위험하면 fail + note. 결제·구매 확정·메시지/메일 전송·삭제·로그인 정보 입력은 사용자가 명시적으로 요청한 게 아니면 절대 하지 말고 그 직전에서 done으로 보고한다. 같은 행동을 3번 반복했으면 다른 방법을 쓴다.",
-          messages: [{ role: "user", content: [
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: shot.jpeg } },
-            { type: "text", text: `[목표] ${task}\n[화면 크기] ${shot.w}x${shot.h} px\n[지금까지 한 행동]\n${history}\n\n다음 행동 하나를 JSON으로.` },
-          ] }],
-        }), 60000);
-        const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
-        const m = /\{[\s\S]*\}/.exec(txt);
-        if (!m) { result = `실패: 조작 모듈 응답 없음${r && r.error ? " (" + r.error + ")" : ""}`; break; }
-        let act; try { act = JSON.parse(m[0]); } catch (e) { result = "실패: 조작 모듈 출력 파싱 실패"; break; }
-        const a = String(act.action || "");
-        steps.push(`${a}${act.x != null ? ` (${act.x},${act.y})` : ""}${act.text ? ` "${String(act.text).slice(0, 30)}"` : ""}${act.keys ? ` ${act.keys}` : ""}${act.url ? ` ${act.url}` : ""} — ${act.note || ""}`);
-        log(steps[steps.length - 1]);
-        if (a === "done") { result = act.note || "완료"; break; }
-        if (a === "fail") { result = `실패: ${act.note || ""}`; break; }
-        const send = (cmd, obj) => OmniNative.request(cmd, JSON.stringify(obj), 10000).catch(() => null);
-        if (a === "click") await send("cu.click", { x: act.x, y: act.y, count: 1 });
-        else if (a === "double_click") await send("cu.click", { x: act.x, y: act.y, count: 2 });
-        else if (a === "right_click") await send("cu.click", { x: act.x, y: act.y, button: "right" });
-        else if (a === "move") await send("cu.move", { x: act.x, y: act.y });
-        else if (a === "drag") await send("cu.drag", { x: act.x, y: act.y, x2: act.x2, y2: act.y2 });
-        else if (a === "scroll") await send("cu.scroll", { x: act.x ?? shot.w / 2, y: act.y ?? shot.h / 2, dy: act.dy ?? -5 });
-        else if (a === "type") await send("cu.type", { text: String(act.text || "") });
-        else if (a === "key") await send("cu.key", { keys: String(act.keys || "") });
-        else if (a === "open_url") OmniNet.openUrl(String(act.url || ""));
-        await new Promise((res) => setTimeout(res, a === "open_url" || a === "wait" ? 1800 : 700));
+        const history = steps.slice(-10).map((s, k) => `${k + 1}. ${s}`).join("\n") || "(없음)";
+        const content = [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: shot.jpeg } },
+        ];
+        if (zoom) content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: zoom.jpeg } });
+        content.push({ type: "text", text:
+          `[목표] ${task}\n[화면 크기] ${shot.w}x${shot.h} px${zoom ? `\n[확대 이미지] 스크린샷의 (${zoom.x},${zoom.y}) 위치 ${zoom.zw}x${zoom.zh} 영역을 확대한 것 — 클릭 좌표는 여전히 전체 스크린샷 기준` : ""}\n[전면 앱] ${(apps && apps.front) || "?"}\n[실행 중인 앱] ${((apps && apps.apps) || []).join(", ") || "?"}\n[지금까지 한 행동]\n${history}\n\n다음 행동을 JSON으로.` });
+        zoom = null;
+        // 비전 모델 호출 — 빈 응답이면 재시도, 이미지 거부(refusal)면 화면 없이(blind) 진행
+        let act = null, lastErr = "", refused = false;
+        for (let attempt = 0; attempt < 3 && !act; attempt++) {
+          const blind = refused || (attempt > 0 && lastErr === "empty");
+          const msgContent = blind
+            ? [{ type: "text", text: `[스크린샷 사용 불가 — 비전 모델이 이 화면 분석을 거부함(화면 속 사람 이미지 등)] 화면을 보지 않고도 가능한 행동(open_app/open_url/key/type/wait)만으로 목표를 진행하세요. 화면 확인이 꼭 필요하면 fail + 이유(예: '재생 중인 영상 창을 최소화하면 진행 가능').\n[목표] ${task}\n[전면 앱] ${(apps && apps.front) || "?"}\n[실행 중인 앱] ${((apps && apps.apps) || []).join(", ") || "?"}\n[지금까지 한 행동]\n${history}\n\n다음 행동을 JSON으로.` }]
+            : content;
+          const r = await OmniNative.request("ai.chat", JSON.stringify({
+            model: attempt < 2 ? "claude-sonnet-5" : "claude-opus-5", maxTokens: 500,
+            system: "당신은 개인 AI '옴니'의 컴퓨터 조작 모듈이다. 사용자(건희)의 맥 화면 스크린샷을 보고 목표를 달성할 다음 행동을 JSON 한 줄로만 출력한다. 형식: {\"actions\":[{\"action\":\"click|double_click|right_click|move|drag|scroll|type|key|open_url|open_app|zoom|wait\",\"x\":숫자,\"y\":숫자,\"x2\":숫자,\"y2\":숫자,\"w\":숫자,\"h\":숫자,\"dy\":숫자,\"text\":\"입력할 글자\",\"keys\":\"cmd+l 같은 단축키\",\"url\":\"https://…\",\"app\":\"앱 이름\",\"note\":\"한 줄 설명\"}, …],\"done\":false} 또는 목표 달성 시 {\"actions\":[],\"done\":true,\"note\":\"사용자가 원한 결과를 구체적으로(화면에서 읽은 실제 값)\"} 또는 불가능·위험 시 {\"actions\":[],\"fail\":true,\"note\":\"이유\"}.\n원칙(침착하고 확실하게):\n- 확신이 있는 연속 동작은 한 번에 최대 4개까지 묶는다(예: click 입력창 → type → key enter). 결과 확인이 필요하면 거기서 끊고 다음 스크린샷을 본다.\n- 앱을 열거나 전면으로 가져올 땐 독 아이콘 좌표 추정 대신 open_app(app 이름, 예: Chrome, Safari, Claude, Discord, KakaoTalk)을 쓴다. 웹 페이지는 open_url이 가장 빠르다.\n- 작은 글자·아이콘·썸네일 제목처럼 클릭 대상이 확실하지 않으면 먼저 zoom(x,y,w,h — 스크린샷 픽셀 영역)으로 확대해 확인한 뒤 클릭한다. 추측 클릭 금지.\n- 좌표는 스크린샷 픽셀(왼쪽 위 원점). 입력창은 click으로 포커스 후 type, 확정은 key enter. 로딩은 wait.\n- 같은 행동을 2번 반복했는데 화면이 안 바뀌면 다른 방법(단축키·URL·open_app·zoom)을 쓴다.\n- 결제·구매 확정·메시지/메일 전송·삭제·로그인 정보 입력은 사용자가 명시적으로 요청한 게 아니면 절대 하지 말고 그 직전에서 done으로 보고한다.\n- done의 note에는 화면에서 읽은 실제 값(제목·가격·상태)을 넣는다.",
+            messages: [{ role: "user", content: msgContent }],
+          }), 60000);
+          const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
+          const m = /\{[\s\S]*\}/.exec(txt);
+          if (m) { try { act = JSON.parse(m[0]); } catch (e) { act = null; } }
+          if (!act) {
+            const stop = (r && r.stop) || "";
+            lastErr = (r && !r.ok && r.error) ? String(r.error) : (stop === "refusal" ? "refusal" : stop && stop !== "end_turn" ? `stop=${stop}` : "empty");
+            if (stop === "refusal") refused = true;
+            this.gateNote(`컴퓨터 · 모델 응답 이상 (${attempt + 1}/3): ${lastErr}${blind ? " [blind]" : ""} ${txt.slice(0, 80)}`);
+            await wait(500);
+          } else if (blind) {
+            this.gateNote("컴퓨터 · 화면 없이(blind) 행동 결정");
+          }
+        }
+        if (!act) { result = `실패: 조작 모듈 응답 없음 (${lastErr})`; break; }
+        if (act.done) { result = act.note || "완료"; log(`done — ${result}`); break; }
+        if (act.fail) { result = `실패: ${act.note || ""}`; log(`fail — ${act.note || ""}`); break; }
+        const actions = Array.isArray(act.actions) ? act.actions.slice(0, 4) : (act.action ? [act] : []);
+        if (!actions.length) { result = "실패: 행동 없음"; break; }
+        for (const a of actions) {
+          const name = String(a.action || "");
+          const key = `${name}:${a.x ?? ""},${a.y ?? ""}:${a.text || a.keys || a.url || a.app || ""}`;
+          repeat = key === lastActKey ? repeat + 1 : 0; lastActKey = key;
+          const desc = `${name}${a.x != null ? ` (${a.x},${a.y})` : ""}${a.text ? ` "${String(a.text).slice(0, 30)}"` : ""}${a.keys ? ` ${a.keys}` : ""}${a.url ? ` ${a.url}` : ""}${a.app ? ` ${a.app}` : ""} — ${a.note || ""}`;
+          steps.push(desc); log(desc);
+          if (repeat >= 3) { steps.push("(같은 행동 3회 반복 — 다른 방법 필요)"); break; }
+          if (name === "click") await send("cu.click", { x: a.x, y: a.y, count: 1 });
+          else if (name === "double_click") await send("cu.click", { x: a.x, y: a.y, count: 2 });
+          else if (name === "right_click") await send("cu.click", { x: a.x, y: a.y, button: "right" });
+          else if (name === "move") await send("cu.move", { x: a.x, y: a.y });
+          else if (name === "drag") await send("cu.drag", { x: a.x, y: a.y, x2: a.x2, y2: a.y2 });
+          else if (name === "scroll") await send("cu.scroll", { x: a.x ?? shot.w / 2, y: a.y ?? shot.h / 2, dy: a.dy ?? -5 });
+          else if (name === "type") await send("cu.type", { text: String(a.text || "") });
+          else if (name === "key") await send("cu.key", { keys: String(a.keys || "") });
+          else if (name === "open_url") OmniNet.openUrl(String(a.url || ""));
+          else if (name === "open_app") { const r2 = await send("cu.openApp", { name: String(a.app || "") }); if (!r2 || !r2.ok) steps.push(`(앱을 찾지 못함: ${a.app})`); }
+          else if (name === "zoom") { const z = await send("cu.zoom", { x: a.x, y: a.y, w: a.w || 320, h: a.h || 220 }); if (z && z.ok) zoom = z; }
+          await wait(name === "open_url" || name === "open_app" || name === "wait" ? 1200 : name === "zoom" ? 50 : 350);
+        }
       }
     } catch (e) {
       result = `실패: ${e.message || e}`;

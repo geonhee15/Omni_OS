@@ -2004,6 +2004,46 @@ static void OmniCuPostMouse(CGEventType type, CGPoint p, CGMouseButton btn, int 
 
 static void OmniCuSleep(double sec) { usleep((useconds_t)(sec * 1e6)); }
 
+// 현재 커서에서 목표까지 부드럽게 미끄러져 이동 (ease-out, ~120ms) — 급한 순간이동 대신 자연스러운 조작
+static void OmniCuGlide(CGPoint to) {
+    CGEventRef e = CGEventCreate(NULL);
+    CGPoint from = CGEventGetLocation(e);
+    CFRelease(e);
+    double dist = hypot(to.x - from.x, to.y - from.y);
+    int steps = (int)MIN(14, MAX(4, dist / 60.0));
+    for (int i = 1; i <= steps; i++) {
+        double t = (double)i / steps;
+        double k = 1 - pow(1 - t, 2.2);              // ease-out
+        CGPoint p = CGPointMake(from.x + (to.x - from.x) * k, from.y + (to.y - from.y) * k);
+        OmniCuPostMouse(kCGEventMouseMoved, p, kCGMouseButtonLeft, 1);
+        OmniCuSleep(0.008);
+    }
+    OmniCuPostMouse(kCGEventMouseMoved, to, kCGMouseButtonLeft, 1);
+}
+
+// 앱 이름으로 실행/전면 (NSWorkspace) — 독 아이콘 좌표 추정보다 훨씬 확실
+static BOOL OmniCuOpenApp(NSString *name) {
+    NSWorkspace *ws = NSWorkspace.sharedWorkspace;
+    for (NSRunningApplication *app in ws.runningApplications) {
+        if (app.localizedName && [app.localizedName caseInsensitiveCompare:name] == NSOrderedSame) {
+            return [app activateWithOptions:NSApplicationActivateAllWindows];
+        }
+    }
+    NSArray *dirs = @[ @"/Applications", [NSHomeDirectory() stringByAppendingPathComponent:@"Applications"],
+                       @"/System/Applications", @"/System/Applications/Utilities" ];
+    for (NSString *d in dirs) {
+        NSString *p = [d stringByAppendingPathComponent:[name stringByAppendingString:@".app"]];
+        if ([NSFileManager.defaultManager fileExistsAtPath:p]) {
+            NSURL *u = [NSURL fileURLWithPath:p];
+            NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration];
+            cfg.activates = YES;
+            [ws openApplicationAtURL:u configuration:cfg completionHandler:nil];
+            return YES;
+        }
+    }
+    return [ws launchApplication:name];
+}
+
 - (void)handleCU:(NSString *)cmd a:(NSDictionary *)a msgId:(NSString *)msgId {
     if ([cmd isEqualToString:@"cu.status"]) {
         [self deliverPayload:@{ @"ok" : @YES,
@@ -2018,6 +2058,64 @@ static void OmniCuSleep(double sec) { usleep((useconds_t)(sec * 1e6)); }
         BOOL sc = CGPreflightScreenCaptureAccess();
         if (!sc) CGRequestScreenCaptureAccess();
         [self deliverPayload:@{ @"ok" : @YES, @"accessibility" : @(ax), @"screen" : @(sc) } forId:msgId];
+        return;
+    }
+    if ([cmd isEqualToString:@"cu.apps"]) {
+        // 실행 중인 앱 목록 + 전면 앱 — 조작 모듈의 상황 파악용
+        NSMutableArray *names = [NSMutableArray array];
+        for (NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications) {
+            if (app.activationPolicy == NSApplicationActivationPolicyRegular && app.localizedName.length) {
+                [names addObject:app.localizedName];
+            }
+        }
+        NSString *front = NSWorkspace.sharedWorkspace.frontmostApplication.localizedName ?: @"";
+        [self deliverPayload:@{ @"ok" : @YES, @"apps" : names, @"front" : front } forId:msgId];
+        return;
+    }
+    if ([cmd isEqualToString:@"cu.openApp"]) {
+        NSString *name = [a[@"name"] isKindOfClass:[NSString class]] ? a[@"name"] : @"";
+        BOOL ok = name.length > 0 && OmniCuOpenApp(name);
+        [self deliverPayload:@{ @"ok" : @(ok), @"error" : ok ? @"" : @"APP_NOT_FOUND" } forId:msgId];
+        return;
+    }
+    if ([cmd isEqualToString:@"cu.zoom"]) {
+        // 스크린샷 픽셀 좌표의 영역을 원본 해상도로 잘라 확대 (작은 글자·아이콘 확인용)
+        double zx = [a[@"x"] isKindOfClass:[NSNumber class]] ? [a[@"x"] doubleValue] : 0;
+        double zy = [a[@"y"] isKindOfClass:[NSNumber class]] ? [a[@"y"] doubleValue] : 0;
+        double zw = [a[@"w"] isKindOfClass:[NSNumber class]] ? [a[@"w"] doubleValue] : 300;
+        double zh = [a[@"h"] isKindOfClass:[NSNumber class]] ? [a[@"h"] doubleValue] : 200;
+        [SCShareableContent getShareableContentExcludingDesktopWindows:NO onScreenWindowsOnly:YES
+            completionHandler:^(SCShareableContent *content, NSError *error) {
+            SCDisplay *display = nil;
+            for (SCDisplay *d in content.displays) if (d.displayID == CGMainDisplayID()) display = d;
+            if (display == nil) display = content.displays.firstObject;
+            if (error != nil || display == nil) {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"SCREEN_DENIED" } forId:msgId];
+                return;
+            }
+            double back = NSScreen.mainScreen.backingScaleFactor;
+            // 스크린샷 px → 포인트 → 원본 px
+            CGRect ptRect = CGRectMake(zx / gCuScale, zy / gCuScale, zw / gCuScale, zh / gCuScale);
+            SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+            SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
+            cfg.sourceRect = ptRect;
+            cfg.width = (NSUInteger)(ptRect.size.width * back);
+            cfg.height = (NSUInteger)(ptRect.size.height * back);
+            cfg.showsCursor = NO;
+            [SCScreenshotManager captureImageWithFilter:filter configuration:cfg
+                completionHandler:^(CGImageRef img, NSError *err2) {
+                if (err2 != nil || img == NULL) {
+                    [self deliverPayload:@{ @"ok" : @NO, @"error" : err2.localizedDescription ?: @"ZOOM_FAILED" } forId:msgId];
+                    return;
+                }
+                NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:img];
+                NSData *jpg = [rep representationUsingType:NSBitmapImageFileTypeJPEG
+                                                properties:@{ NSImageCompressionFactor : @0.85 }];
+                [self deliverPayload:@{ @"ok" : @YES, @"jpeg" : [jpg base64EncodedStringWithOptions:0],
+                                        @"w" : @(CGImageGetWidth(img)), @"h" : @(CGImageGetHeight(img)),
+                                        @"x" : @(zx), @"y" : @(zy), @"zw" : @(zw), @"zh" : @(zh) } forId:msgId];
+            }];
+        }];
         return;
     }
     if ([cmd isEqualToString:@"cu.screenshot"]) {
@@ -2070,14 +2168,14 @@ static void OmniCuSleep(double sec) { usleep((useconds_t)(sec * 1e6)); }
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         if ([cmd isEqualToString:@"cu.move"]) {
             CGPoint p = OmniCuPoint(a, @"x", @"y");
-            OmniCuPostMouse(kCGEventMouseMoved, p, kCGMouseButtonLeft, 1);
+            OmniCuGlide(p);
         } else if ([cmd isEqualToString:@"cu.click"]) {
             CGPoint p = OmniCuPoint(a, @"x", @"y");
             NSString *btn = [a[@"button"] isKindOfClass:[NSString class]] ? a[@"button"] : @"left";
             int count = [a[@"count"] isKindOfClass:[NSNumber class]] ? [a[@"count"] intValue] : 1;
             BOOL right = [btn isEqualToString:@"right"];
-            OmniCuPostMouse(kCGEventMouseMoved, p, kCGMouseButtonLeft, 1);
-            OmniCuSleep(0.08);
+            OmniCuGlide(p);                 // 부드럽게 이동 후
+            OmniCuSleep(0.06);              // 잠깐 멈춰(호버) 클릭 — 침착한 조작
             for (int i = 1; i <= MAX(1, count); i++) {
                 OmniCuPostMouse(right ? kCGEventRightMouseDown : kCGEventLeftMouseDown, p,
                                 right ? kCGMouseButtonRight : kCGMouseButtonLeft, i);

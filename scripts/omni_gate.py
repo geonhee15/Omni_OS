@@ -91,6 +91,8 @@ class Gate:
             self.threshold = float(threshold)
         self.muted = False
         self.omni_speaking = False      # 옴니 발화 중 (루프백 있는 앱에서 mute 대신 사용)
+        self.speak_from = 0.0
+        self.speak_until = 0.0
         self.in_speech = False
         self.seg = []
         self.pre = []                       # 프리롤 링버퍼 (청크 단위)
@@ -547,7 +549,11 @@ class Gate:
                "lips": lips, "dur": round(dur, 2), "t0": round(t0, 2)}
         if why:
             out["why"] = why
-        if not user and label == "media" and self.omni_speaking:
+        # 옴니 발화 구간 [speak_from, speak_until(또는 지금)]과 세그먼트의 겹침 비율
+        sp_end = now if self.omni_speaking else self.speak_until
+        overlap = max(0.0, min(now, sp_end + 0.8) - max(t0, self.speak_from))
+        omni_voice = self.speak_from > 0 and overlap >= 0.4 * dur
+        if not user and label == "media" and omni_voice:
             out["why"] = "omni_voice"          # 옴니 자신의 목소리 — 전사·기록하지 않음
         elif not user:
             self.queue_ambient(pcm, t0, label, {"sim": out["sim"], "media": out["media"],
@@ -645,8 +651,13 @@ def handle_cmd(gate: Gate, c: dict):
             emit({"ev": "analysis", "name": None, "verdict": "프로필 없음"})
     elif cmd == "speaking":
         # 옴니가 말하는 중 — 마이크는 열어두되(끼어들기), 루프백으로 걸러진 옴니 목소리는
-        # 주변음 전사에서 제외한다
-        gate.omni_speaking = bool(c.get("on"))
+        # 주변음 전사에서 제외한다. 구간을 기록해 발화 직후 잘린 세그먼트도 잡는다.
+        on = bool(c.get("on"))
+        if on and not gate.omni_speaking:
+            gate.speak_from = time.time()
+        if not on and gate.omni_speaking:
+            gate.speak_until = time.time()
+        gate.omni_speaking = on
     elif cmd == "adapt":
         gate.adapt()
     elif cmd == "threshold":
