@@ -5,6 +5,7 @@
 #import <CoreAudio/CoreAudio.h>
 #import <CoreAudio/AudioHardwareTapping.h>
 #import <CoreAudio/CATapDescription.h>
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <signal.h>
 #import "sp1_status.h"
 #import "sysmon.h"
@@ -1254,6 +1255,14 @@ static NSString *ArcSavesDir(void) {
         [self.arcTask cancel];
         self.arcTask = nil;
         [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    } else if ([cmd hasPrefix:@"cu."]) {
+        NSDictionary *ca = @{};
+        if (arg != nil) {
+            NSData *jd = [arg dataUsingEncoding:NSUTF8StringEncoding];
+            id parsed = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([parsed isKindOfClass:[NSDictionary class]]) ca = parsed;
+        }
+        [self handleCU:cmd a:ca msgId:msgId];
     } else if ([cmd hasPrefix:@"mem."]) {
         NSDictionary *ma = @{};
         if (arg != nil) {
@@ -1952,6 +1961,190 @@ static NSString *OmniAIFsValidate(NSString *path) {
         [self deliverPayload:@{ @"ok" : @(ok),
             @"error" : err.localizedDescription ?: @"" } forId:msgId];
     }
+}
+
+#pragma mark - COMPUTER USE (마우스·키보드·화면 — 옴니가 맥을 직접 조작)
+
+// 좌표 규약: JS는 마지막 스크린샷 픽셀 좌표로 보내고, 여기서 화면 포인트로 환산한다.
+static CGFloat gCuScale = 1.0;   // 스크린샷 px / 화면 pt
+
+static CGKeyCode OmniKeyCode(NSString *name) {
+    static NSDictionary *map = nil;
+    if (map == nil) {
+        map = @{ @"a":@0, @"s":@1, @"d":@2, @"f":@3, @"h":@4, @"g":@5, @"z":@6, @"x":@7, @"c":@8, @"v":@9,
+                 @"b":@11, @"q":@12, @"w":@13, @"e":@14, @"r":@15, @"y":@16, @"t":@17, @"1":@18, @"2":@19,
+                 @"3":@20, @"4":@21, @"6":@22, @"5":@23, @"=":@24, @"9":@25, @"7":@26, @"-":@27, @"8":@28,
+                 @"0":@29, @"]":@30, @"o":@31, @"u":@32, @"[":@33, @"i":@34, @"p":@35, @"enter":@36, @"return":@36,
+                 @"l":@37, @"j":@38, @"'":@39, @"k":@40, @";":@41, @"\\":@42, @",":@43, @"/":@44, @"n":@45,
+                 @"m":@46, @".":@47, @"tab":@48, @"space":@49, @"`":@50, @"backspace":@51, @"delete":@51,
+                 @"esc":@53, @"escape":@53, @"f1":@122, @"f2":@120, @"f3":@99, @"f4":@118, @"f5":@96,
+                 @"f6":@97, @"f7":@98, @"f8":@100, @"f9":@101, @"f10":@109, @"f11":@103, @"f12":@111,
+                 @"home":@115, @"pageup":@116, @"forwarddelete":@117, @"end":@119, @"pagedown":@121,
+                 @"left":@123, @"right":@124, @"down":@125, @"up":@126 };
+    }
+    NSNumber *n = map[name.lowercaseString];
+    return n ? (CGKeyCode)n.unsignedShortValue : (CGKeyCode)0xFFFF;
+}
+
+static CGPoint OmniCuPoint(NSDictionary *a, NSString *kx, NSString *ky) {
+    double x = [a[kx] isKindOfClass:[NSNumber class]] ? [a[kx] doubleValue] : 0;
+    double y = [a[ky] isKindOfClass:[NSNumber class]] ? [a[ky] doubleValue] : 0;
+    if (![a[@"space"] isKindOfClass:[NSString class]] || ![a[@"space"] isEqualToString:@"pt"]) {
+        x /= gCuScale; y /= gCuScale;   // 스크린샷 px → 포인트
+    }
+    return CGPointMake(x, y);
+}
+
+static void OmniCuPostMouse(CGEventType type, CGPoint p, CGMouseButton btn, int clickCount) {
+    CGEventRef e = CGEventCreateMouseEvent(NULL, type, p, btn);
+    if (clickCount > 1) CGEventSetIntegerValueField(e, kCGMouseEventClickState, clickCount);
+    CGEventPost(kCGHIDEventTap, e);
+    CFRelease(e);
+}
+
+static void OmniCuSleep(double sec) { usleep((useconds_t)(sec * 1e6)); }
+
+- (void)handleCU:(NSString *)cmd a:(NSDictionary *)a msgId:(NSString *)msgId {
+    if ([cmd isEqualToString:@"cu.status"]) {
+        [self deliverPayload:@{ @"ok" : @YES,
+                                @"accessibility" : @(AXIsProcessTrusted()),
+                                @"screen" : @(CGPreflightScreenCaptureAccess()) } forId:msgId];
+        return;
+    }
+    if ([cmd isEqualToString:@"cu.request"]) {
+        // 권한 프롬프트 유도 (손쉬운 사용 / 화면 기록)
+        NSDictionary *opts = @{ (__bridge NSString *)kAXTrustedCheckOptionPrompt : @YES };
+        BOOL ax = AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
+        BOOL sc = CGPreflightScreenCaptureAccess();
+        if (!sc) CGRequestScreenCaptureAccess();
+        [self deliverPayload:@{ @"ok" : @YES, @"accessibility" : @(ax), @"screen" : @(sc) } forId:msgId];
+        return;
+    }
+    if ([cmd isEqualToString:@"cu.screenshot"]) {
+        // ScreenCaptureKit (macOS 14+): 메인 디스플레이를 축소 캡처 → JPEG base64
+        double maxW = [a[@"maxWidth"] isKindOfClass:[NSNumber class]] ? [a[@"maxWidth"] doubleValue] : 1280;
+        [SCShareableContent getShareableContentExcludingDesktopWindows:NO onScreenWindowsOnly:YES
+            completionHandler:^(SCShareableContent *content, NSError *error) {
+            SCDisplay *display = nil;
+            for (SCDisplay *d in content.displays) {
+                if (d.displayID == CGMainDisplayID()) { display = d; break; }
+            }
+            if (display == nil) display = content.displays.firstObject;
+            if (error != nil || display == nil) {
+                [self deliverPayload:@{ @"ok" : @NO, @"error" : @"SCREEN_DENIED" } forId:msgId];
+                return;
+            }
+            double ptW = display.width, ptH = display.height;             // 포인트
+            double pxW = ptW * NSScreen.mainScreen.backingScaleFactor;
+            double scaleDown = MIN(1.0, maxW / pxW);
+            NSUInteger ow = (NSUInteger)(pxW * scaleDown);
+            NSUInteger oh = (NSUInteger)(ptH * NSScreen.mainScreen.backingScaleFactor * scaleDown);
+            SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+            SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
+            cfg.width = ow; cfg.height = oh;
+            cfg.showsCursor = YES;
+            cfg.captureResolution = SCCaptureResolutionAutomatic;
+            [SCScreenshotManager captureImageWithFilter:filter configuration:cfg
+                completionHandler:^(CGImageRef img, NSError *err2) {
+                if (err2 != nil || img == NULL) {
+                    [self deliverPayload:@{ @"ok" : @NO,
+                        @"error" : err2.localizedDescription ?: @"SCREEN_DENIED" } forId:msgId];
+                    return;
+                }
+                NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:img];
+                NSData *jpg = [rep representationUsingType:NSBitmapImageFileTypeJPEG
+                                                properties:@{ NSImageCompressionFactor : @0.8 }];
+                size_t w = CGImageGetWidth(img), h = CGImageGetHeight(img);
+                gCuScale = (double)w / ptW;    // 스크린샷 px / 포인트
+                [self deliverPayload:@{ @"ok" : @YES, @"jpeg" : [jpg base64EncodedStringWithOptions:0],
+                                        @"w" : @(w), @"h" : @(h), @"scale" : @(gCuScale),
+                                        @"screenW" : @(ptW), @"screenH" : @(ptH) } forId:msgId];
+            }];
+        }];
+        return;
+    }
+    if (!AXIsProcessTrusted()) {
+        [self deliverPayload:@{ @"ok" : @NO, @"error" : @"AX_DENIED" } forId:msgId];
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        if ([cmd isEqualToString:@"cu.move"]) {
+            CGPoint p = OmniCuPoint(a, @"x", @"y");
+            OmniCuPostMouse(kCGEventMouseMoved, p, kCGMouseButtonLeft, 1);
+        } else if ([cmd isEqualToString:@"cu.click"]) {
+            CGPoint p = OmniCuPoint(a, @"x", @"y");
+            NSString *btn = [a[@"button"] isKindOfClass:[NSString class]] ? a[@"button"] : @"left";
+            int count = [a[@"count"] isKindOfClass:[NSNumber class]] ? [a[@"count"] intValue] : 1;
+            BOOL right = [btn isEqualToString:@"right"];
+            OmniCuPostMouse(kCGEventMouseMoved, p, kCGMouseButtonLeft, 1);
+            OmniCuSleep(0.08);
+            for (int i = 1; i <= MAX(1, count); i++) {
+                OmniCuPostMouse(right ? kCGEventRightMouseDown : kCGEventLeftMouseDown, p,
+                                right ? kCGMouseButtonRight : kCGMouseButtonLeft, i);
+                OmniCuSleep(0.04);
+                OmniCuPostMouse(right ? kCGEventRightMouseUp : kCGEventLeftMouseUp, p,
+                                right ? kCGMouseButtonRight : kCGMouseButtonLeft, i);
+                OmniCuSleep(0.06);
+            }
+        } else if ([cmd isEqualToString:@"cu.drag"]) {
+            CGPoint p1 = OmniCuPoint(a, @"x", @"y"), p2 = OmniCuPoint(a, @"x2", @"y2");
+            OmniCuPostMouse(kCGEventMouseMoved, p1, kCGMouseButtonLeft, 1); OmniCuSleep(0.08);
+            OmniCuPostMouse(kCGEventLeftMouseDown, p1, kCGMouseButtonLeft, 1); OmniCuSleep(0.1);
+            for (int i = 1; i <= 12; i++) {
+                CGPoint m = CGPointMake(p1.x + (p2.x - p1.x) * i / 12.0, p1.y + (p2.y - p1.y) * i / 12.0);
+                OmniCuPostMouse(kCGEventLeftMouseDragged, m, kCGMouseButtonLeft, 1); OmniCuSleep(0.02);
+            }
+            OmniCuPostMouse(kCGEventLeftMouseUp, p2, kCGMouseButtonLeft, 1);
+        } else if ([cmd isEqualToString:@"cu.scroll"]) {
+            CGPoint p = OmniCuPoint(a, @"x", @"y");
+            int dy = [a[@"dy"] isKindOfClass:[NSNumber class]] ? [a[@"dy"] intValue] : -5;
+            int dx = [a[@"dx"] isKindOfClass:[NSNumber class]] ? [a[@"dx"] intValue] : 0;
+            OmniCuPostMouse(kCGEventMouseMoved, p, kCGMouseButtonLeft, 1); OmniCuSleep(0.05);
+            CGEventRef e = CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitLine, 2, dy, dx);
+            CGEventPost(kCGHIDEventTap, e); CFRelease(e);
+        } else if ([cmd isEqualToString:@"cu.type"]) {
+            NSString *text = [a[@"text"] isKindOfClass:[NSString class]] ? a[@"text"] : @"";
+            NSUInteger i = 0;
+            while (i < text.length) {
+                NSRange r = NSMakeRange(i, MIN(16u, (unsigned)(text.length - i)));
+                r = [text rangeOfComposedCharacterSequencesForRange:r];
+                NSString *chunk = [text substringWithRange:r];
+                unichar buf[64]; NSUInteger len = MIN(chunk.length, 64u);
+                [chunk getCharacters:buf range:NSMakeRange(0, len)];
+                CGEventRef down = CGEventCreateKeyboardEvent(NULL, 0, true);
+                CGEventKeyboardSetUnicodeString(down, len, buf);
+                CGEventPost(kCGHIDEventTap, down); CFRelease(down);
+                CGEventRef up = CGEventCreateKeyboardEvent(NULL, 0, false);
+                CGEventKeyboardSetUnicodeString(up, len, buf);
+                CGEventPost(kCGHIDEventTap, up); CFRelease(up);
+                OmniCuSleep(0.03);
+                i = r.location + r.length;
+            }
+        } else if ([cmd isEqualToString:@"cu.key"]) {
+            // "cmd+shift+t", "enter", "ctrl+c" 등
+            NSString *keys = [a[@"keys"] isKindOfClass:[NSString class]] ? a[@"keys"] : @"";
+            CGEventFlags flags = 0; CGKeyCode code = 0xFFFF;
+            for (NSString *part in [keys.lowercaseString componentsSeparatedByString:@"+"]) {
+                NSString *k = [part stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+                if ([k isEqualToString:@"cmd"] || [k isEqualToString:@"command"]) flags |= kCGEventFlagMaskCommand;
+                else if ([k isEqualToString:@"shift"]) flags |= kCGEventFlagMaskShift;
+                else if ([k isEqualToString:@"alt"] || [k isEqualToString:@"option"]) flags |= kCGEventFlagMaskAlternate;
+                else if ([k isEqualToString:@"ctrl"] || [k isEqualToString:@"control"]) flags |= kCGEventFlagMaskControl;
+                else code = OmniKeyCode(k);
+            }
+            if (code != 0xFFFF) {
+                CGEventRef down = CGEventCreateKeyboardEvent(NULL, code, true);
+                CGEventSetFlags(down, flags); CGEventPost(kCGHIDEventTap, down); CFRelease(down);
+                OmniCuSleep(0.04);
+                CGEventRef up = CGEventCreateKeyboardEvent(NULL, code, false);
+                CGEventSetFlags(up, flags); CGEventPost(kCGHIDEventTap, up); CFRelease(up);
+            }
+        } else {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"UNKNOWN_CMD" } forId:msgId];
+            return;
+        }
+        [self deliverPayload:@{ @"ok" : @YES } forId:msgId];
+    });
 }
 
 #pragma mark - MEMORY (~/.omni/memory — 프로필·일지·다이제스트)

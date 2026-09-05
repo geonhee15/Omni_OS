@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.68.0",
+  version: "0.69.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -769,6 +769,7 @@ OmniOS.register("ai", {
     "- 환율·주식: \"달러 환율/삼성전자 주가/비트코인\" 류는 check_markets 도구로 확인해 핵심 수치만 말합니다. 일정: \"오늘 일정/이번 주 뭐 있어\"는 check_calendar, \"내일 3시 치과 잡아줘\"처럼 일정 추가 요청은 add_event 도구(start는 YYYY-MM-DD HH:mm, 종일이면 날짜만)로 맥 캘린더에 등록하고 결과를 보고합니다. 날짜·시각은 [실시간 상태 스냅샷]의 현재 시각 기준으로 계산합니다.",
     "- 패널 전권: OMNI_OS의 모든 패널은 당신 것입니다. 전용 액션이 없는 패널이나 세부 조작은 app_ui 도구로 직접 합니다 — op:'read'로 그 패널의 화면(제목·버튼·입력창·목록)을 읽고, op:'click'(target=버튼 글자)·op:'type'(target=입력창 placeholder/라벨, value=입력값, 끝에 \\n이면 Enter)·op:'select'로 조작한 뒤 다시 read로 결과를 확인합니다. 새 패널이 생겨도 같은 방식으로 씁니다.",
     "- 웹 검색: \"구글에 ○○ 검색해줘\", \"쿠팡에서 ○○ 찾아줘\" 류는 open_web_search(engine: google/naver/youtube/coupang/amazon/maps, query)로 브라우저에 결과 페이지를 바로 엽니다.",
+    "- 컴퓨터 조작: 그 밖에 맥에서 마우스·키보드로 해야 하는 일(사이트 안에서 클릭·입력·스크롤, 앱 조작, 화면 내용 읽기)은 use_computer(task)에 맡깁니다 — 화면을 보고 스스로 조작하는 모듈이며 결과 요약을 돌려줍니다. 수 초~수십 초 걸리니 \"제가 직접 해보겠습니다\" 같은 예고를 먼저 말합니다. 결제·구매 확정·메시지 전송·삭제·로그인 정보 입력은 사용자가 명시적으로 요청했을 때만 합니다.",
     "- 그 외 제어(메일 발송 등)는 아직 미연동이므로 짧게 보고합니다.",
   ].join("\n"),
   // 파일 도구 — Claude tool use 정의 (~/Desktop 아래 전체, 네이티브가 경로 검증)
@@ -924,6 +925,15 @@ OmniOS.register("ai", {
         type: "object",
         properties: { engine: { type: "string" }, query: { type: "string" } },
         required: ["engine", "query"],
+      },
+    },
+    {
+      name: "use_computer",
+      description: "맥의 마우스·키보드를 직접 움직여 작업을 수행한다 (화면 스크린샷을 보며 단계별로 조작하는 에이전트). 사이트 안에서 클릭·입력·스크롤, 앱 열기·조작, 화면 내용 읽기 등 open_web_search로 안 되는 일에 사용. task는 목표를 구체적으로(예: '쿠팡에서 무선 마우스 검색해서 첫 상품 이름과 가격 알려줘'). 최대 25단계, 결과 요약을 돌려준다. 결제·구매·전송·삭제는 사용자 명시 요청 없이는 하지 않는다.",
+      input_schema: {
+        type: "object",
+        properties: { task: { type: "string" } },
+        required: ["task"],
       },
     },
     {
@@ -1560,6 +1570,7 @@ OmniOS.register("ai", {
         return "프로필 기억 저장 완료";
       }
       if (name === "app_ui") return await this.appUI(input);
+      if (name === "use_computer") return await this.computerUse(String(input.task || ""));
       if (name === "open_web_search") {
         const r = await this.runAction(`web.search:${input.engine || "google"}:${input.query || ""}`);
         return r.msg;
@@ -1794,6 +1805,12 @@ OmniOS.register("ai", {
         OmniNet.openUrl(URLS[engine] + encodeURIComponent(q));
         OmniMem.append("action", `웹 검색 열기: ${engine} "${q}"`);
         return { ok: true, msg: `${engine}에서 "${q}" 검색 결과를 브라우저로 열었습니다` };
+      }
+      if (key === "computer") {
+        const task = parts.slice(1).join(":").trim();
+        if (!task) return { ok: false, msg: "작업 내용 없음" };
+        const out = await this.computerUse(task);
+        return { ok: !/^실패/.test(out), msg: out };
       }
       if (key === "ui.read" || key === "ui.click" || key === "ui.type" || key === "ui.select") {
         const out = await this.appUI({ op: key.slice(3), panel: parts[1] || "", target: parts[2] || "", value: parts.slice(3).join(":") });
@@ -2329,6 +2346,16 @@ OmniOS.register("ai", {
         type: "object",
         properties: { engine: { type: "string" }, query: { type: "string" } },
         required: ["engine", "query"],
+      },
+    },
+    {
+      type: "function",
+      name: "use_computer",
+      description: "맥의 마우스·키보드를 직접 움직여 작업 — 사이트 안에서 클릭·입력, 앱 조작, 화면 읽기 등 검색 열기만으로 안 되는 일. task를 구체적으로. 수 초~수십 초 걸리니 \"제가 직접 해보겠습니다\" 같은 예고 후 호출. 결과 요약을 그대로 전한다.",
+      parameters: {
+        type: "object",
+        properties: { task: { type: "string" } },
+        required: ["task"],
       },
     },
     {
@@ -2992,6 +3019,72 @@ OmniOS.register("ai", {
     this.gateCmd({ cmd: "enroll", seconds: 15, kind: "user", name });
   },
 
+  // ================= 컴퓨터 조작 에이전트 (마우스·키보드·화면) =================
+  // 스크린샷을 보고 한 번에 한 행동씩 결정하는 루프. 결제·전송·삭제는 사용자 명시 요청 외 금지.
+  _cuBusy: false,
+  async computerUse(task) {
+    if (!OmniNative.available) return "실패: 앱에서만 가능";
+    if (this._cuBusy) return "실패: 다른 컴퓨터 조작 작업이 진행 중";
+    const st = await OmniNative.request("cu.status", null, 5000).catch(() => null);
+    if (!st || !st.accessibility || !st.screen) {
+      OmniNative.request("cu.request", null, 5000).catch(() => {});
+      const need = [!st || !st.accessibility ? "'손쉬운 사용'" : "", !st || !st.screen ? "'화면 기록'" : ""].filter(Boolean).join("과 ");
+      const msg = `실패: 권한 필요 — 시스템 설정 > 개인정보 보호 및 보안에서 Omni OS에 ${need} 권한을 허용한 뒤 앱을 다시 시작해 주세요`;
+      this.gateNote(`컴퓨터 · ${msg} (accessibility=${st && st.accessibility}, screen=${st && st.screen})`);
+      this.logLine("sys", msg);
+      return msg;
+    }
+    this._cuBusy = true;
+    const steps = [];
+    const MAX = 25;
+    const log = (t) => { const l = this.logLine("sys", `컴퓨터 · ${t}`); l.classList.add("ignored"); this.gateNote(`컴퓨터 · ${t}`); };
+    log(`작업 시작: ${task}`);
+    OmniMem.append("action", `컴퓨터 조작 시작: ${task}`);
+    let result = "실패: 단계 초과";
+    try {
+      for (let i = 0; i < MAX; i++) {
+        const shot = await OmniNative.request("cu.screenshot", JSON.stringify({ maxWidth: 1280 }), 15000);
+        if (!shot || !shot.ok) { result = `실패: 화면 캡처 불가 (${(shot && shot.error) || "?"})`; break; }
+        const history = steps.slice(-8).map((s, k) => `${k + 1}. ${s}`).join("\n") || "(없음)";
+        const r = await OmniNative.request("ai.chat", JSON.stringify({
+          model: "claude-sonnet-5", maxTokens: 300,
+          system: "당신은 개인 AI '옴니'의 컴퓨터 조작 모듈이다. 사용자(건희)의 맥 화면 스크린샷을 보고 목표를 달성할 다음 행동 하나를 JSON 한 줄로만 출력한다: {\"action\":\"click|double_click|right_click|move|drag|scroll|type|key|open_url|wait|done|fail\",\"x\":숫자,\"y\":숫자,\"x2\":숫자,\"y2\":숫자,\"dy\":숫자,\"text\":\"입력할 글자\",\"keys\":\"cmd+l 같은 단축키\",\"url\":\"https://…\",\"note\":\"한 줄 설명(진행 상황이나 최종 결과)\"}.\n규칙: 좌표는 스크린샷 픽셀(왼쪽 위 원점). 웹 페이지는 open_url로 바로 여는 게 가장 빠르다(브라우저 주소창 cmd+l 후 type도 가능). 입력창은 먼저 click으로 포커스한 뒤 type, 확정은 key enter. 페이지 로딩이 필요하면 wait. 목표가 이뤄졌으면 action done + note에 사용자가 원한 정보/결과를 구체적으로(상품명·가격·제목 등 화면에서 읽은 실제 값). 불가능하거나 위험하면 fail + note. 결제·구매 확정·메시지/메일 전송·삭제·로그인 정보 입력은 사용자가 명시적으로 요청한 게 아니면 절대 하지 말고 그 직전에서 done으로 보고한다. 같은 행동을 3번 반복했으면 다른 방법을 쓴다.",
+          messages: [{ role: "user", content: [
+            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: shot.jpeg } },
+            { type: "text", text: `[목표] ${task}\n[화면 크기] ${shot.w}x${shot.h} px\n[지금까지 한 행동]\n${history}\n\n다음 행동 하나를 JSON으로.` },
+          ] }],
+        }), 60000);
+        const txt = (r && r.ok && (r.text || (r.content || []).map((b) => b.text || "").join(""))) || "";
+        const m = /\{[\s\S]*\}/.exec(txt);
+        if (!m) { result = `실패: 조작 모듈 응답 없음${r && r.error ? " (" + r.error + ")" : ""}`; break; }
+        let act; try { act = JSON.parse(m[0]); } catch (e) { result = "실패: 조작 모듈 출력 파싱 실패"; break; }
+        const a = String(act.action || "");
+        steps.push(`${a}${act.x != null ? ` (${act.x},${act.y})` : ""}${act.text ? ` "${String(act.text).slice(0, 30)}"` : ""}${act.keys ? ` ${act.keys}` : ""}${act.url ? ` ${act.url}` : ""} — ${act.note || ""}`);
+        log(steps[steps.length - 1]);
+        if (a === "done") { result = act.note || "완료"; break; }
+        if (a === "fail") { result = `실패: ${act.note || ""}`; break; }
+        const send = (cmd, obj) => OmniNative.request(cmd, JSON.stringify(obj), 10000).catch(() => null);
+        if (a === "click") await send("cu.click", { x: act.x, y: act.y, count: 1 });
+        else if (a === "double_click") await send("cu.click", { x: act.x, y: act.y, count: 2 });
+        else if (a === "right_click") await send("cu.click", { x: act.x, y: act.y, button: "right" });
+        else if (a === "move") await send("cu.move", { x: act.x, y: act.y });
+        else if (a === "drag") await send("cu.drag", { x: act.x, y: act.y, x2: act.x2, y2: act.y2 });
+        else if (a === "scroll") await send("cu.scroll", { x: act.x ?? shot.w / 2, y: act.y ?? shot.h / 2, dy: act.dy ?? -5 });
+        else if (a === "type") await send("cu.type", { text: String(act.text || "") });
+        else if (a === "key") await send("cu.key", { keys: String(act.keys || "") });
+        else if (a === "open_url") OmniNet.openUrl(String(act.url || ""));
+        await new Promise((res) => setTimeout(res, a === "open_url" || a === "wait" ? 1800 : 700));
+      }
+    } catch (e) {
+      result = `실패: ${e.message || e}`;
+    } finally {
+      this._cuBusy = false;
+    }
+    log(`결과: ${result}`);
+    OmniMem.append("action", `컴퓨터 조작 결과: ${result.slice(0, 300)}`);
+    return result;
+  },
+
   // ================= 패널 UI 직접 조작 (전권) =================
   // 어떤 패널이든 화면에 있는 것을 읽고, 글자로 버튼을 찾아 누르고, 입력창에 쓴다.
   async appUI(input) {
@@ -3105,7 +3198,7 @@ OmniOS.register("ai", {
     } else if (name === "calculate") {
       this.logLine("sys", `도구 · calculate ${(args && args.expression) || ""}`);
       output = await this.execTool("calculate", args || {});
-    } else if (["check_markets", "check_calendar", "add_event", "recall_memory", "open_web_search", "app_ui"].includes(name)) {
+    } else if (["check_markets", "check_calendar", "add_event", "recall_memory", "open_web_search", "app_ui", "use_computer"].includes(name)) {
       this.logLine("sys", `도구 · ${name}`);
       output = await this.execTool(name, args || {});
     } else {
