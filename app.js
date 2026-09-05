@@ -771,6 +771,11 @@ OmniOS.register("ai", {
   _pendingSim: null,
   _pendingThr: 0,
   _pendingStart: 0,
+  _pendingDur: 0,
+  _rtResponding: false,
+  _rtQueuedCreate: false,
+  // 전사 환각 상투구 (음악·효과음 구간에서 전사기가 지어내는 문장들)
+  HALLU_RE: /(시청해\s*주셔서|구독과?\s*좋아요|자막\s*(제공|by)|OMNI_OS|AI 비서 이름|사용자는 '?옴니|아라비아 숫자|MBC 뉴스|KBS 뉴스|감사합니다\.?$)/i,
   _gateProfile: false,
   _gateRunning: false,
   _lastOmniDoneAt: 0,
@@ -2166,7 +2171,7 @@ OmniOS.register("ai", {
             format: { type: "audio/pcm", rate: 24000 },
             transcription: {
               model: "gpt-4o-transcribe",
-              prompt: "OMNI_OS의 AI 비서 이름은 '옴니'. 사용자는 '옴니야', '옴니' 하고 부른다. 한국어 대화, 숫자는 아라비아 숫자.",
+              prompt: "옴니, 옴니야, 오미니아, OMNI_OS",
             },
             turn_detection: this.alwaysOn ? null : {
               type: "server_vad",
@@ -2307,6 +2312,8 @@ OmniOS.register("ai", {
     if (!this.live) return;
     if (t === "session.created") {
       this.logLine("sys", `LIVE 연결됨 · ${this.RT_MODEL} · marin`);
+    } else if (t === "response.created") {
+      this._rtResponding = true;
     } else if (t === "input_audio_buffer.speech_started") {
       this.rtStopPlayback(); // 사용자가 말 시작 — 재생 중이면 끊고 듣기
       if (!this._rtUserLine) this._rtUserLine = this.logLine("you", "…", true);
@@ -2330,6 +2337,8 @@ OmniOS.register("ai", {
       if (this.alwaysOn && !this._gateMuted) this.gateMute(true); // 옴니 발화 중 마이크 무시
       this.rtPlayDelta(ev.delta);
     } else if (t === "response.done") {
+      this._rtResponding = false;
+      if (this._rtQueuedCreate) { this._rtQueuedCreate = false; this.rtCreateResponse(); }
       if (this.alwaysOn) {
         // 재생이 끝나는 시점에 뮤트 해제 + 대화 이어가기 창 시작
         const ctxNow = this._rtCtx ? this._rtCtx.currentTime : 0;
@@ -2375,7 +2384,9 @@ OmniOS.register("ai", {
       try { args = JSON.parse(ev.arguments || "{}"); } catch (e) { /* 무시 */ }
       this.handleRtTool(ev.call_id, ev.name, args);
     } else if (t === "error") {
-      this.logLine("sys", `LIVE 오류: ${(ev.error && ev.error.message) || ""}`);
+      const msg = (ev.error && ev.error.message) || "";
+      if (/active response/i.test(msg)) { this._rtQueuedCreate = true; return; }
+      this.logLine("sys", `LIVE 오류: ${msg}`);
     }
   },
 
@@ -2412,7 +2423,7 @@ OmniOS.register("ai", {
     }
     this.setState("listening", "ALWAYS", "on");
     this.setInd(this.els.indTts, "ALWAYS", "ok");
-    this.logLine("sys", "상시 대기 ON — 등록된 내 목소리로 \"옴니야 …\" 하고 부를 때만 답합니다. 답한 뒤 8초 안의 말은 이어지는 대화로 봅니다.");
+    this.logLine("sys", "상시 대기 ON — 등록된 내 목소리로 \"옴니야 …\" 하고 부를 때만 답합니다. 답한 뒤 15초 안에 시작한 말은 이어지는 대화로 봅니다.");
     this.gateNote("상시 대기 시작");
   },
 
@@ -2426,6 +2437,27 @@ OmniOS.register("ai", {
     OmniNative.request("ai.gateStop", null, 5000).catch(() => {});
     this.gateNote(`상시 대기 종료 (${reason})`);
     if (!fromStopLive && this.live) this.stopLive(reason);
+  },
+
+  // 응답 생성 — 진행 중인 응답이 있으면 끝난 뒤 생성 (active response 오류 방지)
+  rtCreateResponse() {
+    if (this._rtResponding) { this._rtQueuedCreate = true; return; }
+    this._rtResponding = true;
+    this.rtSend({ type: "response.create" });
+  },
+
+  // 전사 정제: 환각 차단 + 호출어만 있는 발화 판별
+  sanitizeTranscript(text, dur) {
+    let t = String(text || "")
+      .replace(/[\u3400-\u9FFF]/g, " ")                 // 한자 — 한국어 대화 전사엔 없음
+      .replace(/[^\p{L}\p{N}\s.,!?%'\-]/gu, " ")
+      .replace(/\s+/g, " ").trim();
+    if (!t) return { drop: true, why: "빈 전사" };
+    if (this.HALLU_RE.test(t)) return { drop: true, why: "전사 환각(상투구·프롬프트)" };
+    if (dur && dur < 0.7 && t.length > 12) return { drop: true, why: "전사 환각(길이 불일치)" };
+    const rest = t.replace(this.WAKE_RE, "").replace(/[\s.,!?'\-0-9]/g, "");
+    if (this.WAKE_RE.test(t) && rest.length <= 2) return { wakeOnly: true, text: t };
+    return { text: t };
   },
 
   gateCmd(obj) {
@@ -2461,6 +2493,7 @@ OmniOS.register("ai", {
         this._pendingSim = ev.sim;
         this._pendingThr = ev.thr || 0;
         this._pendingStart = this._speechStartAt || Date.now();
+        this._pendingDur = ev.dur || 0;
         this.gateNote(`통과(${this._pendingBand}) · sim=${ev.sim} thr=${ev.thr} dur=${ev.dur} sent=${ev.sent}`);
         if (this.alwaysOn && !this._rtUserLine) this._rtUserLine = this.logLine("you", "…", true);
       } else if (ev.why !== "short") {
@@ -2503,12 +2536,27 @@ OmniOS.register("ai", {
     return { addressed: false, reason: "호출어 없음" };
   },
 
-  async gateDecide(itemId, text) {
+  async gateDecide(itemId, rawText) {
     const line = this._rtUserLine;
     this._rtUserLine = null;
-    if (!text) {
+    const san = this.sanitizeTranscript(rawText, this._pendingDur);
+    this._pendingDur = 0;
+    if (san.drop) {
       if (line) line.remove();
       if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId });
+      if (san.why !== "빈 전사") {
+        this.gateNote(`무시 · ${san.why}: ${rawText}`);
+        const l = this.logLine("sys", `무시 · ${san.why}`); l.classList.add("ignored");
+      }
+      return;
+    }
+    const text = san.text;
+    if (san.wakeOnly) {
+      // "옴니야," 만 들림 — 답하지 않고 15초 듣는 창만 연다 (환각·부름만 한 경우 모두 안전)
+      if (line) { line.querySelector(".txt").textContent = `${text} (듣는 중)`; line.classList.remove("pending"); }
+      if (itemId) this.rtSend({ type: "conversation.item.delete", item_id: itemId });
+      this._lastOmniDoneAt = Date.now();
+      this.gateNote(`호출만 감지 → 듣는 창 15초: ${text}`);
       return;
     }
     // 이어가기 창은 발화 *시작* 시각 기준 (긴 문장을 말하면 끝날 땐 창 밖이 되던 문제)
@@ -2535,7 +2583,7 @@ OmniOS.register("ai", {
       else this.logLine("you", text);
       this.history.push({ role: "user", content: text });
       this.trimHistory();
-      this.rtSend({ type: "response.create" });
+      this.rtCreateResponse();
       this.gateNote(`응답 · ${reason}: ${text}`);
       if (reason === "호출어") this.gateCmd({ cmd: "adapt" }); // 본인 확실 → 프로필 적응
     } else {

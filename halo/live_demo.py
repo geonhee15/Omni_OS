@@ -47,7 +47,23 @@ GATE_SCRIPT = os.path.join(REPO, "scripts/omni_gate.py")
 USE_GATE = os.path.exists(GATE_PY) and os.path.exists(GATE_SCRIPT) \
     and "--no-gate" not in sys.argv
 WAKE_RE = re.compile(r"(옴니|omni|오므니|옴늬|옴미|^\s*(엄니|음니|오니|옴니)\s*[야아,]?)", re.I)
-FOLLOWUP_SEC = 8.0
+FOLLOWUP_SEC = 15.0
+HALLU_RE = re.compile(r"(시청해\s*주셔서|구독과?\s*좋아요|자막\s*(제공|by)|OMNI_OS|AI 비서 이름|사용자는 '?옴니|아라비아 숫자|MBC 뉴스|KBS 뉴스)", re.I)
+
+
+def sanitize_transcript(text: str):
+    """전사 정제: 환각(프롬프트 되풀이·한자·상투구) 차단, 호출어만 있는 발화 판별."""
+    t = re.sub(r"[\u3400-\u9fff]", " ", text or "")
+    t = re.sub(r"[^\w\s.,!?%'\-]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return {"drop": True, "why": "빈 전사"}
+    if HALLU_RE.search(t):
+        return {"drop": True, "why": "전사 환각"}
+    rest = re.sub(r"[\s.,!?'\-0-9]", "", WAKE_RE.sub("", t))
+    if WAKE_RE.search(t) and len(rest) <= 2:
+        return {"wake_only": True, "text": t}
+    return {"text": t}
 URL = f"wss://api.openai.com/v1/realtime?model={RT_MODEL}"
 
 PANELS = ("cmd", "ai", "notif", "clock", "proj", "sys", "sp1", "r3d",
@@ -271,7 +287,7 @@ async def bridge():
                         "format": {"type": "audio/pcm", "rate": 24000},
                         "transcription": {
                             "model": "gpt-4o-transcribe",
-                            "prompt": "OMNI_OS의 AI 비서 이름은 '옴니'. 사용자는 '옴니야', '옴니' 하고 부른다. 한국어 대화, 숫자는 아라비아 숫자.",
+                            "prompt": "옴니, 옴니야, 오미니아, OMNI_OS",
                         },
                         "turn_detection": None if USE_GATE else {
                             "type": "server_vad", "threshold": 0.7,
@@ -459,8 +475,13 @@ async def bridge():
                         # 3단: 옴니에게 한 말인가 — 호출어 / 이어가기 창(분류기)
                         item_id = ev.get("item_id")
                         follow = time.time() - gate_state["last_done"] < FOLLOWUP_SEC
-                        if not ut:
-                            addressed, why = False, "빈 전사"
+                        san = sanitize_transcript(ut)
+                        ut = san.get("text", ut)
+                        if san.get("drop"):
+                            addressed, why = False, san["why"]
+                        elif san.get("wake_only"):
+                            gate_state["last_done"] = time.time()   # 듣는 창만 열기
+                            addressed, why = False, "호출만 감지 → 듣는 창"
                         elif WAKE_RE.search(ut):
                             addressed, why = True, "호출어"
                         elif follow:
