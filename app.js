@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.75.0",
+  version: "0.76.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -13,6 +13,7 @@ const OmniOS = {
   // 카메라 감시기(SP-1)가 UDP로 보낸 손 포즈 — 네이티브가 넘겨준다. 관심 있는 모듈에 배달.
   gestureEvent(ev) {
     if (!ev || typeof ev !== "object" || !ev.gesture) return;
+    if (this.modules.quiet && this.modules.quiet.active) return;   // 학교 모드: 제스처 명령 무시
     for (const m of Object.values(this.modules)) {
       if (typeof m.onGesture === "function") {
         try { Promise.resolve(m.onGesture(ev)).catch(() => {}); } catch (e) { /* 모듈 오류 격리 */ }
@@ -796,6 +797,7 @@ const OmniScreen = {
   async observe(force) {
     const ai = OmniOS.modules.ai;
     if (this._busy || !OmniNative.available || !ai || (!ai.alwaysOn && !force)) return null;
+    if (OmniOS.modules.quiet && OmniOS.modules.quiet.active) return null;   // 학교 모드: 화면 캡처 금지
     // 지난번에 타이밍이 안 맞아 미뤄둔 질문이 있으면 지금 조용할 때 꺼낸다
     if (this._queued && this.canAsk()) { const q = this._queued; this._queued = null; this.ask(q); }
     this._busy = true;
@@ -969,6 +971,7 @@ OmniOS.register("ai", {
     "- 날씨: \"날씨 어때/내일 비 와?\" 류는 check_weather 도구(city 생략 시 현재 설정 위치, 지정 시 그 도시)로 확인해 핵심만 말합니다. 뉴스: \"뉴스 보여줘/○○ 관련 소식\" 류는 check_news 도구(category 또는 query)로 헤드라인을 읽어 3~5개로 요약합니다. 지도: 장소를 보여 달라면 [[ACT:map.search:장소]]로 MAP 패널에 표시합니다.",
     "- 사실 규칙: 도구 결과에 있는 수치·시각·이름만 말합니다. 도구 결과에 없는 정보(예: 일정 종료 시각, 금액)는 추정하거나 '보통'으로 채우지 말고 '기록에 없습니다'라고 말합니다. 확실하냐고 물으면 도구를 다시 호출해 원본을 확인합니다.",
     "- 계산: 숫자 계산(산수·퍼센트·환산·평균·큰 수)은 절대 암산하지 않고 calculate 도구에 파이썬식 수식으로 넘겨 그 결과를 말합니다. 여러 단계면 도구를 여러 번 호출합니다.",
+    "- 학교/시험 모드(quiet_mode): \"학교 모드 켜줘\", \"카메라 다 꺼줘\", \"시험 볼 거야\"는 즉시 quiet_mode(on=true)로 카메라 감시(SP-1)·마이크·화면 관찰을 전부 정지하고 짧게 확인만 합니다. 집 밖 네트워크에서는 자동으로 켜집니다.",
     "- 스마트 조명·플러그(SMART CONTROL 패널, Tapo): \"불 꺼줘/켜줘\", \"30분 뒤에 꺼줘\", \"조명 켜져 있어?\"는 smart_control 도구로 직접 실행하고 결과(켜짐/꺼짐)를 확인해 보고합니다. 기기가 없거나 계정이 없다는 결과면 패널의 SETUP/SCAN 절차를 안내합니다.",
     "- 환율·주식: \"달러 환율/삼성전자 주가/비트코인\" 류는 check_markets 도구로 확인해 핵심 수치만 말합니다. 일정: \"오늘 일정/이번 주 뭐 있어\"는 check_calendar, \"내일 3시 치과 잡아줘\"처럼 일정 추가 요청은 add_event 도구(start는 YYYY-MM-DD HH:mm, 종일이면 날짜만)로 맥 캘린더에 등록하고 결과를 보고합니다. 날짜·시각은 [실시간 상태 스냅샷]의 현재 시각 기준으로 계산합니다.",
     "- 패널 전권: OMNI_OS의 모든 패널은 당신 것입니다. 전용 액션이 없는 패널이나 세부 조작은 app_ui 도구로 직접 합니다 — op:'read'로 그 패널의 화면(제목·버튼·입력창·목록)을 읽고, op:'click'(target=버튼 글자)·op:'type'(target=입력창 placeholder/라벨, value=입력값, 끝에 \\n이면 Enter)·op:'select'로 조작한 뒤 다시 read로 결과를 확인합니다. 새 패널이 생겨도 같은 방식으로 씁니다.",
@@ -1108,6 +1111,15 @@ OmniOS.register("ai", {
           minutes: { type: "number" }, location: { type: "string" }, notes: { type: "string" },
         },
         required: ["title", "start"],
+      },
+    },
+    {
+      name: "quiet_mode",
+      description: "학교/시험 모드 — '학교 모드 켜줘', '시험 모드', '카메라 다 꺼줘', '조용히 있어'. on=true면 카메라 감시(SP-1)·마이크 상시 대기·화면 관찰·제스처를 모두 정지(minutes 지정 시 그 뒤 자동 해제, 없으면 끌 때까지). on=false면 해제. action=status면 현재 상태만.",
+      input_schema: {
+        type: "object",
+        properties: { on: { type: "boolean" }, minutes: { type: "number" }, action: { type: "string", enum: ["set", "status"] } },
+        required: [],
       },
     },
     {
@@ -1303,9 +1315,14 @@ OmniOS.register("ai", {
     });
     if (OmniNative.available) {
       this.updateVoiceId();
-      // 상시 대기가 켜져 있었으면 앱 시작 시 자동 복귀
+      // 상시 대기가 켜져 있었으면 앱 시작 시 자동 복귀 — 단, 학교 모드(집 밖·수동)면 켜지 않는다
       if (localStorage.getItem("omni.ai.always") === "1") {
-        setTimeout(() => { if (!this.alwaysOn) this.toggleAlways(); }, 4000);
+        setTimeout(async () => {
+          const q = OmniOS.modules.quiet;
+          if (q) await q.poll();
+          if (q && q.active) { const l = this.logLine("sys", `학교 모드 (${q.why}) — 상시 대기 자동 시작 생략`); l.classList.add("ignored"); return; }
+          if (!this.alwaysOn) this.toggleAlways();
+        }, 4000);
       }
     }
     this.els.send.addEventListener("click", () => this.sendFromInput());
@@ -1884,6 +1901,12 @@ OmniOS.register("ai", {
         const r = await sc.control(input || {});
         return r.ok ? r.msg : `오류: ${r.msg}`;
       }
+      if (name === "quiet_mode") {
+        const q = OmniOS.modules.quiet;
+        if (!q) return "오류: 학교 모드 모듈 없음";
+        if ((input && input.action) === "status" || (input && input.on == null)) { await q.poll(); return q.summary(); }
+        return await q.set(!!input.on, Number(input.minutes) || 0, "manual");
+      }
       if (name === "check_gmail") {
         const r = await OmniNative.request("ai.gmailRecent",
           JSON.stringify({ hours: input.hours || 48 }), 30000);
@@ -2083,6 +2106,13 @@ OmniOS.register("ai", {
       if (key === "ai.enroll") {
         await this.enrollVoice();
         return { ok: true, msg: "목소리 등록 시작" };
+      }
+      if (key === "quiet.on" || key === "quiet.off" || key === "school.on" || key === "school.off") {
+        // 학교 모드: quiet.on[:분] / quiet.off — 카메라(SP-1)·마이크·화면 관찰 정지
+        const q = OmniOS.modules.quiet;
+        if (!q) return { ok: false, msg: "학교 모드 모듈 없음" };
+        const msg = await q.set(key.endsWith(".on"), Number(parts[1]) || 0, "manual");
+        return { ok: true, msg };
       }
       if (key === "ai.always") {
         const want = (parts[1] || "on").toLowerCase() !== "off";
@@ -2692,6 +2722,16 @@ OmniOS.register("ai", {
     },
     {
       type: "function",
+      name: "quiet_mode",
+      description: "학교/시험 모드 — \"학교 모드 켜줘\", \"카메라 다 꺼줘\", \"시험 볼 거야\". on=true면 카메라 감시·마이크·화면 관찰 전부 정지(이 통화도 곧 끊김), on=false면 해제, action=status면 상태만. 켜 달라는 요청엔 확인 없이 바로 켠다.",
+      parameters: {
+        type: "object",
+        properties: { on: { type: "boolean" }, minutes: { type: "number" }, action: { type: "string" } },
+        required: [],
+      },
+    },
+    {
+      type: "function",
       name: "smart_control",
       description: "집 안 스마트 플러그·전구(Tapo) 제어 — \"불 꺼줘/켜줘\", \"30분 뒤에 꺼줘\", \"조명 밝기 40%\", \"불 켜져 있어?\". action: status/on/off/toggle/timer(minutes 뒤 끄기, timer_action=on이면 켜기)/cancel_timer/brightness(전구만)/scan. device는 기기 이름 일부(하나뿐이면 생략). 결과를 한 문장으로 말한다.",
       parameters: {
@@ -3009,6 +3049,11 @@ OmniOS.register("ai", {
     if (this.alwaysOn) { this.stopAlways("종료"); return; }
     if (!OmniNative.available) {
       this.logLine("sys", "상시 대기는 앱에서만 동작합니다.");
+      return;
+    }
+    const quiet = OmniOS.modules.quiet;
+    if (quiet && quiet.active) {
+      this.logLine("sys", `학교 모드 중 (${quiet.why}) — 상시 대기를 켤 수 없습니다. 집 네트워크로 돌아오거나 하단의 SCHOOL MODE를 끄십시오.`);
       return;
     }
     const st = await OmniNative.request("ai.gateStatus", null, 5000).catch(() => null);
@@ -3632,7 +3677,7 @@ OmniOS.register("ai", {
     } else if (name === "calculate") {
       this.logLine("sys", `도구 · calculate ${(args && args.expression) || ""}`);
       output = await this.execTool("calculate", args || {});
-    } else if (["check_markets", "check_calendar", "add_event", "smart_control", "recall_memory", "open_web_search", "app_ui", "use_computer", "run_shell"].includes(name)) {
+    } else if (["check_markets", "check_calendar", "add_event", "smart_control", "quiet_mode", "recall_memory", "open_web_search", "app_ui", "use_computer", "run_shell"].includes(name)) {
       this.logLine("sys", `도구 · ${name}`);
       output = await this.execTool(name, args || {});
     } else {
@@ -14016,5 +14061,97 @@ OmniOS.register("smart", {
         OmniMem.append("action", `제스처(${g}) → 스마트 ${m.action} ${m.device || ""}: ${r.msg}`);
       }
     } finally { this._gestureBusy = false; }
+  },
+});
+
+// ---------------- SCHOOL MODE (조용 모드) — 카메라·마이크·화면 관찰을 한 번에 멈춘다 ----------------
+// 근거 1) ~/.omni/store/quiet_mode.json — 수동(옴니 하단 바·음성·SP-1 메뉴 막대)
+// 근거 2) ~/.omni/store/presence.json — SP-1이 20초마다 쓰는 "집 네트워크인가" (집 밖이면 자동)
+// 켜지면: 상시 대기(마이크)·LIVE·화면 관찰·제스처 명령 정지, 상시 대기 자동 시작 차단.
+OmniOS.register("quiet", {
+  state: { on: false, until: 0, reason: "", by: "" },
+  presence: null,
+  active: false,
+  why: "",
+  _timer: null,
+
+  init() {
+    this.els = { btn: document.getElementById("qm-btn"), txt: document.getElementById("qm-txt") };
+    if (this.els.btn) this.els.btn.addEventListener("click", () => this.active && this.state.on ? this.set(false) : this.set(true, 0, "manual"));
+    if (OmniNative.available) {
+      this.poll();
+      this._timer = setInterval(() => this.poll(), 5000);
+    } else {
+      this.render();
+    }
+  },
+
+  async readStore(name) {
+    const r = await OmniNative.request("store.read", JSON.stringify({ name }), 4000).catch(() => null);
+    try { return r && r.data ? JSON.parse(r.data) : null; } catch (e) { return null; }
+  },
+
+  async poll() {
+    const [q, p] = await Promise.all([this.readStore("quiet_mode"), this.readStore("presence")]);
+    this.state = q && typeof q === "object" ? { on: !!q.on, until: Number(q.until) || 0, reason: q.reason || "", by: q.by || "" } : { on: false, until: 0, reason: "", by: "" };
+    this.presence = p && typeof p === "object" ? p : null;
+    this.evaluate();
+  },
+
+  evaluate() {
+    const now = Date.now() / 1000;
+    const manual = this.state.on && (!this.state.until || this.state.until > now);
+    const fresh = this.presence && now - (Number(this.presence.ts) || 0) < 120;
+    const away = !!(fresh && this.presence.home === false && this.presence.home_only !== false);
+    const was = this.active;
+    this.active = manual || away;
+    this.why = manual ? (this.state.by === "sp1" ? "SP-1 메뉴에서 정지" : this.state.reason === "manual" ? "수동" : this.state.reason)
+      : away ? "집 네트워크 아님" : "";
+    if (this.active && !was) this.enforce();
+    else if (!this.active && was) {
+      const ai = OmniOS.modules.ai;
+      if (ai) { const l = ai.logLine("sys", "학교 모드 해제 — 필요하면 ALWAYS를 다시 켜십시오"); l.classList.add("ignored"); ai.gateNote("학교 모드 해제"); }
+    }
+    this.render();
+  },
+
+  // 학교 모드 진입: 마이크·카메라·화면 관찰과 관련된 모든 것을 멈춘다
+  enforce() {
+    const ai = OmniOS.modules.ai;
+    if (ai) {
+      if (ai.alwaysOn) ai.stopAlways(`학교 모드 · ${this.why}`);
+      else if (ai.live && typeof ai.stopLive === "function") ai.stopLive("학교 모드");
+      const l = ai.logLine("sys", `학교 모드 ON (${this.why}) — 마이크·화면 관찰·제스처 명령 정지`); l.classList.add("ignored");
+      ai.gateNote(`학교 모드 ON: ${this.why}`);
+    }
+    OmniScreen.stop();
+    OmniMem.append("action", `학교 모드 ON (${this.why})`);
+  },
+
+  blocked() { return this.active; },
+
+  // 수동 켜기/끄기 — 파일로 공유하므로 SP-1(카메라)도 같이 따라온다
+  async set(on, minutes, reason) {
+    const until = on && minutes > 0 ? Date.now() / 1000 + minutes * 60 : 0;
+    const data = JSON.stringify({ on: !!on, until, reason: reason || "manual", by: "omni", ts: Date.now() / 1000 });
+    if (OmniNative.available) await OmniNative.request("store.write", JSON.stringify({ name: "quiet_mode", data }), 5000).catch(() => {});
+    else { this.state = { on: !!on, until, reason: reason || "manual", by: "omni" }; this.evaluate(); return this.summary(); }
+    await this.poll();
+    return this.summary();
+  },
+
+  summary() {
+    if (!this.active) return "학교 모드 꺼짐 — 카메라·마이크 사용 가능" + (this.presence ? ` (${this.presence.home ? "집 네트워크" : "네트워크 불명"})` : "");
+    const until = this.state.on && this.state.until ? ` · ${new Date(this.state.until * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}까지` : "";
+    return `학교 모드 켜짐 (${this.why}${until}) — 카메라·마이크·화면 관찰 정지`;
+  },
+
+  render() {
+    if (!this.els || !this.els.btn) return;
+    this.els.btn.classList.toggle("on", this.active);
+    this.els.btn.textContent = this.active ? "SCHOOL MODE ON" : "SCHOOL MODE";
+    this.els.btn.title = this.active ? "학교 모드 끄기 (수동 정지일 때만 즉시 해제됨)" : "학교 모드 켜기 — 카메라·마이크·화면 관찰 정지 (SP-1 포함)";
+    const until = this.state.on && this.state.until ? ` ~${new Date(this.state.until * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}` : "";
+    this.els.txt.textContent = this.active ? `${this.why}${until} · 카메라·마이크 OFF` : (this.presence && this.presence.home === false ? "네트워크 불명" : "");
   },
 });

@@ -147,6 +147,7 @@ TOOLS = [
                     "computer:작업설명 — 맥의 마우스·키보드로 직접 수행, "
                     "shell:명령 — 맥에서 셸 명령 실행(파일 찾기·정리·설치), "
                     "smart.on:기기이름 / smart.off:기기이름 / smart.timer:기기이름:분 — 집 스마트 플러그·조명(Tapo) 제어, "
+                    "quiet.on[:분] / quiet.off — 학교·시험 모드(맥 카메라·마이크·화면 관찰 정지), "
                     "ui.read:패널키 / ui.click:패널키:버튼글자 — 패널 직접 조작).",
      "parameters": {"type": "object", "properties": {
          "open": {"type": "string", "description": "열 패널 키"},

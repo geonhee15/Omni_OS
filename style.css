@@ -4067,3 +4067,9 @@ input.vc-name {
 .sc-gest-row .sc-gon { font-size: 9px; letter-spacing: 1px; color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
 .sc-gest-row .rm { background: none; border: none; color: rgba(111, 168, 201, 0.4); cursor: pointer; font-size: 11px; }
 .sc-gest-row .rm:hover { color: var(--alert); }
+
+/* ---------- SCHOOL MODE (하단 바) ---------- */
+.qm-btn { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 2px; color: var(--text-dim); background: none; border: 1px solid var(--cyan-faint); border-radius: 3px; padding: 3px 10px; cursor: pointer; }
+.qm-btn:hover { border-color: var(--cyan-soft); color: var(--cyan); }
+.qm-btn.on { color: var(--warn); border-color: var(--warn); box-shadow: 0 0 12px rgba(255, 190, 60, 0.3); }
+.qm-txt { font-size: 9.5px; letter-spacing: 1px; color: var(--warn); }
