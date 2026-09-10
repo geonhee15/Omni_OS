@@ -79,6 +79,10 @@
         <span class="nav-icon">&#9711;</span>
         <span class="nav-label">HALO GLASSES</span>
       </button>
+      <button class="nav-item" data-panel="camera">
+        <span class="nav-icon">&#9635;</span>
+        <span class="nav-label">CAMERA</span>
+      </button>
       <button class="nav-item" data-panel="proj">
         <span class="nav-icon">&#10697;</span>
         <span class="nav-label">PROJECTS</span>
@@ -573,6 +577,52 @@
               <div class="hg-card-title">로그</div>
               <pre class="hg-log" id="hg-log">&mdash;</pre>
             </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- panel: CAMERA (집 카메라 — Tapo C210 로컬 영상·감시) -->
+    <section class="panel panel-camera" id="panel-camera">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">CAMERA</span>
+          <span class="nf-sub" id="cm-sub">&mdash;</span>
+          <span class="ts-spacer"></span>
+          <span class="nf-updated" id="cm-updated"></span>
+          <button class="nf-btn" id="cm-setup-toggle">SETUP</button>
+          <button class="nf-btn" id="cm-discover">DISCOVER</button>
+          <button class="nf-btn" id="cm-start">START SERVER</button>
+          <button class="nf-btn" id="cm-stop">STOP</button>
+        </div>
+        <div class="sc-setup" id="cm-setup" hidden>
+          <div class="sc-steps">
+            <div class="sc-step"><span class="n">1</span>Tapo 앱 &rarr; + &rarr; 카메라 &rarr; 집 와이파이(2.4GHz, 이 맥과 같은 공유기) &rarr; 이름 정하기</div>
+            <div class="sc-step"><span class="n">2</span>Tapo 앱 &rarr; 카메라 &rarr; 설정 &rarr; 고급 설정 &rarr; <b>카메라 계정</b> 만들기 (아이디·비밀번호) &mdash; 맥이 영상을 직접 받는 데 필요</div>
+            <div class="sc-step"><span class="n">3</span>아래에 그 계정을 저장하고 <b>DISCOVER</b> &rarr; 카메라 카드가 뜨면 LIVE</div>
+            <div class="sc-step"><span class="n">4</span>회전·프라이버시 모드는 SMART CONTROL의 Tapo 계정으로 제어 (DEEP DISCOVER로 등록)</div>
+          </div>
+          <div class="sc-creds">
+            <input class="wx-search sc-user" id="cm-user" placeholder="카메라 계정 아이디" autocomplete="off" spellcheck="false">
+            <input class="wx-search sc-pass" id="cm-pass" type="password" placeholder="카메라 계정 비밀번호" autocomplete="off">
+            <button class="nf-btn" id="cm-save">SAVE ACCOUNT</button>
+            <span class="sc-setup-state" id="cm-setup-state"></span>
+          </div>
+          <div class="sc-creds">
+            <input class="wx-search sc-ip" id="cm-ip" placeholder="카메라 IP로 직접 추가" autocomplete="off" spellcheck="false">
+            <input class="wx-search sc-pass" id="cm-name" placeholder="이름 (예: 방 카메라)" autocomplete="off">
+            <button class="nf-btn" id="cm-addip">ADD BY IP</button>
+            <button class="nf-btn" id="cm-deep">DEEP DISCOVER</button>
+          </div>
+          <div class="sc-note">계정은 ~/.omni/camera.json 에만 저장되고 카메라와 직접(로컬 RTSP) 통신하는 데만 쓰입니다. 영상은 클라우드로 가지 않습니다.</div>
+        </div>
+        <div class="nf-body">
+          <div class="wx-err" id="cm-err" hidden></div>
+          <div class="sc-hint" id="cm-hint" hidden></div>
+          <div class="cm-grid" id="cm-grid"><div class="nf-empty">LOADING&hellip;</div></div>
+          <div class="hg-card">
+            <div class="hg-card-title">사건 <span class="hg-dim">사람이 보이면 기록하고 옴니가 알립니다 (카메라당 1분에 한 번)</span></div>
+            <div class="cm-events" id="cm-events">&mdash;</div>
           </div>
         </div>
       </div>
@@ -1448,7 +1498,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.77.0</span>
+      <span>v0.78.0</span>
     </footer>
   </div>
 

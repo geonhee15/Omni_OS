@@ -4088,3 +4088,26 @@ input.vc-name {
 .hg-tools { display: flex; flex-wrap: wrap; gap: 6px; font-size: 9.5px; letter-spacing: 1px; }
 .hg-tools span { border: 1px solid var(--cyan-faint); border-radius: 3px; padding: 3px 8px; color: var(--cyan); }
 .hg-log { margin: 0; font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; color: var(--text-dim); white-space: pre-wrap; max-height: 220px; overflow-y: auto; }
+
+/* ---------- CAMERA (집 카메라) ---------- */
+.cm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+.cm-card { border: 1px solid var(--cyan-faint); border-radius: 4px; padding: 12px 14px; background: rgba(3, 14, 28, 0.55); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.cm-card.person { border-color: var(--warn); box-shadow: 0 0 16px rgba(255, 190, 60, 0.25); }
+.cm-card .cm-name { font-size: 13px; letter-spacing: 1.5px; color: var(--cyan); display: flex; align-items: center; gap: 10px; }
+.cm-card .cm-state { font-size: 9px; letter-spacing: 2px; color: var(--text-dim); }
+.cm-card .cm-state.on { color: var(--ok); }
+.cm-card .cm-state.warn { color: var(--warn); }
+.cm-view { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #020a14; border: 1px solid var(--cyan-faint); border-radius: 3px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.cm-view img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cm-view .cm-off { position: absolute; font-size: 9.5px; letter-spacing: 2px; color: var(--text-dim); }
+.cm-card .cm-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.cm-card .cm-btns .nf-btn.active { border-color: var(--ok); color: var(--ok); }
+.cm-ptz { display: grid; grid-template-columns: repeat(3, 34px); grid-template-rows: repeat(3, 26px); gap: 4px; }
+.cm-ptz .nf-btn { padding: 0; text-align: center; }
+.cm-ptz .sp { visibility: hidden; }
+.cm-look { font-size: 11px; line-height: 1.5; color: var(--text); min-height: 1.4em; }
+.cm-meta { font-size: 9px; letter-spacing: 1px; color: var(--text-dim); }
+.cm-events { display: flex; flex-direction: column; gap: 6px; font-size: 10.5px; line-height: 1.5; color: var(--text); }
+.cm-events .ev { display: flex; gap: 10px; align-items: center; }
+.cm-events .ev img { width: 96px; height: 54px; object-fit: cover; border: 1px solid var(--cyan-faint); border-radius: 2px; }
+.cm-events .ev .t { font-size: 9px; letter-spacing: 1px; color: var(--text-dim); white-space: nowrap; }

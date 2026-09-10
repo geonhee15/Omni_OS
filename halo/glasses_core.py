@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 
 import numpy as np
 
@@ -156,6 +157,11 @@ TOOLS = [
      "description": "안경(폰) 카메라로 지금 눈앞을 보고 설명한다 — \"지금 뭐 보여?\", \"이거 뭐야?\", \"이 글자 읽어줘\". question에 사용자가 궁금해한 점.",
      "parameters": {"type": "object", "properties": {
          "question": {"type": "string"}}}},
+    {"type": "function", "name": "camera_control",
+     "description": "집 카메라(Tapo) — action: look(카메라 화면 설명, question 선택), status, privacy_on/off, ptz_left/right/up/down, watch_on/off. camera는 이름 일부.",
+     "parameters": {"type": "object", "properties": {
+         "action": {"type": "string"}, "camera": {"type": "string"}, "question": {"type": "string"}},
+         "required": ["action"]}},
     {"type": "function", "name": "run_shell",
      "description": "맥에서 셸 명령 실행(zsh, 60초) — 파일 찾기·정리·설치·git. 되돌릴 수 없는 삭제·포맷은 사용자 명시 요청 시에만.",
      "parameters": {"type": "object", "properties": {
@@ -347,6 +353,45 @@ def look_camera(args: dict) -> str:
     return desc
 
 
+CAMERA_BASE = "http://127.0.0.1:8484"
+
+
+def camera_control(args: dict) -> str:
+    """집 카메라 사이드카(scripts/omni_camera.py) 직접 호출 — 앱이 서버를 켜 둔 상태여야 한다."""
+    import urllib.request
+    action = str(args.get("action") or "status").lower()
+    cam = str(args.get("camera") or "")
+    try:
+        if action in ("look", "describe"):
+            q = urllib.parse.urlencode({"cam": cam, "q": args.get("question") or ""})
+            with urllib.request.urlopen(f"{CAMERA_BASE}/describe?{q}", timeout=30) as r:
+                d = json.load(r)
+            return f"{d.get('cam')}: {d.get('text')}" if d.get("ok") else f"실패: {d.get('error')} {d.get('hint', '')}".strip()
+        if action in ("status", "list"):
+            with urllib.request.urlopen(f"{CAMERA_BASE}/status.json", timeout=8) as r:
+                d = json.load(r)
+            cams = d.get("cameras") or []
+            if not cams:
+                return "등록된 카메라가 없습니다. 맥의 옴니 앱 CAMERA 패널에서 DISCOVER를 눌러 주십시오."
+            return "\n".join(f"{c['name']}: {'온라인' if c.get('online') else '오프라인'}{' · 지금 사람이 보임' if c.get('person') else ''}" for c in cams)
+        body = None
+        if action in ("privacy_on", "privacy_off"):
+            path, body = "/privacy", {"name": cam, "on": action == "privacy_on"}
+        elif action.startswith("ptz_"):
+            path, body = "/ptz", {"name": cam, "dir": action[4:], "step": 15}
+        elif action in ("watch_on", "watch_off"):
+            path, body = "/watch", {"name": cam, "on": action == "watch_on"}
+        else:
+            return f"알 수 없는 동작: {action}"
+        req = urllib.request.Request(f"{CAMERA_BASE}{path}", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=40) as r:
+            d = json.load(r)
+        return "완료" if d.get("ok") else f"실패: {d.get('error')} {d.get('hint', '')}".strip()
+    except Exception as e:  # noqa: BLE001
+        return f"카메라 서버에 연결할 수 없습니다 (앱 CAMERA 패널에서 START SERVER): {e}"
+
+
 def run_tool(name: str, args: dict) -> str:
     """RT 함수 호출 실행 (블로킹 — to_thread로 감싸서 호출)."""
     if name == "ask_brain":
@@ -412,6 +457,8 @@ def run_tool(name: str, args: dict) -> str:
         return look_camera(args)
     if name == "run_shell":
         return run_shell(args)
+    if name == "camera_control":
+        return camera_control(args)
     if name == "check_calendar":
         snap = link.request_refresh("calendar")
         if not snap:

@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.77.0",
+  version: "0.78.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -971,6 +971,7 @@ OmniOS.register("ai", {
     "- 날씨: \"날씨 어때/내일 비 와?\" 류는 check_weather 도구(city 생략 시 현재 설정 위치, 지정 시 그 도시)로 확인해 핵심만 말합니다. 뉴스: \"뉴스 보여줘/○○ 관련 소식\" 류는 check_news 도구(category 또는 query)로 헤드라인을 읽어 3~5개로 요약합니다. 지도: 장소를 보여 달라면 [[ACT:map.search:장소]]로 MAP 패널에 표시합니다.",
     "- 사실 규칙: 도구 결과에 있는 수치·시각·이름만 말합니다. 도구 결과에 없는 정보(예: 일정 종료 시각, 금액)는 추정하거나 '보통'으로 채우지 말고 '기록에 없습니다'라고 말합니다. 확실하냐고 물으면 도구를 다시 호출해 원본을 확인합니다.",
     "- 계산: 숫자 계산(산수·퍼센트·환산·평균·큰 수)은 절대 암산하지 않고 calculate 도구에 파이썬식 수식으로 넘겨 그 결과를 말합니다. 여러 단계면 도구를 여러 번 호출합니다.",
+    "- 집 카메라(CAMERA 패널, Tapo): \"방 카메라 봐줘\", \"지금 누구 있어?\", \"카메라 가려줘\", \"카메라 왼쪽으로\"는 camera_control 도구로 직접 실행하고 본 것을 짧게 보고합니다. 사람 감지 사건이 로그에 뜨면 그 사실을 알고 있습니다.",
     "- 안경(HALO GLASSES 패널): \"폰 안경 켜줘/꺼줘\", \"안경 서버 상태\"는 app_ui 대신 액션 halo.start / halo.stop / halo.status(런액션)로 처리합니다. 폰 안경은 폰 브라우저를 안경처럼 쓰는 모드로, 앱과 같은 기억·도구를 공유합니다.",
     "- 학교/시험 모드(quiet_mode): \"학교 모드 켜줘\", \"카메라 다 꺼줘\", \"시험 볼 거야\"는 즉시 quiet_mode(on=true)로 카메라 감시(SP-1)·마이크·화면 관찰을 전부 정지하고 짧게 확인만 합니다. 집 밖 네트워크에서는 자동으로 켜집니다.",
     "- 스마트 조명·플러그(SMART CONTROL 패널, Tapo): \"불 꺼줘/켜줘\", \"30분 뒤에 꺼줘\", \"조명 켜져 있어?\"는 smart_control 도구로 직접 실행하고 결과(켜짐/꺼짐)를 확인해 보고합니다. 기기가 없거나 계정이 없다는 결과면 패널의 SETUP/SCAN 절차를 안내합니다.",
@@ -1112,6 +1113,15 @@ OmniOS.register("ai", {
           minutes: { type: "number" }, location: { type: "string" }, notes: { type: "string" },
         },
         required: ["title", "start"],
+      },
+    },
+    {
+      name: "camera_control",
+      description: "집 카메라(CAMERA 패널, Tapo C210 등) — action: look(카메라 화면을 보고 설명, question 선택: '방에 누구 있어?', '카메라 봐줘'), status, snapshot, privacy_on/privacy_off(렌즈 가림), ptz_left/right/up/down(회전), watch_on/off(사람 감지 알림), discover, start, stop. camera는 이름 일부(하나면 생략).",
+      input_schema: {
+        type: "object",
+        properties: { action: { type: "string" }, camera: { type: "string" }, question: { type: "string" }, step: { type: "number" } },
+        required: ["action"],
       },
     },
     {
@@ -1902,6 +1912,12 @@ OmniOS.register("ai", {
         const r = await sc.control(input || {});
         return r.ok ? r.msg : `오류: ${r.msg}`;
       }
+      if (name === "camera_control") {
+        const cm = OmniOS.modules.camera;
+        if (!cm) return "오류: 카메라 모듈 없음";
+        const r = await cm.control(input || {});
+        return r.ok ? r.msg : `오류: ${r.msg}`;
+      }
       if (name === "quiet_mode") {
         const q = OmniOS.modules.quiet;
         if (!q) return "오류: 학교 모드 모듈 없음";
@@ -2107,6 +2123,19 @@ OmniOS.register("ai", {
       if (key === "ai.enroll") {
         await this.enrollVoice();
         return { ok: true, msg: "목소리 등록 시작" };
+      }
+      if (key.startsWith("cam.")) {
+        // cam.look:이름:질문 / cam.status / cam.snapshot:이름 / cam.privacy:이름:on|off / cam.ptz:이름:left|right|up|down / cam.watch:이름:on|off / cam.discover / cam.start / cam.stop
+        const cm = OmniOS.modules.camera;
+        if (!cm) return { ok: false, msg: "카메라 모듈 없음" };
+        const sub = key.slice(4);
+        const input = { camera: parts[1] || "" };
+        if (sub === "look") { input.action = "look"; input.question = parts.slice(2).join(":"); }
+        else if (sub === "privacy") input.action = (parts[2] || "on").toLowerCase() === "off" ? "privacy_off" : "privacy_on";
+        else if (sub === "ptz") input.action = "ptz_" + (parts[2] || "left");
+        else if (sub === "watch") input.action = (parts[2] || "on").toLowerCase() === "off" ? "watch_off" : "watch_on";
+        else input.action = sub;
+        return await cm.control(input);
       }
       if (key === "halo.start" || key === "halo.stop" || key === "halo.status") {
         // 폰 안경 서버 (HALO GLASSES 패널)
@@ -2728,6 +2757,16 @@ OmniOS.register("ai", {
         type: "object",
         properties: { title: { type: "string" }, start: { type: "string" }, minutes: { type: "number" } },
         required: ["title", "start"],
+      },
+    },
+    {
+      type: "function",
+      name: "camera_control",
+      description: "집 카메라(Tapo) — \"방 카메라 봐줘/누구 있어?\"는 action=look(question에 질문), \"카메라 가려줘\"는 privacy_on, \"왼쪽으로 돌려\"는 ptz_left, status/snapshot/watch_on/watch_off. camera는 이름 일부(하나면 생략). 결과를 한두 문장으로 말한다.",
+      parameters: {
+        type: "object",
+        properties: { action: { type: "string" }, camera: { type: "string" }, question: { type: "string" } },
+        required: ["action"],
       },
     },
     {
@@ -3687,7 +3726,7 @@ OmniOS.register("ai", {
     } else if (name === "calculate") {
       this.logLine("sys", `도구 · calculate ${(args && args.expression) || ""}`);
       output = await this.execTool("calculate", args || {});
-    } else if (["check_markets", "check_calendar", "add_event", "smart_control", "quiet_mode", "recall_memory", "open_web_search", "app_ui", "use_computer", "run_shell"].includes(name)) {
+    } else if (["check_markets", "check_calendar", "add_event", "smart_control", "camera_control", "quiet_mode", "recall_memory", "open_web_search", "app_ui", "use_computer", "run_shell"].includes(name)) {
       this.logLine("sys", `도구 · ${name}`);
       output = await this.execTool(name, args || {});
     } else {
@@ -14264,5 +14303,276 @@ OmniOS.register("halo", {
       this.els.toolcount.textContent = `${s.tools.length}개 도구 — 앱 옴니와 같은 기억·두뇌·기기 제어`;
     }
     this.els.log.textContent = (s.log || []).join("\n") || "—";
+  },
+});
+
+// ---------------- CAMERA — 집 카메라(Tapo C210 등) 로컬 영상·감시 (scripts/omni_camera.py, halo/venv) ----------------
+// 사이드카 http://127.0.0.1:8484 와 직접 통신(fetch/MJPEG). 옴니 전권: camera_look/camera_control 도구, cam.* 액션.
+OmniOS.register("camera", {
+  BASE: "http://127.0.0.1:8484",
+  st: null,
+  _running: false,
+  _timer: null,
+  _visible: false,
+  _lastEventTs: 0,
+  _lastSpokeAt: 0,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = { sub: $("cm-sub"), updated: $("cm-updated"), setupToggle: $("cm-setup-toggle"), setup: $("cm-setup"), discover: $("cm-discover"),
+      start: $("cm-start"), stop: $("cm-stop"), user: $("cm-user"), pass: $("cm-pass"), save: $("cm-save"), setupState: $("cm-setup-state"),
+      ip: $("cm-ip"), name: $("cm-name"), addip: $("cm-addip"), deep: $("cm-deep"), err: $("cm-err"), hint: $("cm-hint"), grid: $("cm-grid"), events: $("cm-events") };
+    this.els.setupToggle.addEventListener("click", () => { this.els.setup.hidden = !this.els.setup.hidden; });
+    this.els.discover.addEventListener("click", () => this.discover(false));
+    this.els.deep.addEventListener("click", () => this.discover(true));
+    this.els.start.addEventListener("click", () => this.start());
+    this.els.stop.addEventListener("click", () => this.stop());
+    this.els.save.addEventListener("click", () => this.saveCreds());
+    this.els.pass.addEventListener("keydown", (e) => { if (e.key === "Enter") this.saveCreds(); });
+    this.els.addip.addEventListener("click", () => this.addByIp());
+    this.els.grid.addEventListener("click", (e) => this.onGridClick(e));
+    document.addEventListener("omni:panel", (e) => {
+      this._visible = e.detail === "camera";
+      if (this._visible) this.poll(); else this.stopLive();
+    });
+    if (OmniNative.available) {
+      setTimeout(() => this.poll(), 5000);
+      this._timer = setInterval(() => this.poll(), this._visible ? 3000 : 6000);
+    } else {
+      this.els.grid.innerHTML = '<div class="nf-err">브라우저 개발 모드 — 카메라 서버는 앱에서만 켤 수 있습니다</div>';
+      this.els.setup.hidden = false;
+    }
+  },
+
+  async api(path, body) {
+    const r = await fetch(this.BASE + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+    return await r.json();
+  },
+
+  async poll() {
+    if (!OmniNative.available) return;
+    const n = await OmniNative.request("cam.status", null, 5000).catch(() => null);
+    this._running = !!(n && n.running);
+    if (!this._running) { this.st = null; this.render(); return; }
+    let st = null;
+    try { st = await this.api("/status.json"); } catch (e) { st = null; }
+    this.st = st;
+    if (st) this.checkEvents(st.events || []);
+    this.render();
+  },
+
+  async start() {
+    const r = await OmniNative.request("cam.start", null, 10000).catch((e) => ({ ok: false, error: e.message }));
+    if (!r || !r.ok) { this.setErr(`시작 실패: ${(r && r.error) || "?"}${r && r.hint ? " — " + r.hint : ""}`); return { ok: false, msg: (r && r.error) || "시작 실패" }; }
+    this.setErr("");
+    setTimeout(() => this.poll(), 2500);
+    return { ok: true, msg: "카메라 서버를 시작했습니다" };
+  },
+
+  async stop() {
+    this.stopLive();
+    await OmniNative.request("cam.stop", null, 8000).catch(() => null);
+    this._running = false; this.st = null; this.render();
+    return { ok: true, msg: "카메라 서버를 껐습니다" };
+  },
+
+  async ensure() {
+    if (this._running) return true;
+    const r = await this.start();
+    if (!r.ok) return false;
+    await new Promise((res) => setTimeout(res, 3000));
+    await this.poll();
+    return this._running;
+  },
+
+  setErr(m) { this.els.err.hidden = !m; this.els.err.textContent = m || ""; },
+  setHint(m) { this.els.hint.hidden = !m; this.els.hint.textContent = m || ""; },
+
+  async saveCreds() {
+    const username = this.els.user.value.trim(), password = this.els.pass.value;
+    if (!username || !password) { this.setErr("카메라 계정 아이디와 비밀번호를 모두 입력"); return; }
+    if (!(await this.ensure())) return;
+    const r = await this.api("/setup", { username, password }).catch(() => null);
+    if (!r || !r.ok) { this.setErr("계정 저장 실패"); return; }
+    this.els.pass.value = ""; this.setErr("");
+    await this.discover(false);
+  },
+
+  async discover(deep) {
+    if (!(await this.ensure())) return { ok: false, msg: "카메라 서버를 켤 수 없습니다" };
+    this.setHint(deep ? "같은 와이파이를 훑고 Tapo 계정으로 모델을 확인하는 중 (약 20초)…" : "같은 와이파이에서 카메라(RTSP)를 찾는 중…");
+    const r = await this.api("/discover?deep=" + (deep ? 1 : 0)).catch(() => null);
+    if (!r) { this.setHint(""); this.setErr("검색 실패"); return { ok: false, msg: "검색 실패" }; }
+    this.setHint(r.hint || "");
+    await this.poll();
+    const n = (r.candidates || []).length;
+    return { ok: true, msg: n ? `카메라 ${n}대: ${r.candidates.map((c) => (c.name || c.alias || c.host)).join(", ")}` : (r.hint || "카메라를 찾지 못했습니다") };
+  },
+
+  async addByIp() {
+    const host = this.els.ip.value.trim(), name = this.els.name.value.trim();
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) { this.setErr("IP 형식이 아닙니다"); return; }
+    if (!(await this.ensure())) return;
+    const r = await this.api("/add", { host, name }).catch(() => null);
+    if (r && r.ok) { this.els.ip.value = ""; this.els.name.value = ""; this.setErr(""); await this.poll(); }
+    else this.setErr("추가 실패");
+  },
+
+  find(name) {
+    const cams = (this.st && this.st.cameras) || [];
+    if (!name) return cams[0] || null;
+    const n = String(name).toLowerCase();
+    return cams.find((c) => c.name.toLowerCase() === n) || cams.find((c) => c.name.toLowerCase().includes(n) || c.host === n) || null;
+  },
+
+  // 옴니·안경·액션 공통 진입점
+  async control(input) {
+    const action = String(input.action || "status").toLowerCase();
+    if (action === "start") return await this.start();
+    if (action === "stop") return await this.stop();
+    if (action === "discover") return await this.discover(!!input.deep);
+    if (!(await this.ensure())) return { ok: false, msg: "카메라 서버를 켤 수 없습니다 (halo/venv 필요)" };
+    if (action === "status" || action === "list") {
+      await this.poll();
+      return { ok: true, msg: this.summary() };
+    }
+    const cam = this.find(input.camera);
+    if (!cam) return { ok: false, msg: this.st && this.st.cameras && this.st.cameras.length ? `카메라를 찾지 못함: ${input.camera}. 있는 카메라: ${this.st.cameras.map((c) => c.name).join(", ")}` : "등록된 카메라가 없습니다. 사용자에게 안내하라: CAMERA 패널에서 카메라 계정을 저장하고 DISCOVER를 누르십시오." };
+    if (action === "look" || action === "describe") {
+      const r = await this.api(`/describe?cam=${encodeURIComponent(cam.name)}&q=${encodeURIComponent(input.question || "")}`).catch(() => null);
+      if (!r || !r.ok) return { ok: false, msg: `${(r && r.error) || "실패"}${r && r.hint ? " — " + r.hint : ""}` };
+      const line = OmniOS.modules.ai.logLine("sys", `[카메라 · ${cam.name}] ${r.text}`); line.classList.add("ignored");
+      return { ok: true, msg: `${cam.name}: ${r.text}${r.person ? " (지금 사람이 보임)" : ""}` };
+    }
+    if (action === "snapshot") {
+      OmniNet.openUrl(`${this.BASE}/snap.jpg?cam=${encodeURIComponent(cam.name)}&t=${Date.now()}`);
+      return { ok: true, msg: `${cam.name} 스냅샷을 열었습니다` };
+    }
+    if (action === "privacy_on" || action === "privacy_off") {
+      const r = await this.api("/privacy", { name: cam.name, on: action === "privacy_on" }).catch(() => null);
+      if (!r || !r.ok) return { ok: false, msg: `${(r && r.error) || "실패"}${r && r.hint ? " — " + r.hint : ""}` };
+      return { ok: true, msg: `${cam.name}: 프라이버시 모드 ${r.privacy ? "켜짐 (렌즈 가림)" : "꺼짐"}` };
+    }
+    if (/^ptz_/.test(action)) {
+      const dir = action.slice(4);
+      const r = await this.api("/ptz", { name: cam.name, dir, step: Number(input.step) || 15 }).catch(() => null);
+      if (!r || !r.ok) return { ok: false, msg: `${(r && r.error) || "실패"}${r && r.hint ? " — " + r.hint : ""}` };
+      return { ok: true, msg: `${cam.name}: ${({ left: "왼쪽", right: "오른쪽", up: "위", down: "아래" })[dir] || dir}으로 회전` };
+    }
+    if (action === "watch_on" || action === "watch_off") {
+      const r = await this.api("/watch", { name: cam.name, on: action === "watch_on" }).catch(() => null);
+      await this.poll();
+      return { ok: !!(r && r.ok), msg: `${cam.name}: 감시 ${action === "watch_on" ? "켜짐" : "꺼짐"}` };
+    }
+    return { ok: false, msg: `알 수 없는 동작: ${action}` };
+  },
+
+  summary() {
+    if (!this._running) return "카메라 서버 꺼짐 — CAMERA 패널 START SERVER";
+    const cams = (this.st && this.st.cameras) || [];
+    if (!cams.length) return this.st && !this.st.creds ? "카메라 계정이 없습니다 — CAMERA 패널 SETUP에서 카메라 계정을 저장" : "등록된 카메라가 없습니다 — CAMERA 패널 DISCOVER";
+    return cams.map((c) => `${c.name} (${c.host}): ${c.online ? "온라인" : c.error ? "오프라인 — " + c.error : "대기"}${c.person ? " · 지금 사람이 보임" : ""}${c.watch ? " · 감시 중" : ""}`).join("\n");
+  },
+
+  // 새 사건 → 로그 + (LIVE/ALWAYS 중이면) 옴니가 말로
+  checkEvents(events) {
+    const latest = events[events.length - 1];
+    if (!latest) return;
+    if (this._lastEventTs === 0) { this._lastEventTs = latest.ts; return; }   // 시작 시 과거 사건은 알리지 않음
+    const fresh = events.filter((e) => e.ts > this._lastEventTs);
+    if (!fresh.length) return;
+    this._lastEventTs = latest.ts;
+    const ai = OmniOS.modules.ai;
+    for (const e of fresh) {
+      if (ai) { const l = ai.logLine("sys", `[카메라] ${e.text}`); l.classList.add("ignored"); ai.gateNote(`카메라 사건: ${e.text}`); }
+    }
+    if (ai && ai.live && Date.now() - this._lastSpokeAt > 60000 && !(OmniOS.modules.quiet && OmniOS.modules.quiet.active)) {
+      this._lastSpokeAt = Date.now();
+      ai.runAction(`ai.say:${fresh[fresh.length - 1].cam}에 사람이 보입니다.`);
+    }
+  },
+
+  stopLive() {
+    for (const img of this.els.grid.querySelectorAll("img.live")) { img.src = ""; img.dataset.live = ""; }
+  },
+
+  render() {
+    const st = this.st;
+    this.els.start.classList.toggle("active", this._running);
+    this.els.setupState.textContent = st ? (st.creds ? `저장됨 · ${st.username}` : "카메라 계정 미저장") : "";
+    this.els.setupState.className = `sc-setup-state${st && st.creds ? " ok" : ""}`;
+    if (!this._running) {
+      this.els.sub.textContent = "서버 꺼짐";
+      this.els.grid.innerHTML = '<div class="nf-empty">START SERVER를 누르면 카메라 서버가 켜집니다 (DISCOVER·SETUP은 자동으로 켭니다)</div>';
+      this.els.events.textContent = "—";
+      return;
+    }
+    if (!st) { this.els.sub.textContent = "서버 응답 대기…"; return; }
+    const cams = st.cameras || [];
+    const t = new Date(); this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}:${String(t.getSeconds()).padStart(2, "0")}`;
+    this.els.sub.textContent = `${cams.length}대 · ${cams.filter((c) => c.online).length}대 온라인${cams.some((c) => c.person) ? " · 사람 감지 중" : ""}${st.detector ? "" : " · 감지기 없음"}`;
+    if (!cams.length) { this.els.grid.innerHTML = `<div class="nf-empty">${st.creds ? "카메라 없음 — DISCOVER로 같은 와이파이의 카메라를 찾습니다" : "SETUP에서 카메라 계정을 저장한 뒤 DISCOVER"}</div>`; this.els.setup.hidden = false; }
+    else {
+      const existing = new Map([...this.els.grid.querySelectorAll(".cm-card")].map((el) => [el.dataset.name, el]));
+      for (const el of existing.values()) if (!cams.find((c) => c.name === el.dataset.name)) el.remove();
+      if (!existing.size) this.els.grid.innerHTML = "";
+      for (const c of cams) {
+        let card = existing.get(c.name);
+        if (!card) {
+          card = document.createElement("div"); card.className = "cm-card"; card.dataset.name = c.name;
+          card.innerHTML = `
+            <div class="cm-name"><span class="nm"></span><span class="cm-state"></span></div>
+            <div class="cm-view"><img class="live" alt=""><span class="cm-off">LIVE를 누르면 영상이 나옵니다</span></div>
+            <div class="cm-meta"></div>
+            <div class="cm-btns">
+              <button class="nf-btn" data-act="live">LIVE</button>
+              <button class="nf-btn" data-act="snapshot">SNAPSHOT</button>
+              <button class="nf-btn" data-act="look">LOOK</button>
+              <button class="nf-btn" data-act="watch">WATCH</button>
+              <button class="nf-btn" data-act="privacy_on">PRIVACY ON</button>
+              <button class="nf-btn" data-act="privacy_off">PRIVACY OFF</button>
+              <button class="nf-btn" data-act="remove" title="목록에서 제거">REMOVE</button>
+            </div>
+            <div class="cm-ptz"><span class="sp"></span><button class="nf-btn" data-act="ptz_up">&#9650;</button><span class="sp"></span><button class="nf-btn" data-act="ptz_left">&#9664;</button><span class="sp"></span><button class="nf-btn" data-act="ptz_right">&#9654;</button><span class="sp"></span><button class="nf-btn" data-act="ptz_down">&#9660;</button><span class="sp"></span></div>
+            <div class="cm-look"></div>`;
+          this.els.grid.appendChild(card);
+        }
+        card.classList.toggle("person", !!c.person);
+        card.querySelector(".nm").textContent = c.name;
+        const stEl = card.querySelector(".cm-state");
+        stEl.textContent = c.person ? "PERSON" : c.online ? "ONLINE" : c.streaming ? "CONNECTING" : c.error ? "OFFLINE" : "IDLE";
+        stEl.className = `cm-state${c.person ? " warn" : c.online ? " on" : ""}`;
+        card.querySelector(".cm-meta").textContent = `${c.host} · ${c.watch ? "감시 ON" : "감시 OFF"}${c.frames ? ` · ${c.frames} 프레임` : ""}${c.error ? ` · ${c.error}` : ""}`;
+        card.querySelector('[data-act="watch"]').classList.toggle("active", !!c.watch);
+        const img = card.querySelector("img.live");
+        if (img.dataset.live && !this._visible) { img.src = ""; img.dataset.live = ""; }
+        card.querySelector(".cm-off").hidden = !!img.dataset.live;
+      }
+    }
+    const evs = (st.events || []).slice().reverse();
+    this.els.events.innerHTML = evs.length ? evs.map((e) => {
+      const d = new Date(e.ts * 1000);
+      const snap = e.snapshot ? `<img src="file://${e.snapshot}" alt="">` : "";
+      return `<div class="ev">${snap}<span class="t">${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}</span><span>${e.text}</span></div>`;
+    }).join("") : "아직 사건 없음";
+  },
+
+  async onGridClick(e) {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const card = btn.closest(".cm-card"); const name = card.dataset.name; const act = btn.dataset.act;
+    if (act === "live") {
+      const img = card.querySelector("img.live");
+      if (img.dataset.live) { img.src = ""; img.dataset.live = ""; card.querySelector(".cm-off").hidden = false; return; }
+      img.src = `${this.BASE}/live.mjpg?cam=${encodeURIComponent(name)}&t=${Date.now()}`; img.dataset.live = "1"; card.querySelector(".cm-off").hidden = true;
+      return;
+    }
+    if (act === "remove") { if (!confirm(`${name} 카메라를 목록에서 제거할까요?`)) return; await this.api("/remove", { name }).catch(() => null); await this.poll(); return; }
+    if (act === "watch") { const c = this.find(name); await this.control({ camera: name, action: c && c.watch ? "watch_off" : "watch_on" }); return; }
+    btn.disabled = true;
+    const r = await this.control({ camera: name, action: act });
+    btn.disabled = false;
+    if (act === "look") card.querySelector(".cm-look").textContent = r.msg;
+    if (!r.ok) this.setErr(r.msg);
   },
 });

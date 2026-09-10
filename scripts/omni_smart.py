@@ -315,6 +315,42 @@ async def cmd_device(cmd, args, creds):
         await dev.disconnect()
 
 
+async def cmd_camera(args, creds):
+    """카메라(C210 등) 제어 — ptz(pan/tilt 도), privacy(on), status. Tapo 클라우드 계정으로 접속."""
+    from kasa import Module
+    cache = load_cache()
+    entry = find_entry(cache, args.get("target"))
+    if entry is None:
+        return {"ok": False, "error": "NOT_FOUND", "hint": "카메라가 스마트 기기 캐시에 없음 — CAMERA 패널 DISCOVER(깊게) 또는 SMART CONTROL SCAN"}
+    dev = await connect(entry, creds)
+    try:
+        act = str(args.get("action") or "status")
+        pt = dev.modules.get(Module.PanTilt)
+        lm = dev.modules.get(Module.LensMask)
+        if act == "ptz":
+            if pt is None:
+                return {"ok": False, "error": "NO_PTZ", "hint": "이 카메라는 회전을 지원하지 않습니다"}
+            pan, tilt = int(args.get("pan") or 0), int(args.get("tilt") or 0)
+            if pan:
+                await pt.pan(pan)
+            if tilt:
+                await pt.tilt(tilt)
+            return {"ok": True, "pan": pan, "tilt": tilt}
+        if act == "privacy":
+            if lm is None:
+                return {"ok": False, "error": "NO_LENS_MASK", "hint": "프라이버시 모드를 지원하지 않는 카메라"}
+            await lm.set_enabled(bool(args.get("on")))
+            await asyncio.sleep(0.3)
+            await dev.update()
+            return {"ok": True, "privacy": bool(lm.enabled)}
+        info = await describe(dev)
+        info["ptz"] = pt is not None
+        info["privacy"] = bool(lm.enabled) if lm is not None else None
+        return {"ok": True, "device": info}
+    finally:
+        await dev.disconnect()
+
+
 async def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "states"
     try:
@@ -336,6 +372,8 @@ async def main():
             out(await cmd_discover(creds))
         elif cmd == "add":
             out(await cmd_add(args, creds))
+        elif cmd == "camera":
+            out(await cmd_camera(args, creds))
         elif cmd == "states":
             out(await cmd_states(creds))
         elif cmd in ("state", "on", "off", "toggle", "set"):

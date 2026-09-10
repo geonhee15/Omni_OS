@@ -9,6 +9,9 @@ echo "[2/3] pip install (websockets·pillow·Vision·mediapipe…)"
 ./venv/bin/pip install --quiet -r requirements.txt
 echo "[3/3] 손 추적 모델 (~8MB)"
 mkdir -p models
+if [ ! -f models/efficientdet_lite0.tflite ]; then
+  curl -sL -o models/efficientdet_lite0.tflite "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite"
+fi
 if [ ! -f models/hand_landmarker.task ]; then
   curl -sL -o models/hand_landmarker.task \
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"

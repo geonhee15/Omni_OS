@@ -6,6 +6,7 @@
 - 도구       카톡 알림 DB 리더 / scripts/gmail_helper.py
 - 앱 제어    ~/.omni/halo_mailbox.jsonl (append) → 앱이 폴링해 실행/표시
 """
+import base64
 import json
 import os
 import plistlib
