@@ -8,32 +8,63 @@
 <meta name="theme-color" content="#000">
 <title>OMNI PHONE GLASSES</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; color: #9fd8ff; font-family: -apple-system, "SF Mono", Menlo, monospace; overflow: hidden; -webkit-user-select: none; user-select: none; }
-  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: brightness(0.55) saturate(0.7); background: #000; }
-  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
-  #hud { width: 92vmin; height: 92vmin; max-width: 92vw; max-height: 92vh; image-rendering: auto; mix-blend-mode: screen; filter: drop-shadow(0 0 14px rgba(60, 200, 255, 0.45)); transition: opacity 0.2s; }
-  #top { position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0; display: flex; justify-content: space-between; padding: 10px 14px; font-size: 11px; letter-spacing: 2px; color: rgba(159, 216, 255, 0.85); text-shadow: 0 0 8px rgba(60, 200, 255, 0.6); }
-  #bottom { position: fixed; bottom: env(safe-area-inset-bottom, 8px); left: 0; right: 0; text-align: center; padding: 12px; font-size: 10px; letter-spacing: 1.5px; color: rgba(159, 216, 255, 0.6); }
+  html, body { margin: 0; height: 100%; background: #000; color: #9fd8ff; font-family: -apple-system, "SF Mono", Menlo, monospace; overflow: hidden; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: brightness(0.6) saturate(0.75); background: #000; }
+  #stage { position: fixed; inset: 0; }
+  /* 안경 프레임: 렌즈 밖은 어둡게 가려 "안경 너머로 보는" 느낌 */
+  #frame { position: absolute; left: 0; width: 100%; height: auto; display: block; pointer-events: none; }
+  /* HUD — 실제 안경 디스플레이: 256×256 16색, 픽셀 그대로 보이게 */
+  #hud { position: absolute; image-rendering: pixelated; image-rendering: crisp-edges; mix-blend-mode: screen; filter: drop-shadow(0 0 10px rgba(80, 210, 255, 0.5)); transition: opacity 0.15s; }
+  #hudlabel { position: absolute; font-size: 8px; letter-spacing: 1.5px; color: rgba(159, 216, 255, 0.55); white-space: nowrap; pointer-events: none; text-align: center; overflow: hidden; text-overflow: ellipsis; }
+  #top { position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; font-size: 11px; letter-spacing: 2px; color: rgba(159, 216, 255, 0.85); text-shadow: 0 0 8px rgba(60, 200, 255, 0.6); z-index: 3; }
+  #top .btn { border: 1px solid rgba(120, 200, 255, 0.5); border-radius: 14px; padding: 4px 10px; font-size: 10px; letter-spacing: 2px; margin-left: 8px; color: #cfefff; background: rgba(10, 30, 50, 0.5); }
+  #bottom { position: fixed; bottom: env(safe-area-inset-bottom, 8px); left: 0; right: 0; text-align: center; padding: 12px; font-size: 10px; letter-spacing: 1.5px; line-height: 1.7; color: rgba(159, 216, 255, 0.6); z-index: 3; }
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #3dffa8; margin-right: 6px; vertical-align: middle; box-shadow: 0 0 8px #3dffa8; }
   .dot.off { background: #ff6b6b; box-shadow: 0 0 8px #ff6b6b; }
   .dot.warn { background: #ffbe3c; box-shadow: 0 0 8px #ffbe3c; }
-  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(0, 4, 12, 0.92); z-index: 10; text-align: center; padding: 30px; }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(0, 4, 12, 0.93); z-index: 10; text-align: center; padding: 30px; }
   #start h1 { font-size: 22px; letter-spacing: 6px; margin: 0; color: #cfefff; text-shadow: 0 0 18px rgba(60, 200, 255, 0.7); }
-  #start p { font-size: 12px; line-height: 1.7; color: rgba(159, 216, 255, 0.8); margin: 0; }
+  #start p { font-size: 12px; line-height: 1.7; color: rgba(159, 216, 255, 0.8); margin: 0; max-width: 340px; }
   #start button { margin-top: 10px; font: inherit; font-size: 14px; letter-spacing: 4px; padding: 14px 34px; color: #cfefff; background: rgba(20, 60, 100, 0.5); border: 1px solid rgba(120, 200, 255, 0.7); border-radius: 30px; box-shadow: 0 0 20px rgba(60, 200, 255, 0.35); }
   #err { color: #ff9b9b; font-size: 11px; max-width: 320px; }
-  #cap { position: fixed; left: 0; right: 0; bottom: 60px; text-align: center; font-size: 13px; color: rgba(207, 239, 255, 0.55); padding: 0 24px; display: none; }
 </style>
 </head>
 <body>
 <video id="cam" autoplay playsinline muted></video>
-<div id="stage"><img id="hud" alt="HUD"></div>
-<div id="top"><span><span class="dot off" id="dot"></span><span id="state">CONNECTING</span></span><span id="mic">MIC OFF</span></div>
-<div id="bottom">화면 탭 = 알림 브리핑 &nbsp;·&nbsp; "옴니야 …" 하고 말하기</div>
-<div id="cap"></div>
+<div id="stage">
+  <svg id="frame" viewBox="0 0 1000 430" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <mask id="lensmask">
+        <rect x="0" y="0" width="1000" height="430" fill="#fff"/>
+        <path id="lensL" d="M70 90 h370 a52 52 0 0 1 52 52 v170 a75 75 0 0 1 -75 75 h-324 a75 75 0 0 1 -75 -75 v-170 a52 52 0 0 1 52 -52 z" fill="#000"/>
+        <path id="lensR" d="M560 90 h370 a52 52 0 0 1 52 52 v170 a75 75 0 0 1 -75 75 h-324 a75 75 0 0 1 -75 -75 v-170 a52 52 0 0 1 52 -52 z" fill="#000"/>
+      </mask>
+      <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <!-- 렌즈 밖 어둡게 -->
+    <rect x="0" y="0" width="1000" height="430" fill="rgba(0,0,0,0.82)" mask="url(#lensmask)"/>
+    <!-- 프레임 -->
+    <g fill="none" stroke="rgba(190,225,255,0.85)" stroke-width="7" filter="url(#glow)">
+      <use href="#lensL"/><use href="#lensR"/>
+      <path d="M492 150 q8 -22 30 -22 q22 0 30 22" stroke-width="8"/>
+      <path d="M18 132 q40 -30 52 -30 M982 132 q-40 -30 -52 -30" stroke-width="10" stroke-linecap="round"/>
+    </g>
+    <!-- 디스플레이 모듈 위치 안내 (오른쪽 렌즈 위쪽, 올려다보는 자리) -->
+    <g fill="none" stroke="rgba(120,200,255,0.35)" stroke-width="1.5" stroke-dasharray="4 5">
+      <circle id="dispmark" cx="745" cy="205" r="84"/>
+    </g>
+  </svg>
+  <img id="hud" alt="HUD">
+  <div id="hudlabel">R · HALO DISPLAY · 256×256 · 16 COLORS</div>
+</div>
+<div id="top">
+  <span><span class="dot off" id="dot"></span><span id="state">CONNECTING</span></span>
+  <span><span id="mic">MIC OFF</span><span class="btn" id="mode">GLASSES</span><span class="btn" id="scale">1x</span></span>
+</div>
+<div id="bottom">화면 탭 = 알림 브리핑 &nbsp;·&nbsp; "옴니야 …" 하고 말하기<br><span id="hint">안경 시점: 오른쪽 렌즈 위의 작은 디스플레이가 실제로 보게 될 화면입니다. 가로로 돌리면 실제 크기에 더 가깝습니다.</span></div>
 <div id="start">
   <h1>OMNI</h1>
-  <p>폰 안경 모드<br>카메라는 안경의 눈, 마이크는 안경의 귀, 이 화면은 안경의 HUD가 됩니다.<br>탭하면 카메라·마이크 권한을 묻습니다.</p>
+  <p>폰 안경 모드<br>카메라는 안경의 눈, 마이크는 안경의 귀, 이 화면은 안경의 HUD가 됩니다.<br>실제 안경 디스플레이(한쪽 눈, 0.2인치 컬러 microOLED, 256×256·16색)를 그대로 흉내 냅니다.<br>탭하면 카메라·마이크 권한을 묻습니다.</p>
   <button id="go">START</button>
   <div id="err"></div>
 </div>
@@ -41,10 +72,49 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const hud = $("hud"), cam = $("cam"), dot = $("dot"), stateEl = $("state"), micEl = $("mic"), errEl = $("err"), capEl = $("cap");
+  const hud = $("hud"), cam = $("cam"), dot = $("dot"), stateEl = $("state"), micEl = $("mic"), errEl = $("err");
+  const frame = $("frame"), label = $("hudlabel"), modeBtn = $("mode"), scaleBtn = $("scale"), hint = $("hint");
   let ws = null, ac = null, proc = null, stream = null, started = false;
   let nextTime = 0, playingUntil = 0, quiet = false, lastTap = 0, pendingSamples = [], pendingLen = 0;
   const wsUrl = (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/ws";
+  const SCALES = [1, 1.5, 2];
+  let mode = localStorage.getItem("omni.glasses.mode") || "glasses";
+  let scaleIdx = Number(localStorage.getItem("omni.glasses.scale") || 0) % SCALES.length;
+
+  // ---- 화면 배치: 안경 시점(오른쪽 렌즈 위 작은 원형 디스플레이) / HUD 전체 보기
+  function layout() {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (mode === "hud") {
+      frame.style.display = "none";
+      const d = Math.min(vw, vh) * 0.92;
+      hud.style.width = hud.style.height = d + "px";
+      hud.style.left = (vw - d) / 2 + "px"; hud.style.top = (vh - d) / 2 + "px";
+      label.style.left = (vw - d) / 2 + "px"; label.style.top = (vh - d) / 2 + d + 6 + "px"; label.style.width = d + "px"; label.style.fontSize = "8px";
+      label.textContent = "HALO DISPLAY · 256×256 · 16 COLORS · 실제 해상도 그대로";
+      modeBtn.textContent = "HUD"; scaleBtn.style.display = "none";
+      hint.textContent = "HUD 보기: 실제 디스플레이 화소(256×256)를 크게 보여줍니다.";
+      return;
+    }
+    frame.style.display = "block";
+    const fw = vw, fh = vw * 0.43;                 // viewBox 1000×430
+    frame.style.width = fw + "px"; frame.style.top = (vh - fh) / 2 + "px";
+    const u = fw / 1000;                            // viewBox 단위 → px
+    const s = SCALES[scaleIdx];
+    const cx = 745 * u, cy = (vh - fh) / 2 + 205 * u, r = 84 * u * s;
+    hud.style.width = hud.style.height = 2 * r + "px";
+    hud.style.left = cx - r + "px"; hud.style.top = cy - r + "px";
+    const lw = Math.min(vw - cx + (cx - 2 * r), 4 * r);   // 렌즈 안에서 HUD 아래 가운데 정렬, 화면 밖으로 나가지 않게
+    label.style.width = lw + "px"; label.style.left = cx - lw / 2 + "px"; label.style.top = cy + r + 4 * u + "px";
+    label.style.fontSize = Math.max(6, Math.min(9, 8 * u * 2.2)) + "px";
+    label.textContent = "R · HALO 256×256 · 16색";
+    modeBtn.textContent = "GLASSES"; scaleBtn.style.display = ""; scaleBtn.textContent = s + "x";
+    hint.textContent = "안경 시점: 오른쪽 렌즈 위의 작은 디스플레이가 실제로 보게 될 화면입니다. 가로로 돌리면 실제 크기에 더 가깝습니다.";
+  }
+  modeBtn.addEventListener("click", (e) => { e.stopPropagation(); mode = mode === "glasses" ? "hud" : "glasses"; localStorage.setItem("omni.glasses.mode", mode); layout(); });
+  scaleBtn.addEventListener("click", (e) => { e.stopPropagation(); scaleIdx = (scaleIdx + 1) % SCALES.length; localStorage.setItem("omni.glasses.scale", String(scaleIdx)); layout(); });
+  window.addEventListener("resize", layout);
+  window.addEventListener("orientationchange", () => setTimeout(layout, 300));
+  layout();
 
   function setState(s, cls) { stateEl.textContent = s; dot.className = "dot" + (cls ? " " + cls : ""); }
 
@@ -102,8 +172,8 @@
         ws.send(all.buffer);
       }
     };
-    srcNode.connect(proc); proc.connect(ac.destination);   // destination 연결은 iOS에서 프로세서 구동용 (출력은 0)
-    const g = ac.createGain(); g.gain.value = 0; proc.disconnect(); proc.connect(g); g.connect(ac.destination);
+    const g = ac.createGain(); g.gain.value = 0;
+    srcNode.connect(proc); proc.connect(g); g.connect(ac.destination);   // 출력 0 — 프로세서 구동용
     micEl.textContent = "MIC ON";
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "mic", on: true }));
   }
