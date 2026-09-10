@@ -33,6 +33,8 @@
   파일만 읽는다. 음성으로 "카톡 확인" 시엔 메일박스로 `notif_refresh`를
   보내 즉시 재조회를 트리거
 
+설치: `./setup.sh` (venv + `requirements.txt` + `models/hand_landmarker.task` 다운로드). 모델 파일은 저장소에 넣지 않는다(gitignore).
+
 ## 폰 안경 (Phone Glasses) — 안경이 오기 전에 폰으로
 
 `venv/bin/python phone_glasses.py` (앱 HALO GLASSES 패널의 START PHONE GLASSES가 이걸 띄운다).

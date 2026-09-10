@@ -1,0 +1,17 @@
+# 안경 브리지 + 폰 안경 (halo/venv)
+websockets==17.1
+numpy>=2,<3
+pillow>=11
+sounddevice>=0.5
+certifi
+qrcode>=8
+halo-emulator==2.0.1
+pygame>=2.6
+bleak==0.22.3
+# macOS Vision OCR — bleak 호환을 위해 pyobjc 10.x 고정
+pyobjc-core<11
+pyobjc-framework-Cocoa<11
+pyobjc-framework-Quartz<11
+pyobjc-framework-Vision<11
+# 손 추적(제스처 줌) — 1.0.1은 launchd 환경에서 Metal 크래시 이력, 1.0.0 고정
+mediapipe==1.0.0
