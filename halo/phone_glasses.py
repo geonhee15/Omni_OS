@@ -144,6 +144,9 @@ class State:
         self._qr = None
         self.ocr_busy = False
         self.reader_text = ""
+        self.latest_frame = None
+        self.frame_worker = None
+        self.ocr_ms = 0
 
     def qr_data_url(self) -> str:
         if self._qr is not None:
@@ -163,7 +166,7 @@ class State:
                 "clients": len(self.clients), "state": self.status, "caption": self.caption,
                 "gate": USE_GATE, "gate_ready": self.gate_ready, "mic": self.mic_on,
                 "quiet": self.quiet, "tools": core.TOOL_NAMES, "log": list(LOG)[-10:],
-                "qr": self.qr_data_url(), "ocr": OCR_AVAILABLE, "hands": HANDS.ok, "reader": self.reader_text, "minimal": MINIMAL_HUD,
+                "qr": self.qr_data_url(), "ocr": OCR_AVAILABLE, "ocr_ms": self.ocr_ms, "hands": HANDS.ok, "reader": self.reader_text, "minimal": MINIMAL_HUD,
                 "uptime": int(time.time() - self.started), "ts": time.time()}
 
 
@@ -516,6 +519,30 @@ class Bridge:
 BRIDGE = Bridge()
 
 
+async def frame_worker():
+    """슬롯의 최신 프레임 하나를 처리: 손(즉시 전송) → OCR(전송). 처리 중 들어온 프레임은 최신 것만 남는다."""
+    while S.latest_frame is not None:
+        conn, seq, jpeg, zoom, t_recv = S.latest_frame
+        S.latest_frame = None
+        if conn not in S.clients:
+            continue
+        try:
+            hand = await asyncio.to_thread(HANDS.analyze, jpeg)
+            await conn.send(json.dumps({"type": "hand", "hand": hand, "seq": seq}))
+            crop = jpeg
+            if zoom > 1.001:
+                crop = await asyncio.to_thread(center_crop_jpeg, jpeg, zoom)
+            res = await asyncio.to_thread(OCR.recognize, crop)
+            S.ocr_ms = res["ms"]
+            await conn.send(json.dumps({"type": "ocr", "items": res["items"], "orient": res["orient"], "label": res["label"],
+                                        "ms": res["ms"], "mode": res["mode"], "hand": hand, "seq": seq,
+                                        "lag": int((time.time() - t_recv) * 1000), "t": time.time()}, ensure_ascii=False))
+        except websockets.ConnectionClosed:
+            return
+        except Exception as e:  # noqa: BLE001
+            log(f"프레임 처리 오류: {e}")
+
+
 async def ws_handler(conn):
     S.clients.add(conn)
     log(f"폰 접속 ({conn.remote_address[0] if conn.remote_address else '?'}) · 클라이언트 {len(S.clients)}")
@@ -547,33 +574,14 @@ async def ws_handler(conn):
                     if not f.done():
                         f.set_result(jpeg)
             elif t == "ocr_frame":
-                # 카메라 텍스트 인식 — 한 번에 하나만, 바쁘면 프레임 버림
-                if S.ocr_busy or not OCR_AVAILABLE:
-                    continue
+                # 최신 프레임만: 슬롯에 덮어쓰고 워커가 하나씩 처리 (밀린 프레임은 버림 → 지연 누적 방지)
                 try:
                     jpeg = base64.b64decode(ev.get("jpeg") or "")
                 except ValueError:
                     continue
-                S.ocr_busy = True
-                zoom = float(ev.get("zoom") or 1)
-                full = jpeg
-                if zoom > 1.001:
-                    jpeg = await asyncio.to_thread(center_crop_jpeg, jpeg, zoom)
-
-                def work():
-                    hand = HANDS.analyze(full)             # 손은 풀 프레임에서 (줌 밖 주변도 봐야 함)
-                    res = OCR.recognize(jpeg)
-                    return res, hand
-                try:
-                    res, hand = await asyncio.to_thread(work)
-                except Exception as e:  # noqa: BLE001
-                    res, hand = {"items": [], "orient": "id", "label": "", "ms": 0, "mode": "error"}, {"present": False}
-                    log(f"OCR 오류: {e}")
-                finally:
-                    S.ocr_busy = False
-                await conn.send(json.dumps({"type": "ocr", "items": res["items"], "orient": res["orient"], "label": res["label"],
-                                            "ms": res["ms"], "mode": res["mode"], "hand": hand,
-                                            "seq": ev.get("seq"), "t": time.time()}, ensure_ascii=False))
+                S.latest_frame = (conn, ev.get("seq"), jpeg, float(ev.get("zoom") or 1), time.time())
+                if S.frame_worker is None or S.frame_worker.done():
+                    S.frame_worker = asyncio.ensure_future(frame_worker())
             elif t == "reader":
                 # 폰이 고른 "지금 읽는 텍스트" → HUD에 한 줄로 다시 써 줌 (빈 문자열 = 지움)
                 text = str(ev.get("text") or "").strip()[:80]

@@ -132,8 +132,8 @@ def _score(items: list[dict]) -> float:
 def _enhance(img: Image.Image) -> Image.Image:
     """흐린·작은 글자용: 자동 대비 + 언샤프 + 확대."""
     g = ImageOps.autocontrast(img, cutoff=1)
-    if g.width < 800:
-        g = g.resize((int(g.width * 1.6), int(g.height * 1.6)), Image.LANCZOS)
+    if g.width < 640:
+        g = g.resize((int(g.width * 1.5), int(g.height * 1.5)), Image.LANCZOS)
     return g.filter(ImageFilter.UnsharpMask(radius=2.0, percent=160, threshold=2))
 
 
@@ -159,12 +159,13 @@ class OrientedOCR:
             return {"items": [], "orient": self.orient, "label": "", "ms": 0, "mode": "bad_frame"}
         now = t0
         best_v, best_items, mode = self.orient, [], "primary"
-        # 결과가 약할수록 방향 재탐색을 자주 (거울상·회전 오인식을 빨리 바로잡기 위해)
-        interval = 0.4 if self.last_score < 8 else SWEEP_EVERY
+        # 재탐색 주기: 글자가 없던 장면은 1초마다(빈 장면에서 8방향+강화를 매번 돌리면 밀린다),
+        # 약한 결과는 0.4초마다(거울상·회전 오인식을 빨리 바로잡기), 좋은 결과는 SWEEP_EVERY
+        interval = 1.0 if self.last_score == 0 else (0.4 if self.last_score < GOOD_SCORE else SWEEP_EVERY)   # 한글은 신뢰도 0.5 고정이라 점수가 낮게 나옴
         need_sweep = now - self.last_sweep > interval
         if not need_sweep:
             _, best_items = _run_variant(img, self.orient)
-            if _score(best_items) < GOOD_SCORE:
+            if 0 < _score(best_items) < GOOD_SCORE and now - self.last_sweep > 0.4:
                 need_sweep = True
         if need_sweep:
             mode = "sweep"

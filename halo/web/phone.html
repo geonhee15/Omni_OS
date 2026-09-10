@@ -17,6 +17,7 @@
   #hud { position: absolute; image-rendering: pixelated; image-rendering: crisp-edges; mix-blend-mode: screen; filter: drop-shadow(0 0 6px rgba(80, 210, 255, 0.35)); transition: opacity 0.15s; }
   #hudlabel { position: absolute; font-size: 8px; letter-spacing: 1.5px; color: rgba(159, 216, 255, 0.55); white-space: nowrap; pointer-events: none; text-align: center; overflow: hidden; text-overflow: ellipsis; }
   #top { position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; font-size: 11px; letter-spacing: 2px; color: rgba(159, 216, 255, 0.85); text-shadow: 0 0 8px rgba(60, 200, 255, 0.6); z-index: 3; }
+  #perf { font-size: 9px; letter-spacing: 1px; color: rgba(159, 216, 255, 0.5); margin-right: 10px; }
   #top .btn { border: 1px solid rgba(120, 200, 255, 0.5); border-radius: 14px; padding: 4px 10px; font-size: 10px; letter-spacing: 2px; margin-left: 8px; color: #cfefff; background: rgba(10, 30, 50, 0.5); }
   #bottom { position: fixed; bottom: env(safe-area-inset-bottom, 8px); left: 0; right: 0; text-align: center; padding: 12px; font-size: 10px; letter-spacing: 1.5px; line-height: 1.7; color: rgba(159, 216, 255, 0.6); z-index: 3; }
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #3dffa8; margin-right: 6px; vertical-align: middle; box-shadow: 0 0 8px #3dffa8; }
@@ -42,6 +43,7 @@
   #leads line { stroke: rgba(120, 210, 255, 0.85); stroke-width: 1.5; filter: drop-shadow(0 0 4px rgba(80, 190, 255, 0.8)); }
   #leads circle { fill: #bfe8ff; }
   #leads rect.tb { fill: none; stroke: rgba(120, 210, 255, 0.5); stroke-width: 1; stroke-dasharray: 3 3; }
+  #leads text.rd { fill: rgba(220, 240, 255, 0.95); font-size: 12px; letter-spacing: 0.5px; font-family: -apple-system, Menlo, monospace; paint-order: stroke; stroke: rgba(0, 10, 20, 0.7); stroke-width: 3px; }
   #leads text.tag { fill: rgba(190, 230, 255, 0.85); font-size: 10px; letter-spacing: 1px; font-family: -apple-system, Menlo, monospace; }
 </style>
 </head>
@@ -75,7 +77,7 @@
 </div>
 <div id="top">
   <span><span class="dot off" id="dot"></span><span id="state">CONNECTING</span></span>
-  <span><span id="mic">MIC OFF</span><span class="btn" id="mode">GLASSES</span><span class="btn" id="scale">1x</span></span>
+  <span><span id="perf"></span><span id="mic">MIC OFF</span><span class="btn" id="mode">GLASSES</span><span class="btn" id="scale">1x</span></span>
 </div>
 <div id="zoomwrap"><span id="zoomval">1.0x</span><input type="range" id="zoom" min="1" max="5" step="0.1" value="1" title="카메라 줌"></div>
 <div id="bottom"><span id="hint">탭 = 알림 브리핑</span></div>
@@ -151,7 +153,8 @@
       else if (m.type === "status") { setState(m.state, m.state === "SPEAKING" ? "warn" : ""); }
       else if (m.type === "audio") { playChunk(m.pcm, m.rate || 24000); }
       else if (m.type === "want_frame") { sendFrame(); }
-      else if (m.type === "ocr") { ocrPending = false; ocrOrient = m.label || ""; handleOcr(m.items || []); handleHand(m.hand); setTimeout(sendOcrFrame, 60); }
+      else if (m.type === "ocr") { ocrPending = false; ocrOrient = m.label || ""; perf(m); handleOcr(m.items || []); setTimeout(sendOcrFrame, 40); }
+      else if (m.type === "hand") { handleHand(m.hand); }
       else if (m.type === "quiet") { quiet = !!m.on; micEl.textContent = quiet ? "QUIET MODE" : (started ? "MIC ON" : "MIC OFF"); }
       else if (m.type === "hello") { quiet = !!m.quiet; setState(m.state || "LISTENING", ""); }
     };
@@ -268,16 +271,21 @@
 
   // ---- 카메라 텍스트 리더: OCR은 맥(Vision)에서, 여기선 0.5초 안정 판정 → 파싱 연출 → HUD에 다시 쓰기 + 리드선
   const ocrLayer = $("ocr"), leads = $("leads"), tracks = new Map();
-  let ocrSeq = 0, ocrPending = false, lastOcrAt = 0, readerKey = null, ocrOrient = "";
+  let ocrSeq = 0, ocrPending = false, lastOcrAt = 0, readerKey = null, ocrOrient = "", fpsCount = 0, fpsAt = performance.now(), fps = 0;
+  function perf(m) {
+    fpsCount++; const now = performance.now();
+    if (now - fpsAt > 1000) { fps = Math.round(fpsCount * 1000 / (now - fpsAt)); fpsCount = 0; fpsAt = now; }
+    $("perf").textContent = "OCR " + (m.ms || 0) + "ms · 지연 " + (m.lag || 0) + "ms · " + fps + "fps";
+  }
   function sendOcrFrame() {
     if (!started || !cam.videoWidth || !ws || ws.readyState !== 1 || ocrPending || quiet) return;
     if (Date.now() - lastOcrAt < 60) return;
     const digital = !hwZoom && zoomCur > 1.001;
-    const c = $("ocrsnap"); const w = digital ? Math.min(800, Math.round(400 * Math.min(zoomCur, 2))) : 400, h = Math.round(cam.videoHeight * w / cam.videoWidth);
+    const c = $("ocrsnap"); const w = digital ? Math.min(720, Math.round(480 * Math.min(zoomCur, 1.5))) : 480, h = Math.round(cam.videoHeight * w / cam.videoWidth);
     c.width = w; c.height = h; c.getContext("2d").drawImage(cam, 0, 0, w, h);
     ocrPending = true; lastOcrAt = Date.now();
     ws.send(JSON.stringify({ type: "ocr_frame", seq: ++ocrSeq, zoom: digital ? Number(zoomCur.toFixed(2)) : 1, jpeg: c.toDataURL("image/jpeg", 0.55).split(",")[1] }));
-    setTimeout(() => { ocrPending = false; }, 1500);
+    setTimeout(() => { ocrPending = false; }, 3000);
   }
   function camRect() {   // object-fit: cover 기준 비디오가 화면에 놓인 사각형
     const vw = window.innerWidth, vh = window.innerHeight, cw = cam.videoWidth || 4, ch = cam.videoHeight || 3;
@@ -288,16 +296,21 @@
   function norm(t) { return String(t).replace(/[\s.,!?:;'"()\[\]{}\-–—·|]/g, "").toLowerCase(); }
   function handleOcr(items) {
     const now = performance.now() / 1000;
+    const sim = (a, b) => { if (a === b) return 1; const n = Math.min(a.length, b.length); let p = 0; while (p < n && a[p] === b[p]) p++; let c = 0; for (const ch of a) if (b.includes(ch)) c++; return Math.max(p / Math.max(a.length, b.length), c / Math.max(a.length, b.length)); };
     for (const it of items) {
       const key = norm(it.text); if (key.length < 2) continue;
       const cx = it.x + it.w / 2, cy = it.y + it.h / 2;
+      // 같은 자리(거리 0.2 이내)의 비슷한 글자(유사도 0.6+)는 같은 트랙 — OCR 글자가 프레임마다 조금씩 달라도 이어진다
       let tr = tracks.get(key);
-      if (tr && now - tr.last < 1.5 && Math.hypot(cx - tr.cx, cy - tr.cy) < 0.12) {
-        tr.last = now; tr.seen++; tr.box = it; tr.cx = cx; tr.cy = cy; tr.text = it.text;
+      if (!tr) { for (const cand of tracks.values()) { if (now - cand.last < 2 && Math.hypot(cx - cand.cx, cy - cand.cy) < 0.2 && sim(cand.key, key) >= 0.6) { tr = cand; break; } } }
+      if (tr && now - tr.last < 2 && Math.hypot(cx - tr.cx, cy - tr.cy) < 0.2) {
+        tr.last = now; tr.seen++; tr.box = it; tr.cx = cx; tr.cy = cy;
+        if (it.text.length >= tr.text.length) tr.text = it.text;
+        if (tr.key !== key) { tracks.delete(tr.key); tr.key = key; tracks.set(key, tr); }
       } else { tr = { key, text: it.text, box: it, cx, cy, first: now, last: now, seen: 1, parsed: false }; tracks.set(key, tr); }
-      if (!tr.parsed && tr.seen >= 2 && now - tr.first >= 0.1) { tr.parsed = true; playParse(tr); }
+      if (!tr.parsed && (tr.seen >= 2 || it.conf >= 0.8) && now - tr.first >= 0.1) { tr.parsed = true; playParse(tr); }
     }
-    for (const [k, tr] of tracks) if (now - tr.last > 1.5) tracks.delete(k);
+    for (const [k, tr] of tracks) if (now - tr.last > 2) tracks.delete(k);
     updateLeads();
   }
   // 파싱 연출: 글자 수에 따라 1·2·3글자 단위 직사각형이 왼쪽부터 따다닥 켜지며 글로우 → 페이드아웃
@@ -323,19 +336,20 @@
   function updateLeads() {
     const now = performance.now() / 1000;
     const hr = hud.getBoundingClientRect(); const hc = { x: hr.left + hr.width / 2, y: hr.top + hr.height / 2, r: hr.width / 2 };
-    const vis = [...tracks.values()].filter((t) => t.parsed && now - t.last < 1.2).sort((a, b) => b.box.w * b.box.h - a.box.w * a.box.h).slice(0, 3);
+    const vis = [...tracks.values()].filter((t) => t.parsed && now - t.last < 1.6).sort((a, b) => b.box.w * b.box.h - a.box.w * a.box.h).slice(0, 3);
     let html = "";
     for (const t of vis) {
       const r = toScreen(t.box); const px = r.x + r.w / 2, py = r.y;
       const dx = hc.x - px, dy = hc.y - py, len = Math.hypot(dx, dy) || 1; const ex = hc.x - dx / len * hc.r, ey = hc.y - dy / len * hc.r;
       html += `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" class="tb"/><circle cx="${px}" cy="${py}" r="3"/><line x1="${px}" y1="${py}" x2="${ex}" y2="${ey}"/>`;
       if (ocrOrient) html += `<text x="${r.x + r.w + 6}" y="${r.y + 10}" class="tag">${ocrOrient}</text>`;
+      if (t === vis[0] && mode === "glasses") { const esc = t.text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); html += `<text x="${hc.x}" y="${hc.y + hc.r + 14}" class="rd" text-anchor="middle">${esc}</text>`; }
     }
     leads.innerHTML = html;
     const best = vis[0] ? vis[0].key : null;
     if (best !== readerKey) { readerKey = best; if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "reader", text: best ? vis[0].text : "" })); }
   }
-  setInterval(sendOcrFrame, 300);   // 응답이 끊겨도 계속 (평소엔 응답 즉시 다음 프레임)
+  setInterval(sendOcrFrame, 500);   // 응답이 끊겨도 계속 (평소엔 응답 즉시 다음 프레임)
   setInterval(updateLeads, 300);
   window.omniTestOcr = handleOcr;   // 개발용: 가짜 OCR 결과 주입
 
@@ -346,7 +360,7 @@
       ac = new (window.AudioContext || window.webkitAudioContext)();
       await ac.resume();
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } } });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, advanced: [{ focusMode: "continuous" }] } });
       } catch (e1) {
         stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
         errEl.textContent = "카메라 없이 마이크만 사용합니다 (" + e1.name + ")";

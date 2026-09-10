@@ -69,6 +69,8 @@ class HandTracker:
             return {"present": False, "off": True}
         try:
             img = Image.open(io.BytesIO(jpeg)).convert("RGB")
+            if img.width > 288:
+                img = img.resize((288, int(img.height * 288 / img.width)), Image.BILINEAR)
             arr = np.asarray(img, dtype=np.uint8)
             mimg = mp.Image(image_format=mp.ImageFormat.SRGB, data=arr)
             ts = int((time.monotonic() - self.t0) * 1000)
