@@ -9,10 +9,10 @@
 <title>OMNI PHONE GLASSES</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #9fd8ff; font-family: -apple-system, "SF Mono", Menlo, monospace; overflow: hidden; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
-  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: brightness(0.6) saturate(0.75); background: #000; }
+  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: brightness(1) saturate(0.9); background: #000; }
   #stage { position: fixed; inset: 0; }
   /* 안경 프레임: 렌즈 밖은 어둡게 가려 "안경 너머로 보는" 느낌 */
-  #frame { position: absolute; left: 0; width: 100%; height: auto; display: block; pointer-events: none; }
+  #frame { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
   /* HUD — 실제 안경 디스플레이: 256×256 16색, 픽셀 그대로 보이게 */
   #hud { position: absolute; image-rendering: pixelated; image-rendering: crisp-edges; mix-blend-mode: screen; filter: drop-shadow(0 0 10px rgba(80, 210, 255, 0.5)); transition: opacity 0.15s; }
   #hudlabel { position: absolute; font-size: 8px; letter-spacing: 1.5px; color: rgba(159, 216, 255, 0.55); white-space: nowrap; pointer-events: none; text-align: center; overflow: hidden; text-overflow: ellipsis; }
@@ -32,26 +32,30 @@
 <body>
 <video id="cam" autoplay playsinline muted></video>
 <div id="stage">
-  <svg id="frame" viewBox="0 0 1000 430" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <svg id="frame" viewBox="0 0 1000 1800" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
+      <!-- 렌즈 모양은 fill 없이 정의 — use로 쓸 때 마스크에서는 검정(뚫기), 프레임에서는 선만 -->
+      <path id="lensL" d="M70 90 h370 a52 52 0 0 1 52 52 v170 a75 75 0 0 1 -75 75 h-324 a75 75 0 0 1 -75 -75 v-170 a52 52 0 0 1 52 -52 z"/>
+      <path id="lensR" d="M560 90 h370 a52 52 0 0 1 52 52 v170 a75 75 0 0 1 -75 75 h-324 a75 75 0 0 1 -75 -75 v-170 a52 52 0 0 1 52 -52 z"/>
       <mask id="lensmask">
-        <rect x="0" y="0" width="1000" height="430" fill="#fff"/>
-        <path id="lensL" d="M70 90 h370 a52 52 0 0 1 52 52 v170 a75 75 0 0 1 -75 75 h-324 a75 75 0 0 1 -75 -75 v-170 a52 52 0 0 1 52 -52 z" fill="#000"/>
-        <path id="lensR" d="M560 90 h370 a52 52 0 0 1 52 52 v170 a75 75 0 0 1 -75 75 h-324 a75 75 0 0 1 -75 -75 v-170 a52 52 0 0 1 52 -52 z" fill="#000"/>
+        <rect x="0" y="0" width="100%" height="100%" fill="#fff"/>
+        <g id="maskTx"><use href="#lensL" fill="#000"/><use href="#lensR" fill="#000"/></g>
       </mask>
       <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
     </defs>
-    <!-- 렌즈 밖 어둡게 -->
-    <rect x="0" y="0" width="1000" height="430" fill="rgba(0,0,0,0.82)" mask="url(#lensmask)"/>
-    <!-- 프레임 -->
+    <!-- 렌즈 밖 어둡게 (화면 전체) -->
+    <rect x="0" y="0" width="100%" height="100%" fill="rgba(0,0,0,0.82)" mask="url(#lensmask)"/>
+    <!-- 프레임 (세로 가운데로 이동 — JS가 translate 설정) -->
+    <g id="glassesTx">
     <g fill="none" stroke="rgba(190,225,255,0.85)" stroke-width="7" filter="url(#glow)">
-      <use href="#lensL"/><use href="#lensR"/>
+      <use href="#lensL" fill="none"/><use href="#lensR" fill="none"/>
       <path d="M492 150 q8 -22 30 -22 q22 0 30 22" stroke-width="8"/>
       <path d="M18 132 q40 -30 52 -30 M982 132 q-40 -30 -52 -30" stroke-width="10" stroke-linecap="round"/>
     </g>
     <!-- 디스플레이 모듈 위치 안내 (오른쪽 렌즈 위쪽, 올려다보는 자리) -->
     <g fill="none" stroke="rgba(120,200,255,0.35)" stroke-width="1.5" stroke-dasharray="4 5">
       <circle id="dispmark" cx="745" cy="205" r="84"/>
+    </g>
     </g>
   </svg>
   <img id="hud" alt="HUD">
@@ -96,11 +100,13 @@
       return;
     }
     frame.style.display = "block";
-    const fw = vw, fh = vw * 0.43;                 // viewBox 1000×430
-    frame.style.width = fw + "px"; frame.style.top = (vh - fh) / 2 + "px";
-    const u = fw / 1000;                            // viewBox 단위 → px
+    const u = vw / 1000;                            // viewBox 단위 → px (가로 기준)
+    const H = Math.round(vh / u);                   // 화면 비율에 맞춘 viewBox 높이
+    frame.setAttribute("viewBox", "0 0 1000 " + H);
+    const offY = Math.round((H - 430) / 2);         // 안경(430 높이)을 세로 가운데로
+    for (const id of ["glassesTx", "maskTx"]) document.getElementById(id).setAttribute("transform", "translate(0," + offY + ")");
     const s = SCALES[scaleIdx];
-    const cx = 745 * u, cy = (vh - fh) / 2 + 205 * u, r = 84 * u * s;
+    const cx = 745 * u, cy = (offY + 205) * u, r = 84 * u * s;
     hud.style.width = hud.style.height = 2 * r + "px";
     hud.style.left = cx - r + "px"; hud.style.top = cy - r + "px";
     const lw = Math.min(vw - cx + (cx - 2 * r), 4 * r);   // 렌즈 안에서 HUD 아래 가운데 정렬, 화면 밖으로 나가지 않게
