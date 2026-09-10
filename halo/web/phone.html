@@ -204,8 +204,8 @@
   let ocrSeq = 0, ocrPending = false, lastOcrAt = 0, readerKey = null;
   function sendOcrFrame() {
     if (!started || !cam.videoWidth || !ws || ws.readyState !== 1 || ocrPending || quiet) return;
-    if (Date.now() - lastOcrAt < 250) return;
-    const c = $("ocrsnap"); const w = 480, h = Math.round(cam.videoHeight * w / cam.videoWidth);
+    if (Date.now() - lastOcrAt < 120) return;
+    const c = $("ocrsnap"); const w = 400, h = Math.round(cam.videoHeight * w / cam.videoWidth);
     c.width = w; c.height = h; c.getContext("2d").drawImage(cam, 0, 0, w, h);
     ocrPending = true; lastOcrAt = Date.now();
     ws.send(JSON.stringify({ type: "ocr_frame", seq: ++ocrSeq, jpeg: c.toDataURL("image/jpeg", 0.55).split(",")[1] }));
@@ -227,7 +227,7 @@
       if (tr && now - tr.last < 1.5 && Math.hypot(cx - tr.cx, cy - tr.cy) < 0.12) {
         tr.last = now; tr.seen++; tr.box = it; tr.cx = cx; tr.cy = cy; tr.text = it.text;
       } else { tr = { key, text: it.text, box: it, cx, cy, first: now, last: now, seen: 1, parsed: false }; tracks.set(key, tr); }
-      if (!tr.parsed && tr.seen >= 2 && now - tr.first >= 0.3) { tr.parsed = true; playParse(tr); }
+      if (!tr.parsed && tr.seen >= 2 && now - tr.first >= 0.1) { tr.parsed = true; playParse(tr); }
     }
     for (const [k, tr] of tracks) if (now - tr.last > 1.5) tracks.delete(k);
     updateLeads();
