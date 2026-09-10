@@ -75,6 +75,10 @@
         <span class="nav-icon">&#9673;</span>
         <span class="nav-label">SMART CONTROL</span>
       </button>
+      <button class="nav-item" data-panel="halo">
+        <span class="nav-icon">&#9711;</span>
+        <span class="nav-label">HALO GLASSES</span>
+      </button>
       <button class="nav-item" data-panel="proj">
         <span class="nav-icon">&#10697;</span>
         <span class="nav-label">PROJECTS</span>
@@ -519,6 +523,56 @@
               <button class="nf-btn" id="sc-gest-add">+ ADD GESTURE</button>
             </div>
             <div class="sc-gest-rows" id="sc-gest-rows"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- panel: HALO GLASSES (안경용 옴니 — 폰 안경 서버, 실기기 준비) -->
+    <section class="panel panel-halo" id="panel-halo">
+      <div class="nf-wrap">
+        <div class="nf-head">
+          <span class="nf-title">HALO GLASSES</span>
+          <span class="nf-sub" id="hg-sub">&mdash;</span>
+          <span class="ts-spacer"></span>
+          <span class="nf-updated" id="hg-updated"></span>
+          <button class="nf-btn" id="hg-start">START PHONE GLASSES</button>
+          <button class="nf-btn" id="hg-stop">STOP</button>
+          <button class="nf-btn" id="hg-open">OPEN ON MAC</button>
+        </div>
+        <div class="nf-body">
+          <div class="wx-err" id="hg-err" hidden></div>
+          <div class="hg-grid">
+            <div class="hg-card">
+              <div class="hg-card-title">PHONE GLASSES</div>
+              <div class="hg-url" id="hg-url">서버 꺼짐 — START PHONE GLASSES</div>
+              <div class="hg-qr"><img id="hg-qr" alt="" hidden></div>
+              <div class="hg-kv" id="hg-live">
+                <span>클라이언트</span><b id="hg-clients">0</b>
+                <span>상태</span><b id="hg-state">&mdash;</b>
+                <span>게이트</span><b id="hg-gate">&mdash;</b>
+                <span>학교 모드</span><b id="hg-quiet">&mdash;</b>
+              </div>
+              <div class="hg-caption" id="hg-caption"></div>
+            </div>
+            <div class="hg-card">
+              <div class="hg-card-title">폰에서 쓰는 법</div>
+              <div class="sc-steps">
+                <div class="sc-step"><span class="n">1</span>폰을 이 맥과 <b>같은 와이파이</b>에 연결</div>
+                <div class="sc-step"><span class="n">2</span>처음 한 번: 폰 브라우저로 <b id="hg-ca">…/ca.crt</b> 를 열어 인증서 설치 (아이폰: 설정 &rarr; 프로파일 설치 &rarr; 설정 &rarr; 일반 &rarr; 정보 &rarr; 인증서 신뢰 설정 켜기 / 안드로이드: 설정 &rarr; 보안 &rarr; CA 인증서 설치)</div>
+                <div class="sc-step"><span class="n">3</span>QR을 찍거나 위 주소를 열고 <b>START</b> 탭 &rarr; 카메라·마이크 허용</div>
+                <div class="sc-step"><span class="n">4</span>"옴니야 …" 하고 말하기. 화면 탭 = 알림 브리핑. "지금 뭐 보여?" = 카메라로 보기</div>
+              </div>
+              <div class="sc-note">폰 마이크는 앱의 ALWAYS와 같은 음성 게이트(내 목소리·호출어·이어가기)를 거칩니다. 학교 모드가 켜져 있으면 듣지 않습니다.</div>
+            </div>
+            <div class="hg-card hg-wide">
+              <div class="hg-card-title">안경 옴니가 할 수 있는 것 <span class="hg-dim" id="hg-toolcount"></span></div>
+              <div class="hg-tools" id="hg-tools">서버를 켜면 도구 목록이 표시됩니다</div>
+            </div>
+            <div class="hg-card hg-wide">
+              <div class="hg-card-title">로그</div>
+              <pre class="hg-log" id="hg-log">&mdash;</pre>
+            </div>
           </div>
         </div>
       </div>
@@ -1394,7 +1448,7 @@
       <span class="divider">|</span>
       <span>MODULES: CMD &middot; AI &middot; NOTIF &middot; CLOCK &middot; PROJ &middot; SYS &middot; SP-1 &middot; R3D &middot; ARC &middot; INO &middot; CE &middot; NOTES &middot; VOICE</span>
       <span class="divider">|</span>
-      <span>v0.76.0</span>
+      <span>v0.77.0</span>
     </footer>
   </div>
 

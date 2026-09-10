@@ -145,6 +145,35 @@ def ask_brain(question: str, extra_context: str = "") -> str:
         return f"두뇌 호출 실패: {e}"
 
 
+def describe_image(jpeg: bytes, question: str = "") -> str:
+    """안경(폰) 카메라 프레임을 Haiku 비전으로 설명 — 음성으로 읽을 2문장."""
+    try:
+        key = open(ANTHROPIC_KEY_PATH).read().strip()
+    except OSError:
+        return "두뇌 키가 없습니다 (~/.omni/anthropic.key)."
+    body = json.dumps({
+        "model": "claude-haiku-4-5-20251001", "max_tokens": 300,
+        "system": "당신은 스마트 글래스 카메라로 사용자의 눈앞을 보는 AI '옴니'입니다. "
+                  "한국어 존댓말(합니다체)로 핵심만 2문장 이내. 글자가 보이면 정확히 읽어 줍니다. "
+                  "사람 얼굴은 신원을 추정하지 않고 인원·행동만 말합니다.",
+        "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                         "data": base64.b64encode(jpeg).decode()}},
+            {"type": "text", "text": question or "지금 눈앞에 무엇이 보이는지 핵심만 2문장으로."}]}],
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=body,
+        headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=45, context=_SSL) as r:
+            res = json.load(r)
+        return "".join(b.get("text", "") for b in res.get("content", [])
+                       if b.get("type") == "text").strip() or "(응답 없음)"
+    except Exception as e:  # noqa: BLE001
+        return f"카메라 분석 실패: {e}"
+
+
 def classify_addressed(text: str, last_omni: str = "") -> bool:
     """대화 이어가기 창 안의 호출어 없는 발화 — 옴니에게 이어서 하는 말인가 (Haiku)."""
     try:

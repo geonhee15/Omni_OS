@@ -33,6 +33,27 @@
   파일만 읽는다. 음성으로 "카톡 확인" 시엔 메일박스로 `notif_refresh`를
   보내 즉시 재조회를 트리거
 
+## 폰 안경 (Phone Glasses) — 안경이 오기 전에 폰으로
+
+`venv/bin/python phone_glasses.py` (앱 HALO GLASSES 패널의 START PHONE GLASSES가 이걸 띄운다).
+같은 와이파이의 폰 브라우저가 `https://<맥IP>:8443` 을 열면:
+
+| 폰 | 안경 역할 |
+| --- | --- |
+| 뒤 카메라 | 안경 카메라 — 배경 미리보기 + `look_camera`("지금 뭐 보여?", Haiku 비전) |
+| 마이크 | 안경 마이크 — 16k PCM을 WebSocket으로 → 앱 ALWAYS와 같은 게이트 사이드카(내 목소리·호출어·이어가기) → gpt-realtime |
+| 화면 | 안경 HUD — `hud.py` 스프라이트(배경·상태·자막·배너)를 `hud_compose.py`가 256×256 원형 PNG로 합성해 푸시 |
+| 스피커 | 안경 스피커 — marin 24k PCM (재생 중엔 폰 마이크 입력을 버려 에코 방지) |
+| 화면 탭 | 안경 탭 — 알림 브리핑 |
+
+- 폰 브라우저는 https여야 카메라·마이크를 허용한다. 서버가 `~/.omni/halo_phone/`에 로컬 CA와 서버 인증서(SAN=맥 IP)를 openssl로 만들고, 폰은 `https://<맥IP>:8443/ca.crt` 를 한 번 설치한다 (아이폰: 프로파일 설치 후 설정 → 일반 → 정보 → 인증서 신뢰 설정 켜기 / 안드로이드: 설정 → 보안 → CA 인증서 설치). IP가 바뀌면 서버 인증서는 자동 재발급.
+- 상태 파일 `~/.omni/store/halo_phone.json`(주소·QR·접속 수·상태·자막·도구·로그)을 앱 패널이 5초마다 읽는다. 학교 모드(`quiet_mode.json`)면 마이크 입력을 버리고 HUD에 "학교 모드" 배너.
+- 테스트: `--http --port 8790 --no-gate` 로 띄우면 평문 HTTP·서버 VAD로 로컬 검증 가능 (`/status.json`, `/hud.png`, `/ws`).
+
+## 안경 옴니 = 앱 옴니 (`glasses_core.py`)
+
+에뮬레이터(live_demo.py)와 폰 안경이 같은 두뇌를 쓴다: 지시문·도구·전사 정제·게이트 경로·알림 감시. 도구는 앱 옴니와 대응 — ask_brain, get_time, check_notifications, check_gmail, calculate, check_weather, check_news, check_markets, **smart_control**(Tapo 사이드카 직접 호출), **quiet_mode**(학교 모드 파일), **save_memory / recall_memory**(공유 기억), **look_camera**(폰 카메라), **run_shell**, check_calendar, add_event, app_action(패널·web.search·computer·ui.*·halo.*).
+
 ## 안경에서 되는 것 (live_demo)
 
 - **대화**: gpt-realtime(marin) 음성 + 실시간 한글 자막

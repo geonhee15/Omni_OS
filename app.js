@@ -1,7 +1,7 @@
 // OMNI_OS core
 // Future apps get integrated by registering themselves as modules here.
 const OmniOS = {
-  version: "0.76.0",
+  version: "0.77.0",
   bootTime: Date.now(),
   modules: {},
 
@@ -971,6 +971,7 @@ OmniOS.register("ai", {
     "- 날씨: \"날씨 어때/내일 비 와?\" 류는 check_weather 도구(city 생략 시 현재 설정 위치, 지정 시 그 도시)로 확인해 핵심만 말합니다. 뉴스: \"뉴스 보여줘/○○ 관련 소식\" 류는 check_news 도구(category 또는 query)로 헤드라인을 읽어 3~5개로 요약합니다. 지도: 장소를 보여 달라면 [[ACT:map.search:장소]]로 MAP 패널에 표시합니다.",
     "- 사실 규칙: 도구 결과에 있는 수치·시각·이름만 말합니다. 도구 결과에 없는 정보(예: 일정 종료 시각, 금액)는 추정하거나 '보통'으로 채우지 말고 '기록에 없습니다'라고 말합니다. 확실하냐고 물으면 도구를 다시 호출해 원본을 확인합니다.",
     "- 계산: 숫자 계산(산수·퍼센트·환산·평균·큰 수)은 절대 암산하지 않고 calculate 도구에 파이썬식 수식으로 넘겨 그 결과를 말합니다. 여러 단계면 도구를 여러 번 호출합니다.",
+    "- 안경(HALO GLASSES 패널): \"폰 안경 켜줘/꺼줘\", \"안경 서버 상태\"는 app_ui 대신 액션 halo.start / halo.stop / halo.status(런액션)로 처리합니다. 폰 안경은 폰 브라우저를 안경처럼 쓰는 모드로, 앱과 같은 기억·도구를 공유합니다.",
     "- 학교/시험 모드(quiet_mode): \"학교 모드 켜줘\", \"카메라 다 꺼줘\", \"시험 볼 거야\"는 즉시 quiet_mode(on=true)로 카메라 감시(SP-1)·마이크·화면 관찰을 전부 정지하고 짧게 확인만 합니다. 집 밖 네트워크에서는 자동으로 켜집니다.",
     "- 스마트 조명·플러그(SMART CONTROL 패널, Tapo): \"불 꺼줘/켜줘\", \"30분 뒤에 꺼줘\", \"조명 켜져 있어?\"는 smart_control 도구로 직접 실행하고 결과(켜짐/꺼짐)를 확인해 보고합니다. 기기가 없거나 계정이 없다는 결과면 패널의 SETUP/SCAN 절차를 안내합니다.",
     "- 환율·주식: \"달러 환율/삼성전자 주가/비트코인\" 류는 check_markets 도구로 확인해 핵심 수치만 말합니다. 일정: \"오늘 일정/이번 주 뭐 있어\"는 check_calendar, \"내일 3시 치과 잡아줘\"처럼 일정 추가 요청은 add_event 도구(start는 YYYY-MM-DD HH:mm, 종일이면 날짜만)로 맥 캘린더에 등록하고 결과를 보고합니다. 날짜·시각은 [실시간 상태 스냅샷]의 현재 시각 기준으로 계산합니다.",
@@ -2106,6 +2107,15 @@ OmniOS.register("ai", {
       if (key === "ai.enroll") {
         await this.enrollVoice();
         return { ok: true, msg: "목소리 등록 시작" };
+      }
+      if (key === "halo.start" || key === "halo.stop" || key === "halo.status") {
+        // 폰 안경 서버 (HALO GLASSES 패널)
+        const hg = OmniOS.modules.halo;
+        if (!hg) return { ok: false, msg: "HALO 모듈 없음" };
+        if (key === "halo.start") return await hg.start();
+        if (key === "halo.stop") return await hg.stop();
+        await hg.poll();
+        return { ok: true, msg: hg.summary() };
       }
       if (key === "quiet.on" || key === "quiet.off" || key === "school.on" || key === "school.off") {
         // 학교 모드: quiet.on[:분] / quiet.off — 카메라(SP-1)·마이크·화면 관찰 정지
@@ -14153,5 +14163,98 @@ OmniOS.register("quiet", {
     this.els.btn.title = this.active ? "학교 모드 끄기 (수동 정지일 때만 즉시 해제됨)" : "학교 모드 켜기 — 카메라·마이크·화면 관찰 정지 (SP-1 포함)";
     const until = this.state.on && this.state.until ? ` ~${new Date(this.state.until * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}` : "";
     this.els.txt.textContent = this.active ? `${this.why}${until} · 카메라·마이크 OFF` : (this.presence && this.presence.home === false ? "네트워크 불명" : "");
+  },
+});
+
+// ---------------- HALO GLASSES — 안경용 옴니 작업 공간 (폰 안경 서버 · 실기기 준비) ----------------
+// 폰 안경: halo/phone_glasses.py 가 https://<맥IP>:8443 으로 안경 HUD·마이크·카메라를 폰 브라우저에 연결.
+// 상태는 서버가 ~/.omni/store/halo_phone.json 에 쓰고 여기서 5초마다 읽는다. 옴니 전권: halo.start/stop/status 액션.
+OmniOS.register("halo", {
+  st: null,
+  _timer: null,
+  _running: false,
+
+  init() {
+    const $ = (id) => document.getElementById(id);
+    this.els = { sub: $("hg-sub"), updated: $("hg-updated"), start: $("hg-start"), stop: $("hg-stop"), open: $("hg-open"), err: $("hg-err"),
+      url: $("hg-url"), qr: $("hg-qr"), clients: $("hg-clients"), state: $("hg-state"), gate: $("hg-gate"), quiet: $("hg-quiet"),
+      caption: $("hg-caption"), ca: $("hg-ca"), tools: $("hg-tools"), toolcount: $("hg-toolcount"), log: $("hg-log") };
+    this.els.start.addEventListener("click", () => this.start());
+    this.els.stop.addEventListener("click", () => this.stop());
+    this.els.open.addEventListener("click", () => { if (this.st && this.st.url) OmniNet.openUrl(this.st.url); });
+    document.addEventListener("omni:panel", (e) => { if (e.detail === "halo") this.poll(); });
+    if (OmniNative.available) {
+      setTimeout(() => this.poll(), 3000);
+      this._timer = setInterval(() => this.poll(), 5000);
+    } else {
+      this.els.url.textContent = "브라우저 개발 모드 — 폰 안경 서버는 앱에서만 켤 수 있습니다";
+    }
+  },
+
+  async poll() {
+    if (!OmniNative.available) return;
+    const [n, r] = await Promise.all([
+      OmniNative.request("halo.status", null, 5000).catch(() => null),
+      OmniNative.request("store.read", JSON.stringify({ name: "halo_phone" }), 5000).catch(() => null),
+    ]);
+    this._running = !!(n && n.running);
+    let st = null;
+    try { st = r && r.data ? JSON.parse(r.data) : null; } catch (e) { st = null; }
+    this.st = st && this._running ? st : null;
+    this.render(n);
+  },
+
+  async start() {
+    const r = await OmniNative.request("halo.start", null, 10000).catch((e) => ({ ok: false, error: e.message }));
+    if (!r || !r.ok) { this.setErr(`시작 실패: ${(r && r.error) || "?"}${r && r.hint ? " — " + r.hint : ""}`); return { ok: false, msg: (r && r.error) || "시작 실패" }; }
+    this.setErr("");
+    this.els.url.textContent = "서버 시작 중… (인증서·세션 준비, 몇 초)";
+    setTimeout(() => this.poll(), 3500);
+    setTimeout(() => this.poll(), 8000);
+    return { ok: true, msg: "폰 안경 서버를 시작했습니다" };
+  },
+
+  async stop() {
+    await OmniNative.request("halo.stop", null, 8000).catch(() => null);
+    this.st = null; this._running = false;
+    this.render({ running: false });
+    return { ok: true, msg: "폰 안경 서버를 껐습니다" };
+  },
+
+  setErr(m) { this.els.err.hidden = !m; this.els.err.textContent = m || ""; },
+
+  summary() {
+    if (!this._running) return "폰 안경 서버 꺼짐 — HALO GLASSES 패널의 START PHONE GLASSES 또는 halo.start";
+    const s = this.st || {};
+    return `폰 안경 서버 켜짐 · ${s.url || ""} · 접속 ${s.clients || 0}대 · 상태 ${s.state || "?"}${s.caption ? ` · 마지막 말: ${String(s.caption).slice(0, 60)}` : ""}`;
+  },
+
+  render(n) {
+    const running = !!(n && n.running);
+    const s = this.st;
+    this.els.start.classList.toggle("active", running);
+    this.els.sub.textContent = running ? (s ? `PHONE GLASSES ON · ${s.clients || 0}대 접속` : "PHONE GLASSES 시작 중") : "PHONE GLASSES OFF";
+    if (!running) {
+      this.els.url.textContent = "서버 꺼짐 — START PHONE GLASSES";
+      this.els.qr.hidden = true;
+      this.els.clients.textContent = "0"; this.els.state.textContent = "—"; this.els.gate.textContent = "—"; this.els.quiet.textContent = "—";
+      this.els.caption.textContent = ""; this.els.ca.textContent = "…/ca.crt";
+      return;
+    }
+    if (!s) return;
+    const t = new Date(); this.els.updated.textContent = `UPDATED ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}:${String(t.getSeconds()).padStart(2, "0")}`;
+    this.els.url.textContent = s.url || "";
+    if (s.qr) { this.els.qr.src = s.qr; this.els.qr.hidden = false; }
+    this.els.clients.textContent = String(s.clients || 0);
+    this.els.state.textContent = s.state || "—";
+    this.els.gate.textContent = s.gate ? (s.gate_ready === false ? "ON (목소리 미등록)" : s.gate_ready ? "ON · 내 목소리" : "ON · 준비 중") : "OFF (서버 VAD)";
+    this.els.quiet.textContent = s.quiet ? "ON — 듣지 않음" : "OFF";
+    this.els.caption.textContent = s.caption || "";
+    this.els.ca.textContent = (s.url || "") + "ca.crt";
+    if (Array.isArray(s.tools)) {
+      this.els.tools.innerHTML = s.tools.map((x) => `<span>${x}</span>`).join("");
+      this.els.toolcount.textContent = `${s.tools.length}개 도구 — 앱 옴니와 같은 기억·두뇌·기기 제어`;
+    }
+    this.els.log.textContent = (s.log || []).join("\n") || "—";
   },
 });

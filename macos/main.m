@@ -373,8 +373,11 @@ static dispatch_source_t gGestureSource = nil;
     return YES;
 }
 
+static NSTask *gHaloTask;   // 폰 안경 서버 (handleHalo에서 관리)
+
 - (void)applicationWillTerminate:(NSNotification *)notification {
     [self gateStop];
+    if (gHaloTask != nil && gHaloTask.isRunning) [gHaloTask terminate];
     if (self.voiceLiveTask != nil) [self.voiceLiveTask terminate];
     if (self.aiTtsTask != nil) [self.aiTtsTask terminate];
     if (self.aiSeedTask != nil) [self.aiSeedTask terminate];
@@ -1321,6 +1324,8 @@ static dispatch_source_t gGestureSource = nil;
         [self handleCal:cmd arg:arg msgId:msgId];
     } else if ([cmd hasPrefix:@"smart."]) {
         [self handleSmart:cmd arg:arg msgId:msgId];
+    } else if ([cmd hasPrefix:@"halo."]) {
+        [self handleHalo:cmd arg:arg msgId:msgId];
     } else if ([cmd hasPrefix:@"ai."] || [cmd hasPrefix:@"omnia."]) {
         // 오미니아(omnia.*) 명령도 같은 핸들러에서 처리한다 — 접두사가 달라
         // 분기에 도달하지 못하던 문제 수정
@@ -2967,6 +2972,56 @@ static NSAlert *OmniMakeAlert(NSString *message, NSString *okTitle, BOOL cancel)
 // 맥 캘린더 앱에 들어온 모든 캘린더(iCloud·구글 등 인터넷 계정 구독 포함)를
 // EventKit으로 읽고 쓴다. 학교 구글 계정처럼 개발자 API를 못 쓰는 계정도
 // 시스템 설정 > 인터넷 계정에 추가만 하면 여기 잡힌다. 권한: 캘린더 전체 접근.
+// ---- HALO GLASSES: 폰 안경 서버(halo/phone_glasses.py) 시작/정지 — 상태는 서버가 ~/.omni/store/halo_phone.json에 씀 ----
+
+- (void)handleHalo:(NSString *)cmd arg:(NSString *)arg msgId:(NSString *)msgId {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *py = [OmniBaseDir() stringByAppendingPathComponent:@"halo/venv/bin/python"];
+    NSString *script = [OmniBaseDir() stringByAppendingPathComponent:@"halo/phone_glasses.py"];
+    NSString *logPath = [NSHomeDirectory() stringByAppendingPathComponent:@".omni/halo_phone.log"];
+    BOOL running = gHaloTask != nil && gHaloTask.isRunning;
+    if ([cmd isEqualToString:@"halo.status"]) {
+        [self deliverPayload:@{ @"ok" : @YES, @"running" : @(running),
+                                @"pid" : @(running ? gHaloTask.processIdentifier : 0),
+                                @"engine" : @([fm fileExistsAtPath:py] && [fm fileExistsAtPath:script]) } forId:msgId];
+        return;
+    }
+    if ([cmd isEqualToString:@"halo.stop"]) {
+        if (running) [gHaloTask terminate];
+        gHaloTask = nil;
+        [self deliverPayload:@{ @"ok" : @YES, @"running" : @NO } forId:msgId];
+        return;
+    }
+    if ([cmd isEqualToString:@"halo.start"]) {
+        if (running) {
+            [self deliverPayload:@{ @"ok" : @YES, @"running" : @YES, @"pid" : @(gHaloTask.processIdentifier) } forId:msgId];
+            return;
+        }
+        if (![fm fileExistsAtPath:py] || ![fm fileExistsAtPath:script]) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : @"NO_ENGINE",
+                @"hint" : @"halo/venv 또는 halo/phone_glasses.py 가 없습니다" } forId:msgId];
+            return;
+        }
+        NSTask *task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:py];
+        task.arguments = @[ @"-u", script ];
+        task.currentDirectoryURL = [NSURL fileURLWithPath:[OmniBaseDir() stringByAppendingPathComponent:@"halo"]];
+        [fm createFileAtPath:logPath contents:[NSData data] attributes:nil];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+        task.standardOutput = fh;
+        task.standardError = fh;
+        NSError *err = nil;
+        if (![task launchAndReturnError:&err]) {
+            [self deliverPayload:@{ @"ok" : @NO, @"error" : err.localizedDescription ?: @"launch failed" } forId:msgId];
+            return;
+        }
+        gHaloTask = task;
+        [self deliverPayload:@{ @"ok" : @YES, @"running" : @YES, @"pid" : @(task.processIdentifier) } forId:msgId];
+        return;
+    }
+    [self deliverPayload:@{ @"ok" : @NO, @"error" : @"UNKNOWN_CMD" } forId:msgId];
+}
+
 // ---- SMART CONTROL: Tapo 플러그·전구 — scripts/omni_smart.py (smart_engine/venv, python-kasa) ----
 // 계정은 사용자가 패널에 직접 입력 → ~/.omni/tapo.json(0600). 기기 캐시 ~/.omni/smart_devices.json.
 

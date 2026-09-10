@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000">
+<title>OMNI PHONE GLASSES</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #9fd8ff; font-family: -apple-system, "SF Mono", Menlo, monospace; overflow: hidden; -webkit-user-select: none; user-select: none; }
+  #cam { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: brightness(0.55) saturate(0.7); background: #000; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #hud { width: 92vmin; height: 92vmin; max-width: 92vw; max-height: 92vh; image-rendering: auto; mix-blend-mode: screen; filter: drop-shadow(0 0 14px rgba(60, 200, 255, 0.45)); transition: opacity 0.2s; }
+  #top { position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0; display: flex; justify-content: space-between; padding: 10px 14px; font-size: 11px; letter-spacing: 2px; color: rgba(159, 216, 255, 0.85); text-shadow: 0 0 8px rgba(60, 200, 255, 0.6); }
+  #bottom { position: fixed; bottom: env(safe-area-inset-bottom, 8px); left: 0; right: 0; text-align: center; padding: 12px; font-size: 10px; letter-spacing: 1.5px; color: rgba(159, 216, 255, 0.6); }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #3dffa8; margin-right: 6px; vertical-align: middle; box-shadow: 0 0 8px #3dffa8; }
+  .dot.off { background: #ff6b6b; box-shadow: 0 0 8px #ff6b6b; }
+  .dot.warn { background: #ffbe3c; box-shadow: 0 0 8px #ffbe3c; }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(0, 4, 12, 0.92); z-index: 10; text-align: center; padding: 30px; }
+  #start h1 { font-size: 22px; letter-spacing: 6px; margin: 0; color: #cfefff; text-shadow: 0 0 18px rgba(60, 200, 255, 0.7); }
+  #start p { font-size: 12px; line-height: 1.7; color: rgba(159, 216, 255, 0.8); margin: 0; }
+  #start button { margin-top: 10px; font: inherit; font-size: 14px; letter-spacing: 4px; padding: 14px 34px; color: #cfefff; background: rgba(20, 60, 100, 0.5); border: 1px solid rgba(120, 200, 255, 0.7); border-radius: 30px; box-shadow: 0 0 20px rgba(60, 200, 255, 0.35); }
+  #err { color: #ff9b9b; font-size: 11px; max-width: 320px; }
+  #cap { position: fixed; left: 0; right: 0; bottom: 60px; text-align: center; font-size: 13px; color: rgba(207, 239, 255, 0.55); padding: 0 24px; display: none; }
+</style>
+</head>
+<body>
+<video id="cam" autoplay playsinline muted></video>
+<div id="stage"><img id="hud" alt="HUD"></div>
+<div id="top"><span><span class="dot off" id="dot"></span><span id="state">CONNECTING</span></span><span id="mic">MIC OFF</span></div>
+<div id="bottom">화면 탭 = 알림 브리핑 &nbsp;·&nbsp; "옴니야 …" 하고 말하기</div>
+<div id="cap"></div>
+<div id="start">
+  <h1>OMNI</h1>
+  <p>폰 안경 모드<br>카메라는 안경의 눈, 마이크는 안경의 귀, 이 화면은 안경의 HUD가 됩니다.<br>탭하면 카메라·마이크 권한을 묻습니다.</p>
+  <button id="go">START</button>
+  <div id="err"></div>
+</div>
+<canvas id="snap" hidden></canvas>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const hud = $("hud"), cam = $("cam"), dot = $("dot"), stateEl = $("state"), micEl = $("mic"), errEl = $("err"), capEl = $("cap");
+  let ws = null, ac = null, proc = null, stream = null, started = false;
+  let nextTime = 0, playingUntil = 0, quiet = false, lastTap = 0, pendingSamples = [], pendingLen = 0;
+  const wsUrl = (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/ws";
+
+  function setState(s, cls) { stateEl.textContent = s; dot.className = "dot" + (cls ? " " + cls : ""); }
+
+  function connect() {
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => { setState("LISTENING", ""); if (started) ws.send(JSON.stringify({ type: "mic", on: true })); };
+    ws.onclose = () => { setState("RECONNECTING", "off"); setTimeout(connect, 2000); };
+    ws.onerror = () => {};
+    ws.onmessage = (e) => {
+      if (typeof e.data !== "string") return;
+      let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+      if (m.type === "hud") { hud.src = "data:image/png;base64," + m.png; }
+      else if (m.type === "status") { setState(m.state, m.state === "SPEAKING" ? "warn" : ""); }
+      else if (m.type === "audio") { playChunk(m.pcm, m.rate || 24000); }
+      else if (m.type === "want_frame") { sendFrame(); }
+      else if (m.type === "quiet") { quiet = !!m.on; micEl.textContent = quiet ? "QUIET MODE" : (started ? "MIC ON" : "MIC OFF"); }
+      else if (m.type === "hello") { quiet = !!m.quiet; setState(m.state || "LISTENING", ""); }
+    };
+  }
+
+  // ---- 옴니 음성 재생 (24k PCM16 → AudioContext)
+  function playChunk(b64, rate) {
+    if (!ac) return;
+    const bin = atob(b64), n = bin.length >> 1, src = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const v = (bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8)); src[i] = (v > 32767 ? v - 65536 : v) / 32768; }
+    let data = src;
+    if (ac.sampleRate !== rate) {
+      const ratio = rate / ac.sampleRate, out = new Float32Array(Math.floor(n / ratio));
+      for (let i = 0; i < out.length; i++) { const p = i * ratio, j = Math.floor(p), f = p - j; out[i] = src[j] + (src[Math.min(n - 1, j + 1)] - src[j]) * f; }
+      data = out;
+    }
+    const buf = ac.createBuffer(1, data.length, ac.sampleRate);
+    buf.getChannelData(0).set(data);
+    const s = ac.createBufferSource(); s.buffer = buf; s.connect(ac.destination);
+    const t = Math.max(nextTime, ac.currentTime + 0.05);
+    s.start(t); nextTime = t + buf.duration; playingUntil = nextTime + 0.4;
+  }
+
+  // ---- 폰 마이크 → 16k PCM16 → 서버 (옴니가 말하는 동안·학교 모드면 보내지 않음)
+  function startMic(audioStream) {
+    const srcNode = ac.createMediaStreamSource(audioStream);
+    proc = ac.createScriptProcessor(4096, 1, 1);
+    const ratio = ac.sampleRate / 16000;
+    proc.onaudioprocess = (e) => {
+      if (!ws || ws.readyState !== 1 || quiet || ac.currentTime < playingUntil) return;
+      const inp = e.inputBuffer.getChannelData(0);
+      const outLen = Math.floor(inp.length / ratio), out = new Int16Array(outLen);
+      for (let i = 0; i < outLen; i++) { const p = i * ratio, j = Math.floor(p), f = p - j; const v = inp[j] + (inp[Math.min(inp.length - 1, j + 1)] - inp[j]) * f; out[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767))); }
+      pendingSamples.push(out); pendingLen += outLen;
+      if (pendingLen >= 1600) {
+        const all = new Int16Array(pendingLen); let o = 0;
+        for (const c of pendingSamples) { all.set(c, o); o += c.length; }
+        pendingSamples = []; pendingLen = 0;
+        ws.send(all.buffer);
+      }
+    };
+    srcNode.connect(proc); proc.connect(ac.destination);   // destination 연결은 iOS에서 프로세서 구동용 (출력은 0)
+    const g = ac.createGain(); g.gain.value = 0; proc.disconnect(); proc.connect(g); g.connect(ac.destination);
+    micEl.textContent = "MIC ON";
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "mic", on: true }));
+  }
+
+  function sendFrame() {
+    if (!cam.videoWidth || !ws || ws.readyState !== 1) return;
+    const c = $("snap"); const w = 640, h = Math.round(cam.videoHeight * 640 / cam.videoWidth);
+    c.width = w; c.height = h;
+    c.getContext("2d").drawImage(cam, 0, 0, w, h);
+    const url = c.toDataURL("image/jpeg", 0.6);
+    ws.send(JSON.stringify({ type: "frame", jpeg: url.split(",")[1] }));
+  }
+
+  async function start() {
+    if (started) return;
+    errEl.textContent = "";
+    try {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      await ac.resume();
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } } });
+      } catch (e1) {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+        errEl.textContent = "카메라 없이 마이크만 사용합니다 (" + e1.name + ")";
+      }
+      if (stream.getVideoTracks().length) { cam.srcObject = stream; try { await cam.play(); } catch (e) {} }
+      startMic(stream);
+      started = true;
+      $("start").style.display = "none";
+      if (navigator.wakeLock) { try { await navigator.wakeLock.request("screen"); } catch (e) {} }
+    } catch (e) {
+      errEl.textContent = "권한 실패: " + (e.name || e) + " — https 주소인지, 브라우저 설정에서 카메라·마이크가 허용됐는지 확인";
+    }
+  }
+
+  $("go").addEventListener("click", start);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && ac) ac.resume(); });
+  let touchMoved = false;
+  document.addEventListener("touchmove", () => { touchMoved = true; }, { passive: true });
+  document.addEventListener("touchstart", () => { touchMoved = false; }, { passive: true });
+  $("stage").addEventListener("click", () => {
+    if (!started || touchMoved) return;
+    const now = Date.now(); if (now - lastTap < 1200) return; lastTap = now;
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "tap" }));
+    hud.style.opacity = 0.6; setTimeout(() => { hud.style.opacity = 1; }, 150);
+  });
+  setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "ping" })); }, 15000);
+  connect();
+})();
+</script>
+</body>
+</html>
