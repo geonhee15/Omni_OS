@@ -4,7 +4,7 @@
 --   0x10 speaker audio
 --   0x11 1bpp caption bitmap (legacy)
 --   0x12 [pal 48B][4bpp 256x256] background art
---   0x13/0x14/0x15 [x][y][w][4bpp] status / caption / banner sprite
+--   0x13/0x14/0x15/0x16 [x][y][w][4bpp] status / caption / banner / reader sprite
 -- Tap sends 0xF0 to host.
 
 local status = "BOOT"
@@ -15,6 +15,7 @@ local bg = nil
 local st_bmp = nil
 local cap4 = nil
 local ban_bmp = nil
+local rd_bmp = nil
 local spk_on = false
 
 local function draw_sprite(s)
@@ -48,6 +49,7 @@ local function render()
   end
   draw_sprite(st_bmp)
   draw_sprite(ban_bmp)
+  draw_sprite(rd_bmp)
   draw_sprite(cap4)
   if cap_bmp then
     pcall(function()
@@ -77,7 +79,7 @@ frame.bluetooth.receive_callback(function(data)
     pal = string.sub(data, 2, 49)
     bg = string.sub(data, 50)
     render()
-  elseif tag == 0x13 or tag == 0x14 or tag == 0x15 then
+  elseif tag == 0x13 or tag == 0x14 or tag == 0x15 or tag == 0x16 then
     local s = {
       x = string.byte(data, 2),
       y = string.byte(data, 3),
@@ -88,6 +90,8 @@ frame.bluetooth.receive_callback(function(data)
       st_bmp = s
     elseif tag == 0x15 then
       ban_bmp = s
+    elseif tag == 0x16 then
+      rd_bmp = s
     else
       cap4 = s
       cap_bmp = nil

@@ -12,7 +12,7 @@ from PIL import Image
 
 from hud import PALETTE, W, H
 
-_TAGS = (0x13, 0x14, 0x15)
+_TAGS = (0x13, 0x14, 0x15, 0x16)   # 상태 / 자막 / 배너 / 카메라 텍스트 리더
 
 
 def _unpack4(data: bytes, w: int) -> np.ndarray:

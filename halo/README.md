@@ -51,6 +51,10 @@
 - 상태 파일 `~/.omni/store/halo_phone.json`(주소·QR·접속 수·상태·자막·도구·로그)을 앱 패널이 5초마다 읽는다. 학교 모드(`quiet_mode.json`)면 마이크 입력을 버리고 HUD에 "학교 모드" 배너.
 - 테스트: `--http --port 8790 --no-gate` 로 띄우면 평문 HTTP·서버 VAD로 로컬 검증 가능 (`/status.json`, `/hud.png`, `/ws`).
 
+## 카메라 텍스트 리더 (폰 안경)
+
+카메라에 글자가 보이면 폰이 0.2초 간격으로 480px 프레임을 서버에 보내고, 맥이 Vision OCR(한국어·영어)로 글자와 위치를 돌려준다. 같은 글자가 **0.5초 이상** 같은 자리에 머물면 "파싱 중" 연출: 글자 위에 파란 반투명 직사각형이 1·2·3글자 단위(길이에 따라)로 왼쪽부터 따다닥 켜지며 글로우 → 페이드아웃(70%→0). 그 뒤 글자가 계속 보이는 동안 글자에서 HUD로 리드선이 뻗고, HUD에는 인식된 글자가 한 줄로 다시 써진다(`reader_packet`, 스프라이트 0x16 — Lua 클라이언트도 인식). 글자가 사라지면 선과 HUD 표시도 사라진다. 학교 모드면 프레임을 보내지 않는다.
+
 ## 안경 옴니 = 앱 옴니 (`glasses_core.py`)
 
 에뮬레이터(live_demo.py)와 폰 안경이 같은 두뇌를 쓴다: 지시문·도구·전사 정제·게이트 경로·알림 감시. 도구는 앱 옴니와 대응 — ask_brain, get_time, check_notifications, check_gmail, calculate, check_weather, check_news, check_markets, **smart_control**(Tapo 사이드카 직접 호출), **quiet_mode**(학교 모드 파일), **save_memory / recall_memory**(공유 기억), **look_camera**(폰 카메라), **run_shell**, check_calendar, add_event, app_action(패널·web.search·computer·ui.*·halo.*).

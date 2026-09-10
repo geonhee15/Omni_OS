@@ -262,6 +262,31 @@ def banner_packet(text: str, size: int = 14) -> bytes:
     return sprite_packet(idx, (W - BAN_W) // 2, BAN_Y, 0x15)
 
 
+def reader_packet(text: str, size: int = 14) -> bytes:
+    """카메라 텍스트 리더 — 감지된 글자를 한 줄로 다시 써 주는 스프라이트 (0x16, 배너 자리).
+    왼쪽에 세로 브래킷, 최대 2줄. 빈 텍스트=클리어."""
+    font = _font(size * S)
+    lines = _wrap(text, font, [176 * S])[:2]
+    if not lines:
+        return sprite_packet(np.zeros((1, BAN_W), np.uint8), (W - BAN_W) // 2, BAN_Y, 0x16)
+    lh = 19
+    h = len(lines) * lh + 4
+    img = Image.new("L", (BAN_W * S, h * S), 0)
+    d = ImageDraw.Draw(img)
+    for i, line in enumerate(lines):
+        d.text((14 * S, (2 + i * lh) * S), line, fill=250, font=font)
+    # 왼쪽 브래킷 + 밑줄 (읽는 중 표시)
+    d.line([(7 * S, 3 * S), (7 * S, (h - 3) * S)], fill=200, width=int(1.2 * S))
+    d.line([(7 * S, 3 * S), (12 * S, 3 * S)], fill=200, width=int(1.2 * S))
+    d.line([(7 * S, (h - 3) * S), (12 * S, (h - 3) * S)], fill=200, width=int(1.2 * S))
+    img = _glow(img, 1.8, 0.45)
+    idx = _quantize(img.resize((BAN_W, h), Image.LANCZOS))
+    mask = np.zeros_like(idx, bool)
+    mask[:, :13] = True
+    idx[mask & (idx > 3)] = 14          # 브래킷은 브라이트 시안
+    return sprite_packet(idx, (W - BAN_W) // 2, BAN_Y, 0x16)
+
+
 def caption_packet(text: str, size: int = 16) -> bytes:
     """한글 자막 -> AA + 글로우 4bpp 스프라이트 (0x14). 줄별 중앙 정렬."""
     font = _font(size * S)

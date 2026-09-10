@@ -33,8 +33,45 @@ from websockets.asyncio.server import serve
 
 import glasses_core as core
 import omni_link as link
-from hud import banner_packet, caption_packet, render_background, status_packet
+from hud import banner_packet, caption_packet, reader_packet, render_background, status_packet
 from hud_compose import HudCanvas
+
+# ---- 카메라 텍스트 인식 (macOS Vision, 한국어+영어) — 폰이 보내는 축소 프레임을 서버에서 OCR
+try:
+    import Foundation
+    import Vision
+    OCR_AVAILABLE = True
+except Exception:  # noqa: BLE001
+    OCR_AVAILABLE = False
+
+
+def ocr_jpeg(jpeg: bytes) -> list[dict]:
+    """JPEG → [{text, conf, x, y, w, h}] (정규화, 원점 왼쪽 위)."""
+    if not OCR_AVAILABLE or not jpeg:
+        return []
+    data = Foundation.NSData.dataWithBytes_length_(jpeg, len(jpeg))
+    handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(data, None)
+    req = Vision.VNRecognizeTextRequest.alloc().init()
+    req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+    req.setRecognitionLanguages_(["ko-KR", "en-US"])
+    req.setUsesLanguageCorrection_(True)
+    ok, _err = handler.performRequests_error_([req], None)
+    out = []
+    if not ok:
+        return out
+    for o in req.results() or []:
+        cands = o.topCandidates_(1)
+        if not cands:
+            continue
+        c = cands[0]
+        b = o.boundingBox()
+        text = str(c.string()).strip()
+        if len(text) < 2:
+            continue
+        out.append({"text": text, "conf": round(float(c.confidence()), 2),
+                    "x": round(float(b.origin.x), 4), "y": round(1.0 - float(b.origin.y) - float(b.size.height), 4),
+                    "w": round(float(b.size.width), 4), "h": round(float(b.size.height), 4)})
+    return out
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(HERE, "web")
@@ -117,6 +154,8 @@ class State:
         self.started = time.time()
         self.quiet = False
         self._qr = None
+        self.ocr_busy = False
+        self.reader_text = ""
 
     def qr_data_url(self) -> str:
         if self._qr is not None:
@@ -136,7 +175,7 @@ class State:
                 "clients": len(self.clients), "state": self.status, "caption": self.caption,
                 "gate": USE_GATE, "gate_ready": self.gate_ready, "mic": self.mic_on,
                 "quiet": self.quiet, "tools": core.TOOL_NAMES, "log": list(LOG)[-10:],
-                "qr": self.qr_data_url(),
+                "qr": self.qr_data_url(), "ocr": OCR_AVAILABLE, "reader": self.reader_text,
                 "uptime": int(time.time() - self.started), "ts": time.time()}
 
 
@@ -519,6 +558,32 @@ async def ws_handler(conn):
                 for f in list(S.frame_waiters):
                     if not f.done():
                         f.set_result(jpeg)
+            elif t == "ocr_frame":
+                # 카메라 텍스트 인식 — 한 번에 하나만, 바쁘면 프레임 버림
+                if S.ocr_busy or not OCR_AVAILABLE:
+                    continue
+                try:
+                    jpeg = base64.b64decode(ev.get("jpeg") or "")
+                except ValueError:
+                    continue
+                S.ocr_busy = True
+                try:
+                    items = await asyncio.to_thread(ocr_jpeg, jpeg)
+                except Exception as e:  # noqa: BLE001
+                    items = []
+                    log(f"OCR 오류: {e}")
+                finally:
+                    S.ocr_busy = False
+                await conn.send(json.dumps({"type": "ocr", "items": items, "seq": ev.get("seq"), "t": time.time()}, ensure_ascii=False))
+            elif t == "reader":
+                # 폰이 고른 "지금 읽는 텍스트" → HUD에 한 줄로 다시 써 줌 (빈 문자열 = 지움)
+                text = str(ev.get("text") or "").strip()[:80]
+                if text != S.reader_text:
+                    S.reader_text = text
+                    S.canvas.apply(reader_packet(text))
+                    await push_hud()
+                    if text:
+                        log(f"텍스트 리더: {text}")
             elif t == "ping":
                 await conn.send(json.dumps({"type": "pong", "t": time.time()}))
     except websockets.ConnectionClosed:

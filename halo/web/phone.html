@@ -27,6 +27,14 @@
   #start p { font-size: 12px; line-height: 1.7; color: rgba(159, 216, 255, 0.8); margin: 0; max-width: 340px; }
   #start button { margin-top: 10px; font: inherit; font-size: 14px; letter-spacing: 4px; padding: 14px 34px; color: #cfefff; background: rgba(20, 60, 100, 0.5); border: 1px solid rgba(120, 200, 255, 0.7); border-radius: 30px; box-shadow: 0 0 20px rgba(60, 200, 255, 0.35); }
   #err { color: #ff9b9b; font-size: 11px; max-width: 320px; }
+  /* 카메라 텍스트 리더: 파싱 연출(파란 직사각형 글로우 → 페이드아웃) + 텍스트→HUD 리드선 */
+  #ocr { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+  .chunk { position: absolute; background: rgba(40, 150, 255, 0.7); border: 1px solid rgba(150, 215, 255, 0.95); border-radius: 2px; opacity: 0; box-shadow: 0 0 14px rgba(80, 190, 255, 0.9), inset 0 0 8px rgba(190, 235, 255, 0.6); animation: parse 950ms ease-out forwards; }
+  @keyframes parse { 0% { opacity: 0; transform: scale(1.25); filter: brightness(2.2); } 10% { opacity: 0.7; transform: scale(1); filter: brightness(1.6); } 30% { opacity: 0.7; filter: brightness(1); } 100% { opacity: 0; filter: brightness(1); } }
+  #leads { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+  #leads line { stroke: rgba(120, 210, 255, 0.85); stroke-width: 1.5; filter: drop-shadow(0 0 4px rgba(80, 190, 255, 0.8)); }
+  #leads circle { fill: #bfe8ff; }
+  #leads rect.tb { fill: none; stroke: rgba(120, 210, 255, 0.5); stroke-width: 1; stroke-dasharray: 3 3; }
 </style>
 </head>
 <body>
@@ -72,7 +80,10 @@
   <button id="go">START</button>
   <div id="err"></div>
 </div>
+<div id="ocr"></div>
+<svg id="leads" xmlns="http://www.w3.org/2000/svg"></svg>
 <canvas id="snap" hidden></canvas>
+<canvas id="ocrsnap" hidden></canvas>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -137,6 +148,7 @@
       else if (m.type === "status") { setState(m.state, m.state === "SPEAKING" ? "warn" : ""); }
       else if (m.type === "audio") { playChunk(m.pcm, m.rate || 24000); }
       else if (m.type === "want_frame") { sendFrame(); }
+      else if (m.type === "ocr") { ocrPending = false; handleOcr(m.items || []); }
       else if (m.type === "quiet") { quiet = !!m.on; micEl.textContent = quiet ? "QUIET MODE" : (started ? "MIC ON" : "MIC OFF"); }
       else if (m.type === "hello") { quiet = !!m.quiet; setState(m.state || "LISTENING", ""); }
     };
@@ -192,6 +204,71 @@
     const url = c.toDataURL("image/jpeg", 0.6);
     ws.send(JSON.stringify({ type: "frame", jpeg: url.split(",")[1] }));
   }
+
+  // ---- 카메라 텍스트 리더: OCR은 맥(Vision)에서, 여기선 0.5초 안정 판정 → 파싱 연출 → HUD에 다시 쓰기 + 리드선
+  const ocrLayer = $("ocr"), leads = $("leads"), tracks = new Map();
+  let ocrSeq = 0, ocrPending = false, lastOcrAt = 0, readerKey = null;
+  function sendOcrFrame() {
+    if (!started || !cam.videoWidth || !ws || ws.readyState !== 1 || ocrPending || quiet) return;
+    if (Date.now() - lastOcrAt < 450) return;
+    const c = $("ocrsnap"); const w = 480, h = Math.round(cam.videoHeight * w / cam.videoWidth);
+    c.width = w; c.height = h; c.getContext("2d").drawImage(cam, 0, 0, w, h);
+    ocrPending = true; lastOcrAt = Date.now();
+    ws.send(JSON.stringify({ type: "ocr_frame", seq: ++ocrSeq, jpeg: c.toDataURL("image/jpeg", 0.55).split(",")[1] }));
+    setTimeout(() => { ocrPending = false; }, 2500);
+  }
+  function camRect() {   // object-fit: cover 기준 비디오가 화면에 놓인 사각형
+    const vw = window.innerWidth, vh = window.innerHeight, cw = cam.videoWidth || 4, ch = cam.videoHeight || 3;
+    const sc = Math.max(vw / cw, vh / ch); const w = cw * sc, h = ch * sc;
+    return { x: (vw - w) / 2, y: (vh - h) / 2, w, h };
+  }
+  function toScreen(b) { const r = camRect(); return { x: r.x + b.x * r.w, y: r.y + b.y * r.h, w: b.w * r.w, h: b.h * r.h }; }
+  function norm(t) { return String(t).replace(/[\s.,!?:;'"()\[\]{}\-–—·|]/g, "").toLowerCase(); }
+  function handleOcr(items) {
+    const now = performance.now() / 1000;
+    for (const it of items) {
+      const key = norm(it.text); if (key.length < 2) continue;
+      const cx = it.x + it.w / 2, cy = it.y + it.h / 2;
+      let tr = tracks.get(key);
+      if (tr && now - tr.last < 1.5 && Math.hypot(cx - tr.cx, cy - tr.cy) < 0.12) {
+        tr.last = now; tr.seen++; tr.box = it; tr.cx = cx; tr.cy = cy; tr.text = it.text;
+      } else { tr = { key, text: it.text, box: it, cx, cy, first: now, last: now, seen: 1, parsed: false }; tracks.set(key, tr); }
+      if (!tr.parsed && tr.seen >= 2 && now - tr.first >= 0.5) { tr.parsed = true; playParse(tr); }
+    }
+    for (const [k, tr] of tracks) if (now - tr.last > 1.5) tracks.delete(k);
+    updateLeads();
+  }
+  // 파싱 연출: 글자 수에 따라 1·2·3글자 단위 직사각형이 왼쪽부터 따다닥 켜지며 글로우 → 페이드아웃
+  function playParse(tr) {
+    const r = toScreen(tr.box); const n = tr.text.replace(/\s/g, "").length || 1;
+    const per = n <= 4 ? 1 : n <= 12 ? 2 : 3; const chunks = Math.max(1, Math.ceil(n / per));
+    for (let i = 0; i < chunks; i++) {
+      const d = document.createElement("div"); d.className = "chunk";
+      const x0 = r.x + r.w * (i / chunks), x1 = r.x + r.w * ((i + 1) / chunks);
+      d.style.left = x0 + "px"; d.style.top = r.y - r.h * 0.15 + "px"; d.style.width = Math.max(2, x1 - x0 - 1.5) + "px"; d.style.height = r.h * 1.3 + "px";
+      d.style.animationDelay = (i * 70) + "ms";
+      d.addEventListener("animationend", () => d.remove());
+      ocrLayer.appendChild(d);
+    }
+  }
+  // 리드선: 파싱된 텍스트가 계속 보이는 동안 텍스트 → HUD로 선을 뻗고, HUD에는 서버가 한 줄로 다시 써 준다
+  function updateLeads() {
+    const now = performance.now() / 1000;
+    const hr = hud.getBoundingClientRect(); const hc = { x: hr.left + hr.width / 2, y: hr.top + hr.height / 2, r: hr.width / 2 };
+    const vis = [...tracks.values()].filter((t) => t.parsed && now - t.last < 1.2).sort((a, b) => b.box.w * b.box.h - a.box.w * a.box.h).slice(0, 3);
+    let html = "";
+    for (const t of vis) {
+      const r = toScreen(t.box); const px = r.x + r.w / 2, py = r.y;
+      const dx = hc.x - px, dy = hc.y - py, len = Math.hypot(dx, dy) || 1; const ex = hc.x - dx / len * hc.r, ey = hc.y - dy / len * hc.r;
+      html += `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" class="tb"/><circle cx="${px}" cy="${py}" r="3"/><line x1="${px}" y1="${py}" x2="${ex}" y2="${ey}"/>`;
+    }
+    leads.innerHTML = html;
+    const best = vis[0] ? vis[0].key : null;
+    if (best !== readerKey) { readerKey = best; if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "reader", text: best ? vis[0].text : "" })); }
+  }
+  setInterval(sendOcrFrame, 200);
+  setInterval(updateLeads, 300);
+  window.omniTestOcr = handleOcr;   // 개발용: 가짜 OCR 결과 주입
 
   async function start() {
     if (started) return;
