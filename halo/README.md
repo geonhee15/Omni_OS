@@ -65,6 +65,12 @@
 - 좌표는 원본 프레임 기준으로 되돌려 주고, 세로 글줄은 `vertical`로 표시해 폰이 위→아래로 조각 연출한다. 방향 라벨(거꾸로·거울상·세로)이 박스 옆에 붙는다.
 - 합성 테스트: 정방향·180°·거울·거울+180°·90°·270°·흐림 3px·세리프체 모두 올바른 방향 선택. 한계: 한글은 Vision 신뢰도가 0.5로 고정되어 전부 한글인 오인식과 정답의 동점이 생길 수 있어 흔한 상황 순(정방향 > 거울 > 거꾸로)으로 우선한다.
 
+## 카메라 줌 (폰 안경)
+
+- 오른쪽 세로 슬라이더 1x~5x. 폰이 하드웨어 줌을 지원하면 카메라 줌(`applyConstraints({zoom})`), 아니면 비디오를 확대하는 디지털 줌. 디지털 줌일 때 OCR은 서버가 중앙 1/z 영역만 잘라(더 큰 프레임을 보내) 작은 글자를 읽고, 좌표계는 화면 표시와 일치한다. `look_camera` 스냅샷도 같은 영역.
+- **제스처 줌** (`hand_tracker.py`, MediaPipe HandLandmarker를 서버에서 풀 프레임에 실행, 손 하나): 카메라 가까이 **주먹 전체가 보이면(프레임의 30% 이상, 0.4초)** 줌 모드에 들어가고, **엄지와 검지를 벌릴수록 확대**(엄지 끝~검지 끝 거리 / 손 크기: 0.35→1x … 1.25→5x), 모으면 원래대로. **손이 사라지면 0.6초 뒤 부드럽게 1x로** 돌아온다. 줌 값은 요청-응답 프레임마다 갱신되고 화면은 매 프레임 22%씩 목표값으로 이징. 줌 모드일 땐 배율 표시가 노란색.
+- Halo 실기기 카메라는 줌을 지원하지 않으므로 이 기능은 우리 쪽(폰 안경) 구현이다.
+
 ## 안경 옴니 = 앱 옴니 (`glasses_core.py`)
 
 에뮬레이터(live_demo.py)와 폰 안경이 같은 두뇌를 쓴다: 지시문·도구·전사 정제·게이트 경로·알림 감시. 도구는 앱 옴니와 대응 — ask_brain, get_time, check_notifications, check_gmail, calculate, check_weather, check_news, check_markets, **smart_control**(Tapo 사이드카 직접 호출), **quiet_mode**(학교 모드 파일), **save_memory / recall_memory**(공유 기억), **look_camera**(폰 카메라), **run_shell**, check_calendar, add_event, app_action(패널·web.search·computer·ui.*·halo.*).

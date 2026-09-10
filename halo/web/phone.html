@@ -27,6 +27,13 @@
   #start p { font-size: 12px; line-height: 1.7; color: rgba(159, 216, 255, 0.8); margin: 0; max-width: 340px; }
   #start button { margin-top: 10px; font: inherit; font-size: 14px; letter-spacing: 4px; padding: 14px 34px; color: #cfefff; background: rgba(20, 60, 100, 0.5); border: 1px solid rgba(120, 200, 255, 0.7); border-radius: 30px; box-shadow: 0 0 20px rgba(60, 200, 255, 0.35); }
   #err { color: #ff9b9b; font-size: 11px; max-width: 320px; }
+  /* 카메라 줌: 오른쪽 세로 슬라이더 (하드웨어 줌 지원 시 카메라 줌, 아니면 디지털 확대) */
+  #zoomwrap { position: fixed; right: 10px; top: 50%; transform: translateY(-50%); width: 34px; height: 46vh; display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 3; }
+  #zoom { -webkit-appearance: none; appearance: none; width: 40vh; height: 3px; background: rgba(120, 200, 255, 0.45); border-radius: 2px; outline: none; transform: rotate(-90deg); transform-origin: center; margin: 20vh 0; }
+  #zoom::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%; background: rgba(20, 60, 100, 0.85); border: 1px solid rgba(150, 215, 255, 0.95); box-shadow: 0 0 10px rgba(80, 190, 255, 0.7); }
+  #zoomval { font-size: 10px; letter-spacing: 1.5px; color: rgba(190, 230, 255, 0.9); text-shadow: 0 0 6px rgba(60, 200, 255, 0.6); }
+  #zoomval.gest { color: #ffd27a; }
+  #cam { transform-origin: 50% 50%; }
   /* 카메라 텍스트 리더: 파싱 연출(파란 직사각형 글로우 → 페이드아웃) + 텍스트→HUD 리드선 */
   #ocr { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
   .chunk { position: absolute; background: rgba(40, 150, 255, 0.7); border: 1px solid rgba(150, 215, 255, 0.95); border-radius: 2px; opacity: 0; box-shadow: 0 0 14px rgba(80, 190, 255, 0.9), inset 0 0 8px rgba(190, 235, 255, 0.6); animation: parse 950ms ease-out forwards; }
@@ -70,6 +77,7 @@
   <span><span class="dot off" id="dot"></span><span id="state">CONNECTING</span></span>
   <span><span id="mic">MIC OFF</span><span class="btn" id="mode">GLASSES</span><span class="btn" id="scale">1x</span></span>
 </div>
+<div id="zoomwrap"><span id="zoomval">1.0x</span><input type="range" id="zoom" min="1" max="5" step="0.1" value="1" title="카메라 줌"></div>
 <div id="bottom"><span id="hint">탭 = 알림 브리핑</span></div>
 <div id="start">
   <h1>OMNI</h1>
@@ -143,7 +151,7 @@
       else if (m.type === "status") { setState(m.state, m.state === "SPEAKING" ? "warn" : ""); }
       else if (m.type === "audio") { playChunk(m.pcm, m.rate || 24000); }
       else if (m.type === "want_frame") { sendFrame(); }
-      else if (m.type === "ocr") { ocrPending = false; ocrOrient = m.label || ""; handleOcr(m.items || []); setTimeout(sendOcrFrame, 60); }
+      else if (m.type === "ocr") { ocrPending = false; ocrOrient = m.label || ""; handleOcr(m.items || []); handleHand(m.hand); setTimeout(sendOcrFrame, 60); }
       else if (m.type === "quiet") { quiet = !!m.on; micEl.textContent = quiet ? "QUIET MODE" : (started ? "MIC ON" : "MIC OFF"); }
       else if (m.type === "hello") { quiet = !!m.quiet; setState(m.state || "LISTENING", ""); }
     };
@@ -195,10 +203,68 @@
     if (!cam.videoWidth || !ws || ws.readyState !== 1) return;
     const c = $("snap"); const w = 640, h = Math.round(cam.videoHeight * 640 / cam.videoWidth);
     c.width = w; c.height = h;
-    c.getContext("2d").drawImage(cam, 0, 0, w, h);
+    const z = (!hwZoom && zoomCur > 1.001) ? zoomCur : 1, sw = cam.videoWidth / z, sh = cam.videoHeight / z;
+    c.getContext("2d").drawImage(cam, (cam.videoWidth - sw) / 2, (cam.videoHeight - sh) / 2, sw, sh, 0, 0, w, h);
     const url = c.toDataURL("image/jpeg", 0.6);
     ws.send(JSON.stringify({ type: "frame", jpeg: url.split(",")[1] }));
   }
+
+  // ---- 카메라 줌: 하드웨어 줌(지원 폰)이면 카메라에, 아니면 비디오 확대(디지털) + 서버가 OCR용 중앙 크롭
+  const zoomEl = $("zoom"), zoomVal = $("zoomval");
+  let zoomCur = 1, zoomTarget = 1, hwZoom = null, videoTrack = null, zoomApplying = false, zoomGesture = false;
+  function setupZoom(track) {
+    videoTrack = track;
+    try {
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.zoom && caps.zoom.max > 1) { hwZoom = { min: Math.max(1, caps.zoom.min || 1), max: Math.min(8, caps.zoom.max) }; zoomEl.max = String(hwZoom.max); }
+    } catch (e) { hwZoom = null; }
+  }
+  async function applyZoom() {
+    const z = zoomCur;
+    zoomVal.textContent = z.toFixed(1) + "x"; zoomVal.classList.toggle("gest", zoomGesture);
+    if (Math.abs(Number(zoomEl.value) - z) > 0.05 && document.activeElement !== zoomEl) zoomEl.value = z.toFixed(1);
+    if (hwZoom && videoTrack && !zoomApplying) {
+      zoomApplying = true;
+      try { await videoTrack.applyConstraints({ advanced: [{ zoom: Math.min(hwZoom.max, Math.max(hwZoom.min, z)) }] }); } catch (e) { hwZoom = null; }
+      zoomApplying = false;
+      cam.style.transform = "";
+    } else if (!hwZoom) {
+      cam.style.transform = z > 1.001 ? "scale(" + z.toFixed(3) + ")" : "";
+    }
+  }
+  function zoomTick() {   // 부드럽게 목표값으로
+    if (Math.abs(zoomTarget - zoomCur) > 0.005) { zoomCur += (zoomTarget - zoomCur) * 0.22; if (Math.abs(zoomTarget - zoomCur) < 0.005) zoomCur = zoomTarget; applyZoom(); }
+    requestAnimationFrame(zoomTick);
+  }
+  requestAnimationFrame(zoomTick);
+  zoomEl.addEventListener("input", (e) => { e.stopPropagation(); zoomGesture = false; zoomTarget = Number(zoomEl.value); });
+  zoomEl.addEventListener("click", (e) => e.stopPropagation());
+  $("zoomwrap").addEventListener("click", (e) => e.stopPropagation());
+  window.omniSetZoom = (z) => { zoomTarget = Math.max(1, Math.min(5, z)); };   // 개발용
+
+  // ---- 제스처 줌: 카메라 가까이 주먹 전체가 보이면(0.4초) 줌 모드 → 엄지·검지 벌릴수록 확대, 모으면 1x,
+  //      손이 사라지면 0.6초 뒤 부드럽게 1x로 복귀
+  const ZMAX = 5, FIST_SIZE = 0.3, PINCH_CLOSED = 0.35, PINCH_OPEN = 1.25;
+  let handSeen = 0, fistSince = 0, zoomMode = false;
+  function handleHand(h) {
+    const now = performance.now() / 1000;
+    if (!h || !h.present) {
+      if (zoomMode && now - handSeen > 0.6) { zoomMode = false; zoomGesture = false; zoomTarget = 1; hint.textContent = "탭 = 알림 브리핑"; }
+      fistSince = 0;
+      return;
+    }
+    handSeen = now;
+    if (!zoomMode) {
+      if (h.fist && h.size >= FIST_SIZE) {
+        if (!fistSince) fistSince = now;
+        if (now - fistSince >= 0.4) { zoomMode = true; zoomGesture = true; hint.textContent = "줌 · 엄지와 검지를 벌리면 확대, 모으면 원래대로"; }
+      } else fistSince = 0;
+      return;
+    }
+    const p = Math.max(0, Math.min(1, (h.pinch - PINCH_CLOSED) / (PINCH_OPEN - PINCH_CLOSED)));
+    zoomTarget = 1 + p * (ZMAX - 1);
+  }
+  window.omniTestHand = handleHand;   // 개발용: 가짜 손 상태 주입
 
   // ---- 카메라 텍스트 리더: OCR은 맥(Vision)에서, 여기선 0.5초 안정 판정 → 파싱 연출 → HUD에 다시 쓰기 + 리드선
   const ocrLayer = $("ocr"), leads = $("leads"), tracks = new Map();
@@ -206,10 +272,11 @@
   function sendOcrFrame() {
     if (!started || !cam.videoWidth || !ws || ws.readyState !== 1 || ocrPending || quiet) return;
     if (Date.now() - lastOcrAt < 60) return;
-    const c = $("ocrsnap"); const w = 400, h = Math.round(cam.videoHeight * w / cam.videoWidth);
+    const digital = !hwZoom && zoomCur > 1.001;
+    const c = $("ocrsnap"); const w = digital ? Math.min(800, Math.round(400 * Math.min(zoomCur, 2))) : 400, h = Math.round(cam.videoHeight * w / cam.videoWidth);
     c.width = w; c.height = h; c.getContext("2d").drawImage(cam, 0, 0, w, h);
     ocrPending = true; lastOcrAt = Date.now();
-    ws.send(JSON.stringify({ type: "ocr_frame", seq: ++ocrSeq, jpeg: c.toDataURL("image/jpeg", 0.55).split(",")[1] }));
+    ws.send(JSON.stringify({ type: "ocr_frame", seq: ++ocrSeq, zoom: digital ? Number(zoomCur.toFixed(2)) : 1, jpeg: c.toDataURL("image/jpeg", 0.55).split(",")[1] }));
     setTimeout(() => { ocrPending = false; }, 1500);
   }
   function camRect() {   // object-fit: cover 기준 비디오가 화면에 놓인 사각형
@@ -284,7 +351,7 @@
         stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
         errEl.textContent = "카메라 없이 마이크만 사용합니다 (" + e1.name + ")";
       }
-      if (stream.getVideoTracks().length) { cam.srcObject = stream; try { await cam.play(); } catch (e) {} }
+      if (stream.getVideoTracks().length) { cam.srcObject = stream; setupZoom(stream.getVideoTracks()[0]); try { await cam.play(); } catch (e) {} }
       startMic(stream);
       started = true;
       $("start").style.display = "none";

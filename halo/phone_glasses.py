@@ -38,8 +38,27 @@ from hud_compose import HudCanvas
 
 # ---- 카메라 텍스트 인식: ocr_engine (macOS Vision, 8방향 병렬 + 흐림 강화, 원본 좌표로 복원)
 import ocr_engine
+import hand_tracker
 OCR_AVAILABLE = ocr_engine.AVAILABLE
 OCR = ocr_engine.OrientedOCR()
+HANDS = hand_tracker.HandTracker()      # 줌 제스처용 손 추적 (풀 프레임)
+
+def center_crop_jpeg(jpeg: bytes, zoom: float) -> bytes:
+    """디지털 줌: 폰이 확대해 보여 주는 중앙 1/zoom 영역만 잘라 OCR (좌표계가 화면과 일치)."""
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+        w, h = im.size
+        cw, ch = w / zoom, h / zoom
+        crop = im.crop((int((w - cw) / 2), int((h - ch) / 2), int((w + cw) / 2), int((h + ch) / 2)))
+        if crop.width < 400:
+            crop = crop.resize((400, int(crop.height * 400 / crop.width)), Image.LANCZOS)
+        buf = io.BytesIO()
+        crop.save(buf, format="JPEG", quality=70)
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001
+        return jpeg
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(HERE, "web")
@@ -144,7 +163,7 @@ class State:
                 "clients": len(self.clients), "state": self.status, "caption": self.caption,
                 "gate": USE_GATE, "gate_ready": self.gate_ready, "mic": self.mic_on,
                 "quiet": self.quiet, "tools": core.TOOL_NAMES, "log": list(LOG)[-10:],
-                "qr": self.qr_data_url(), "ocr": OCR_AVAILABLE, "reader": self.reader_text, "minimal": MINIMAL_HUD,
+                "qr": self.qr_data_url(), "ocr": OCR_AVAILABLE, "hands": HANDS.ok, "reader": self.reader_text, "minimal": MINIMAL_HUD,
                 "uptime": int(time.time() - self.started), "ts": time.time()}
 
 
@@ -536,15 +555,25 @@ async def ws_handler(conn):
                 except ValueError:
                     continue
                 S.ocr_busy = True
+                zoom = float(ev.get("zoom") or 1)
+                full = jpeg
+                if zoom > 1.001:
+                    jpeg = await asyncio.to_thread(center_crop_jpeg, jpeg, zoom)
+
+                def work():
+                    hand = HANDS.analyze(full)             # 손은 풀 프레임에서 (줌 밖 주변도 봐야 함)
+                    res = OCR.recognize(jpeg)
+                    return res, hand
                 try:
-                    res = await asyncio.to_thread(OCR.recognize, jpeg)
+                    res, hand = await asyncio.to_thread(work)
                 except Exception as e:  # noqa: BLE001
-                    res = {"items": [], "orient": "id", "label": "", "ms": 0, "mode": "error"}
+                    res, hand = {"items": [], "orient": "id", "label": "", "ms": 0, "mode": "error"}, {"present": False}
                     log(f"OCR 오류: {e}")
                 finally:
                     S.ocr_busy = False
                 await conn.send(json.dumps({"type": "ocr", "items": res["items"], "orient": res["orient"], "label": res["label"],
-                                            "ms": res["ms"], "mode": res["mode"], "seq": ev.get("seq"), "t": time.time()}, ensure_ascii=False))
+                                            "ms": res["ms"], "mode": res["mode"], "hand": hand,
+                                            "seq": ev.get("seq"), "t": time.time()}, ensure_ascii=False))
             elif t == "reader":
                 # 폰이 고른 "지금 읽는 텍스트" → HUD에 한 줄로 다시 써 줌 (빈 문자열 = 지움)
                 text = str(ev.get("text") or "").strip()[:80]
