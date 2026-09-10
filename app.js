@@ -14087,7 +14087,8 @@ OmniOS.register("quiet", {
 
   init() {
     this.els = { btn: document.getElementById("qm-btn"), txt: document.getElementById("qm-txt") };
-    if (this.els.btn) this.els.btn.addEventListener("click", () => this.active && this.state.on ? this.set(false) : this.set(true, 0, "manual"));
+    // 켜져 있으면(수동이든 집 밖 자동이든) 끄기, 꺼져 있으면 수동 켜기. 집 밖 자동은 2시간 무시(override)로 끈다.
+    if (this.els.btn) this.els.btn.addEventListener("click", () => this.active ? this.set(false) : this.set(true, 0, "manual"));
     if (OmniNative.available) {
       this.poll();
       this._timer = setInterval(() => this.poll(), 5000);
@@ -14103,7 +14104,7 @@ OmniOS.register("quiet", {
 
   async poll() {
     const [q, p] = await Promise.all([this.readStore("quiet_mode"), this.readStore("presence")]);
-    this.state = q && typeof q === "object" ? { on: !!q.on, until: Number(q.until) || 0, reason: q.reason || "", by: q.by || "" } : { on: false, until: 0, reason: "", by: "" };
+    this.state = q && typeof q === "object" ? { on: !!q.on, until: Number(q.until) || 0, reason: q.reason || "", by: q.by || "", override_until: Number(q.override_until) || 0 } : { on: false, until: 0, reason: "", by: "", override_until: 0 };
     this.presence = p && typeof p === "object" ? p : null;
     this.evaluate();
   },
@@ -14112,7 +14113,8 @@ OmniOS.register("quiet", {
     const now = Date.now() / 1000;
     const manual = this.state.on && (!this.state.until || this.state.until > now);
     const fresh = this.presence && now - (Number(this.presence.ts) || 0) < 120;
-    const away = !!(fresh && this.presence.home === false && this.presence.home_only !== false);
+    const overridden = this.state.override_until > now;   // 사용자가 집 밖 자동 모드를 잠시 껐음
+    const away = !!(fresh && this.presence.home === false && this.presence.home_only !== false && !overridden);
     const was = this.active;
     this.active = manual || away;
     this.why = manual ? (this.state.by === "sp1" ? "SP-1 메뉴에서 정지" : this.state.reason === "manual" ? "수동" : this.state.reason)
@@ -14143,7 +14145,11 @@ OmniOS.register("quiet", {
   // 수동 켜기/끄기 — 파일로 공유하므로 SP-1(카메라)도 같이 따라온다
   async set(on, minutes, reason) {
     const until = on && minutes > 0 ? Date.now() / 1000 + minutes * 60 : 0;
-    const data = JSON.stringify({ on: !!on, until, reason: reason || "manual", by: "omni", ts: Date.now() / 1000 });
+    // 끌 때 집 밖 자동 모드가 걸려 있으면 2시간 동안 자동 규칙을 무시한다 (SP-1도 같은 파일을 읽어 카메라를 재개)
+    const now = Date.now() / 1000;
+    const awayNow = this.presence && now - (Number(this.presence.ts) || 0) < 120 && this.presence.home === false;
+    const override_until = !on && awayNow ? now + 2 * 3600 : 0;
+    const data = JSON.stringify({ on: !!on, until, reason: reason || (on ? "manual" : "resume"), by: "omni", override_until, ts: now });
     if (OmniNative.available) await OmniNative.request("store.write", JSON.stringify({ name: "quiet_mode", data }), 5000).catch(() => {});
     else { this.state = { on: !!on, until, reason: reason || "manual", by: "omni" }; this.evaluate(); return this.summary(); }
     await this.poll();
@@ -14162,7 +14168,9 @@ OmniOS.register("quiet", {
     this.els.btn.textContent = this.active ? "SCHOOL MODE ON" : "SCHOOL MODE";
     this.els.btn.title = this.active ? "학교 모드 끄기 (수동 정지일 때만 즉시 해제됨)" : "학교 모드 켜기 — 카메라·마이크·화면 관찰 정지 (SP-1 포함)";
     const until = this.state.on && this.state.until ? ` ~${new Date(this.state.until * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}` : "";
-    this.els.txt.textContent = this.active ? `${this.why}${until} · 카메라·마이크 OFF` : (this.presence && this.presence.home === false ? "네트워크 불명" : "");
+    const ovr = !this.active && this.state.override_until > Date.now() / 1000 && this.presence && this.presence.home === false
+      ? `집 밖 자동 모드 ${new Date(this.state.override_until * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}까지 해제` : "";
+    this.els.txt.textContent = this.active ? `${this.why}${until} · 카메라·마이크 OFF` : (ovr || (this.presence && this.presence.home === false ? "집 네트워크 아님" : ""));
   },
 });
 
