@@ -80,6 +80,7 @@ STATUS_PATH = os.path.expanduser("~/.omni/store/halo_phone.json")
 PORT = int(next((sys.argv[i + 1] for i, a in enumerate(sys.argv) if a == "--port" and i + 1 < len(sys.argv)), 8443))
 USE_TLS = "--http" not in sys.argv
 USE_GATE = core.GATE_AVAILABLE and "--no-gate" not in sys.argv
+MINIMAL_HUD = "--full-hud" not in sys.argv     # 기본: 시야를 가리는 링·워드마크 없이 필요한 정보만
 
 LOG = deque(maxlen=40)
 
@@ -139,7 +140,7 @@ def ensure_certs(ip: str) -> tuple[str, str]:
 class State:
     def __init__(self):
         self.clients: set = set()
-        self.canvas = HudCanvas()
+        self.canvas = HudCanvas(minimal=MINIMAL_HUD)
         self.canvas.apply(render_background())
         self.canvas.apply(status_packet("LISTENING"))
         self.status = "LISTENING"
@@ -175,7 +176,7 @@ class State:
                 "clients": len(self.clients), "state": self.status, "caption": self.caption,
                 "gate": USE_GATE, "gate_ready": self.gate_ready, "mic": self.mic_on,
                 "quiet": self.quiet, "tools": core.TOOL_NAMES, "log": list(LOG)[-10:],
-                "qr": self.qr_data_url(), "ocr": OCR_AVAILABLE, "reader": self.reader_text,
+                "qr": self.qr_data_url(), "ocr": OCR_AVAILABLE, "reader": self.reader_text, "minimal": MINIMAL_HUD,
                 "uptime": int(time.time() - self.started), "ts": time.time()}
 
 

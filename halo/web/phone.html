@@ -14,7 +14,7 @@
   /* 안경 프레임: 렌즈 밖은 어둡게 가려 "안경 너머로 보는" 느낌 */
   #frame { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
   /* HUD — 실제 안경 디스플레이: 256×256 16색, 픽셀 그대로 보이게 */
-  #hud { position: absolute; image-rendering: pixelated; image-rendering: crisp-edges; mix-blend-mode: screen; filter: drop-shadow(0 0 10px rgba(80, 210, 255, 0.5)); transition: opacity 0.15s; }
+  #hud { position: absolute; image-rendering: pixelated; image-rendering: crisp-edges; mix-blend-mode: screen; filter: drop-shadow(0 0 6px rgba(80, 210, 255, 0.35)); transition: opacity 0.15s; }
   #hudlabel { position: absolute; font-size: 8px; letter-spacing: 1.5px; color: rgba(159, 216, 255, 0.55); white-space: nowrap; pointer-events: none; text-align: center; overflow: hidden; text-overflow: ellipsis; }
   #top { position: fixed; top: env(safe-area-inset-top, 8px); left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; font-size: 11px; letter-spacing: 2px; color: rgba(159, 216, 255, 0.85); text-shadow: 0 0 8px rgba(60, 200, 255, 0.6); z-index: 3; }
   #top .btn { border: 1px solid rgba(120, 200, 255, 0.5); border-radius: 14px; padding: 4px 10px; font-size: 10px; letter-spacing: 2px; margin-left: 8px; color: #cfefff; background: rgba(10, 30, 50, 0.5); }
@@ -60,10 +60,6 @@
       <path d="M492 150 q8 -22 30 -22 q22 0 30 22" stroke-width="8"/>
       <path d="M18 132 q40 -30 52 -30 M982 132 q-40 -30 -52 -30" stroke-width="10" stroke-linecap="round"/>
     </g>
-    <!-- 디스플레이 모듈 위치 안내 (오른쪽 렌즈 위쪽, 올려다보는 자리) -->
-    <g fill="none" stroke="rgba(120,200,255,0.35)" stroke-width="1.5" stroke-dasharray="4 5">
-      <circle id="dispmark" cx="745" cy="205" r="84"/>
-    </g>
     </g>
   </svg>
   <img id="hud" alt="HUD">
@@ -73,7 +69,7 @@
   <span><span class="dot off" id="dot"></span><span id="state">CONNECTING</span></span>
   <span><span id="mic">MIC OFF</span><span class="btn" id="mode">GLASSES</span><span class="btn" id="scale">1x</span></span>
 </div>
-<div id="bottom">화면 탭 = 알림 브리핑 &nbsp;·&nbsp; "옴니야 …" 하고 말하기<br><span id="hint">안경 시점: 오른쪽 렌즈 위의 작은 디스플레이가 실제로 보게 될 화면입니다. 가로로 돌리면 실제 크기에 더 가깝습니다.</span></div>
+<div id="bottom"><span id="hint">탭 = 알림 브리핑</span></div>
 <div id="start">
   <h1>OMNI</h1>
   <p>폰 안경 모드<br>카메라는 안경의 눈, 마이크는 안경의 귀, 이 화면은 안경의 HUD가 됩니다.<br>실제 안경 디스플레이(한쪽 눈, 0.2인치 컬러 microOLED, 256×256·16색)를 그대로 흉내 냅니다.<br>탭하면 카메라·마이크 권한을 묻습니다.</p>
@@ -104,10 +100,10 @@
       const d = Math.min(vw, vh) * 0.92;
       hud.style.width = hud.style.height = d + "px";
       hud.style.left = (vw - d) / 2 + "px"; hud.style.top = (vh - d) / 2 + "px";
-      label.style.left = (vw - d) / 2 + "px"; label.style.top = (vh - d) / 2 + d + 6 + "px"; label.style.width = d + "px"; label.style.fontSize = "8px";
+      label.style.display = "block"; label.style.left = (vw - d) / 2 + "px"; label.style.top = (vh - d) / 2 + d + 6 + "px"; label.style.width = d + "px"; label.style.fontSize = "8px";
       label.textContent = "HALO DISPLAY · 256×256 · 16 COLORS · 실제 해상도 그대로";
       modeBtn.textContent = "HUD"; scaleBtn.style.display = "none";
-      hint.textContent = "HUD 보기: 실제 디스플레이 화소(256×256)를 크게 보여줍니다.";
+      hint.textContent = "HUD 보기 · 탭 = 알림 브리핑";
       return;
     }
     frame.style.display = "block";
@@ -121,11 +117,9 @@
     hud.style.width = hud.style.height = 2 * r + "px";
     hud.style.left = cx - r + "px"; hud.style.top = cy - r + "px";
     const lw = Math.min(vw - cx + (cx - 2 * r), 4 * r);   // 렌즈 안에서 HUD 아래 가운데 정렬, 화면 밖으로 나가지 않게
-    label.style.width = lw + "px"; label.style.left = cx - lw / 2 + "px"; label.style.top = cy + r + 4 * u + "px";
-    label.style.fontSize = Math.max(6, Math.min(9, 8 * u * 2.2)) + "px";
-    label.textContent = "R · HALO 256×256 · 16색";
+    label.style.display = "none";
     modeBtn.textContent = "GLASSES"; scaleBtn.style.display = ""; scaleBtn.textContent = s + "x";
-    hint.textContent = "안경 시점: 오른쪽 렌즈 위의 작은 디스플레이가 실제로 보게 될 화면입니다. 가로로 돌리면 실제 크기에 더 가깝습니다.";
+    hint.textContent = "탭 = 알림 브리핑";
   }
   modeBtn.addEventListener("click", (e) => { e.stopPropagation(); mode = mode === "glasses" ? "hud" : "glasses"; localStorage.setItem("omni.glasses.mode", mode); layout(); });
   scaleBtn.addEventListener("click", (e) => { e.stopPropagation(); scaleIdx = (scaleIdx + 1) % SCALES.length; localStorage.setItem("omni.glasses.scale", String(scaleIdx)); layout(); });
@@ -210,7 +204,7 @@
   let ocrSeq = 0, ocrPending = false, lastOcrAt = 0, readerKey = null;
   function sendOcrFrame() {
     if (!started || !cam.videoWidth || !ws || ws.readyState !== 1 || ocrPending || quiet) return;
-    if (Date.now() - lastOcrAt < 450) return;
+    if (Date.now() - lastOcrAt < 250) return;
     const c = $("ocrsnap"); const w = 480, h = Math.round(cam.videoHeight * w / cam.videoWidth);
     c.width = w; c.height = h; c.getContext("2d").drawImage(cam, 0, 0, w, h);
     ocrPending = true; lastOcrAt = Date.now();
@@ -233,7 +227,7 @@
       if (tr && now - tr.last < 1.5 && Math.hypot(cx - tr.cx, cy - tr.cy) < 0.12) {
         tr.last = now; tr.seen++; tr.box = it; tr.cx = cx; tr.cy = cy; tr.text = it.text;
       } else { tr = { key, text: it.text, box: it, cx, cy, first: now, last: now, seen: 1, parsed: false }; tracks.set(key, tr); }
-      if (!tr.parsed && tr.seen >= 2 && now - tr.first >= 0.5) { tr.parsed = true; playParse(tr); }
+      if (!tr.parsed && tr.seen >= 2 && now - tr.first >= 0.3) { tr.parsed = true; playParse(tr); }
     }
     for (const [k, tr] of tracks) if (now - tr.last > 1.5) tracks.delete(k);
     updateLeads();
@@ -266,7 +260,7 @@
     const best = vis[0] ? vis[0].key : null;
     if (best !== readerKey) { readerKey = best; if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "reader", text: best ? vis[0].text : "" })); }
   }
-  setInterval(sendOcrFrame, 200);
+  setInterval(sendOcrFrame, 120);
   setInterval(updateLeads, 300);
   window.omniTestOcr = handleOcr;   // 개발용: 가짜 OCR 결과 주입
 

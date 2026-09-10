@@ -26,7 +26,8 @@ def _unpack4(data: bytes, w: int) -> np.ndarray:
 
 
 class HudCanvas:
-    def __init__(self):
+    def __init__(self, minimal: bool = False):
+        self.minimal = minimal      # True면 배경 아트(링·워드마크) 없이 상태·자막·배너·리더만
         self.palette = [tuple(c) for c in PALETTE]
         self.background = np.zeros((H, W), np.uint8)
         self.layers: dict[int, tuple[int, int, np.ndarray]] = {}
@@ -52,7 +53,7 @@ class HudCanvas:
         return False
 
     def compose(self) -> np.ndarray:
-        canvas = self.background.copy()
+        canvas = np.zeros((H, W), np.uint8) if self.minimal else self.background.copy()
         for tag in _TAGS:
             if tag not in self.layers:
                 continue
