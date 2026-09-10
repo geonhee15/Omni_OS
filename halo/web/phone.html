@@ -35,6 +35,7 @@
   #leads line { stroke: rgba(120, 210, 255, 0.85); stroke-width: 1.5; filter: drop-shadow(0 0 4px rgba(80, 190, 255, 0.8)); }
   #leads circle { fill: #bfe8ff; }
   #leads rect.tb { fill: none; stroke: rgba(120, 210, 255, 0.5); stroke-width: 1; stroke-dasharray: 3 3; }
+  #leads text.tag { fill: rgba(190, 230, 255, 0.85); font-size: 10px; letter-spacing: 1px; font-family: -apple-system, Menlo, monospace; }
 </style>
 </head>
 <body>
@@ -142,7 +143,7 @@
       else if (m.type === "status") { setState(m.state, m.state === "SPEAKING" ? "warn" : ""); }
       else if (m.type === "audio") { playChunk(m.pcm, m.rate || 24000); }
       else if (m.type === "want_frame") { sendFrame(); }
-      else if (m.type === "ocr") { ocrPending = false; handleOcr(m.items || []); }
+      else if (m.type === "ocr") { ocrPending = false; ocrOrient = m.label || ""; handleOcr(m.items || []); setTimeout(sendOcrFrame, 60); }
       else if (m.type === "quiet") { quiet = !!m.on; micEl.textContent = quiet ? "QUIET MODE" : (started ? "MIC ON" : "MIC OFF"); }
       else if (m.type === "hello") { quiet = !!m.quiet; setState(m.state || "LISTENING", ""); }
     };
@@ -201,15 +202,15 @@
 
   // ---- 카메라 텍스트 리더: OCR은 맥(Vision)에서, 여기선 0.5초 안정 판정 → 파싱 연출 → HUD에 다시 쓰기 + 리드선
   const ocrLayer = $("ocr"), leads = $("leads"), tracks = new Map();
-  let ocrSeq = 0, ocrPending = false, lastOcrAt = 0, readerKey = null;
+  let ocrSeq = 0, ocrPending = false, lastOcrAt = 0, readerKey = null, ocrOrient = "";
   function sendOcrFrame() {
     if (!started || !cam.videoWidth || !ws || ws.readyState !== 1 || ocrPending || quiet) return;
-    if (Date.now() - lastOcrAt < 120) return;
+    if (Date.now() - lastOcrAt < 60) return;
     const c = $("ocrsnap"); const w = 400, h = Math.round(cam.videoHeight * w / cam.videoWidth);
     c.width = w; c.height = h; c.getContext("2d").drawImage(cam, 0, 0, w, h);
     ocrPending = true; lastOcrAt = Date.now();
     ws.send(JSON.stringify({ type: "ocr_frame", seq: ++ocrSeq, jpeg: c.toDataURL("image/jpeg", 0.55).split(",")[1] }));
-    setTimeout(() => { ocrPending = false; }, 2500);
+    setTimeout(() => { ocrPending = false; }, 1500);
   }
   function camRect() {   // object-fit: cover 기준 비디오가 화면에 놓인 사각형
     const vw = window.innerWidth, vh = window.innerHeight, cw = cam.videoWidth || 4, ch = cam.videoHeight || 3;
@@ -236,10 +237,16 @@
   function playParse(tr) {
     const r = toScreen(tr.box); const n = tr.text.replace(/\s/g, "").length || 1;
     const per = n <= 4 ? 1 : n <= 12 ? 2 : 3; const chunks = Math.max(1, Math.ceil(n / per));
+    const vert = !!tr.box.vertical;   // 세로로 놓인 글자는 위→아래로 조각
     for (let i = 0; i < chunks; i++) {
       const d = document.createElement("div"); d.className = "chunk";
-      const x0 = r.x + r.w * (i / chunks), x1 = r.x + r.w * ((i + 1) / chunks);
-      d.style.left = x0 + "px"; d.style.top = r.y - r.h * 0.15 + "px"; d.style.width = Math.max(2, x1 - x0 - 1.5) + "px"; d.style.height = r.h * 1.3 + "px";
+      if (vert) {
+        const y0 = r.y + r.h * (i / chunks), y1 = r.y + r.h * ((i + 1) / chunks);
+        d.style.left = r.x - r.w * 0.15 + "px"; d.style.top = y0 + "px"; d.style.width = r.w * 1.3 + "px"; d.style.height = Math.max(2, y1 - y0 - 1.5) + "px";
+      } else {
+        const x0 = r.x + r.w * (i / chunks), x1 = r.x + r.w * ((i + 1) / chunks);
+        d.style.left = x0 + "px"; d.style.top = r.y - r.h * 0.15 + "px"; d.style.width = Math.max(2, x1 - x0 - 1.5) + "px"; d.style.height = r.h * 1.3 + "px";
+      }
       d.style.animationDelay = (i * 70) + "ms";
       d.addEventListener("animationend", () => d.remove());
       ocrLayer.appendChild(d);
@@ -255,12 +262,13 @@
       const r = toScreen(t.box); const px = r.x + r.w / 2, py = r.y;
       const dx = hc.x - px, dy = hc.y - py, len = Math.hypot(dx, dy) || 1; const ex = hc.x - dx / len * hc.r, ey = hc.y - dy / len * hc.r;
       html += `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" class="tb"/><circle cx="${px}" cy="${py}" r="3"/><line x1="${px}" y1="${py}" x2="${ex}" y2="${ey}"/>`;
+      if (ocrOrient) html += `<text x="${r.x + r.w + 6}" y="${r.y + 10}" class="tag">${ocrOrient}</text>`;
     }
     leads.innerHTML = html;
     const best = vis[0] ? vis[0].key : null;
     if (best !== readerKey) { readerKey = best; if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "reader", text: best ? vis[0].text : "" })); }
   }
-  setInterval(sendOcrFrame, 120);
+  setInterval(sendOcrFrame, 300);   // 응답이 끊겨도 계속 (평소엔 응답 즉시 다음 프레임)
   setInterval(updateLeads, 300);
   window.omniTestOcr = handleOcr;   // 개발용: 가짜 OCR 결과 주입
 

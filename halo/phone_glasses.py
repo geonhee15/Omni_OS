@@ -36,42 +36,10 @@ import omni_link as link
 from hud import banner_packet, caption_packet, reader_packet, render_background, status_packet
 from hud_compose import HudCanvas
 
-# ---- 카메라 텍스트 인식 (macOS Vision, 한국어+영어) — 폰이 보내는 축소 프레임을 서버에서 OCR
-try:
-    import Foundation
-    import Vision
-    OCR_AVAILABLE = True
-except Exception:  # noqa: BLE001
-    OCR_AVAILABLE = False
-
-
-def ocr_jpeg(jpeg: bytes) -> list[dict]:
-    """JPEG → [{text, conf, x, y, w, h}] (정규화, 원점 왼쪽 위)."""
-    if not OCR_AVAILABLE or not jpeg:
-        return []
-    data = Foundation.NSData.dataWithBytes_length_(jpeg, len(jpeg))
-    handler = Vision.VNImageRequestHandler.alloc().initWithData_options_(data, None)
-    req = Vision.VNRecognizeTextRequest.alloc().init()
-    req.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-    req.setRecognitionLanguages_(["ko-KR", "en-US"])
-    req.setUsesLanguageCorrection_(True)
-    ok, _err = handler.performRequests_error_([req], None)
-    out = []
-    if not ok:
-        return out
-    for o in req.results() or []:
-        cands = o.topCandidates_(1)
-        if not cands:
-            continue
-        c = cands[0]
-        b = o.boundingBox()
-        text = str(c.string()).strip()
-        if len(text) < 2:
-            continue
-        out.append({"text": text, "conf": round(float(c.confidence()), 2),
-                    "x": round(float(b.origin.x), 4), "y": round(1.0 - float(b.origin.y) - float(b.size.height), 4),
-                    "w": round(float(b.size.width), 4), "h": round(float(b.size.height), 4)})
-    return out
+# ---- 카메라 텍스트 인식: ocr_engine (macOS Vision, 8방향 병렬 + 흐림 강화, 원본 좌표로 복원)
+import ocr_engine
+OCR_AVAILABLE = ocr_engine.AVAILABLE
+OCR = ocr_engine.OrientedOCR()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(HERE, "web")
@@ -569,13 +537,14 @@ async def ws_handler(conn):
                     continue
                 S.ocr_busy = True
                 try:
-                    items = await asyncio.to_thread(ocr_jpeg, jpeg)
+                    res = await asyncio.to_thread(OCR.recognize, jpeg)
                 except Exception as e:  # noqa: BLE001
-                    items = []
+                    res = {"items": [], "orient": "id", "label": "", "ms": 0, "mode": "error"}
                     log(f"OCR 오류: {e}")
                 finally:
                     S.ocr_busy = False
-                await conn.send(json.dumps({"type": "ocr", "items": items, "seq": ev.get("seq"), "t": time.time()}, ensure_ascii=False))
+                await conn.send(json.dumps({"type": "ocr", "items": res["items"], "orient": res["orient"], "label": res["label"],
+                                            "ms": res["ms"], "mode": res["mode"], "seq": ev.get("seq"), "t": time.time()}, ensure_ascii=False))
             elif t == "reader":
                 # 폰이 고른 "지금 읽는 텍스트" → HUD에 한 줄로 다시 써 줌 (빈 문자열 = 지움)
                 text = str(ev.get("text") or "").strip()[:80]
