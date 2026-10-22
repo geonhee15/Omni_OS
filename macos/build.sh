@@ -17,6 +17,13 @@ cp -R "$ROOT/vendor" "$APP/Contents/Resources/web/vendor"
 
 # 2. Info.plist
 cp "$ROOT/macos/Info.plist" "$APP/Contents/"
+# 번들 버전을 app.js의 version과 맞춘다 — 시스템 아이콘 캐시는 (번들 ID, 버전) 단위라
+# 버전이 고정이면 아이콘을 바꿔도 독·파인더가 옛 아이콘을 계속 보여준다.
+VER="$(sed -n 's/^  version: "\([^"]*\)",/\1/p' "$ROOT/app.js" | head -1)"
+if [ -n "$VER" ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VER" "$APP/Contents/Info.plist"
+fi
 
 # 3. 컴파일
 clang -fobjc-arc -O2 "$ROOT/macos/main.m" "$ROOT/macos/sp1_status.m" "$ROOT/macos/arduino_bridge.m" "$ROOT/macos/sysmon.m" "$ROOT/macos/code_editor.m" "$ROOT/macos/omni_ai.m" \
