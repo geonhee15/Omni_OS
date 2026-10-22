@@ -17,6 +17,7 @@
 ```bash
 bash macos/build.sh                          # dist/Omni OS.app 생성
 ditto "dist/Omni OS.app" "/Applications/Omni OS.app"   # 설치
+touch "/Applications/Omni OS.app"                      # 아이콘을 바꿨다면 — 시스템 아이콘 캐시 갱신 후 앱 재실행
 ```
 
 Xcode 없이 Command Line Tools만으로 빌드된다.
