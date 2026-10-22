@@ -309,7 +309,7 @@ UI는 영어 전용. 왼쪽 사이드바에서 패널을 전환한다.
 | `macos/main.m` | 네이티브 맥 앱 래퍼 (WKWebView + JS 브리지) |
 | `macos/sp1_status.m` | Security-Protocol-1 상태 수집 (프로세스/로그/설정/ntfy) |
 | `macos/build.sh` | 앱 번들 빌드 스크립트 (아이콘 포함) |
-| `macos/icon.svg` | 앱 아이콘 원본 |
+| `macos/icon.svg` | 앱 아이콘 원본 — 여백 없이 꽉 채운(full-bleed) 1024px. macOS 26가 자체 둥근 마스크·유리 테두리·그림자를 얹으므로 여백을 두면 흰 판 위 작은 아이콘으로 보인다 |
 
 ## 앞으로
 

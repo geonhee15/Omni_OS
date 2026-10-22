@@ -1,14 +1,29 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    전체를 꽉 채운(full-bleed) 아이콘.
+    macOS 26는 아이콘 비트맵을 자체 둥근 사각형 마스크로 잘라내고 유리 테두리·그림자를 얹으므로
+    여백을 두지 않는다 (여백이 있으면 흰 판 위에 작은 아이콘으로 표시됨).
+  -->
   <defs>
-    <radialGradient id="bg" cx="50%" cy="42%" r="75%">
-      <stop offset="0%" stop-color="#0a2138"/>
-      <stop offset="100%" stop-color="#020813"/>
+    <radialGradient id="bg" cx="50%" cy="40%" r="80%">
+      <stop offset="0%" stop-color="#0c2742"/>
+      <stop offset="60%" stop-color="#061527"/>
+      <stop offset="100%" stop-color="#020812"/>
     </radialGradient>
     <radialGradient id="core" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#eafcff"/>
       <stop offset="45%" stop-color="#35d6ff"/>
       <stop offset="100%" stop-color="#35d6ff" stop-opacity="0"/>
     </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.20"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="depth" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.28"/>
+    </linearGradient>
     <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
       <feGaussianBlur stdDeviation="14" result="b"/>
       <feMerge>
@@ -18,18 +33,21 @@
     </filter>
   </defs>
 
-  <!-- macOS 스타일 라운드 사각형 배경 -->
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="none" stroke="#35d6ff" stroke-opacity="0.25" stroke-width="6"/>
+  <!-- 배경: 캔버스 전체 -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
 
   <!-- HUD 링 -->
-  <g filter="url(#glow)">
+  <g filter="url(#glow)" transform="translate(512 512) scale(1.1) translate(-512 -512)">
     <circle cx="512" cy="512" r="300" fill="none" stroke="#35d6ff" stroke-opacity="0.5" stroke-width="8" stroke-dasharray="28 22"/>
     <circle cx="512" cy="512" r="240" fill="none" stroke="#35d6ff" stroke-width="14" stroke-dasharray="640 900" stroke-linecap="round" transform="rotate(-60 512 512)"/>
     <circle cx="512" cy="512" r="180" fill="none" stroke="#35d6ff" stroke-opacity="0.35" stroke-width="8"/>
   </g>
 
   <!-- 중앙 코어 -->
-  <circle cx="512" cy="512" r="150" fill="url(#core)"/>
-  <circle cx="512" cy="512" r="64" fill="#eafcff" filter="url(#glow)"/>
+  <circle cx="512" cy="512" r="165" fill="url(#core)"/>
+  <circle cx="512" cy="512" r="70" fill="#eafcff" filter="url(#glow)"/>
+
+  <!-- 유리 느낌: 위쪽 빛 반사 + 아래쪽 깊이 -->
+  <rect x="0" y="0" width="1024" height="560" fill="url(#sheen)"/>
+  <rect x="0" y="620" width="1024" height="404" fill="url(#depth)"/>
 </svg>

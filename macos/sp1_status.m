@@ -4,7 +4,7 @@
 #import <errno.h>
 #import <unistd.h>
 
-static NSString *const SP1_DIR = @"/Users/geonhee/Desktop/Important/Security-Protocol-1";
+static NSString *const SP1_DIR = @"/Users/geonhee/Developer/Important/Security-Protocol-1";
 
 // Read the last maxLines lines of a possibly large log file without loading it all.
 static NSArray<NSString *> *tailLines(NSString *path, NSUInteger maxBytes, NSUInteger maxLines) {
